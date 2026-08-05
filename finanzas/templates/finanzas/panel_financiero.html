@@ -1,0 +1,246 @@
+{% extends "site/base.html" %}
+{% load humanize %}
+{% block content %}
+<style>
+  .fin-wrap { max-width: 1100px; }
+  .kpis { display:flex; gap:16px; flex-wrap:wrap; margin:20px 0; }
+  .card { flex:1; min-width:200px; background:#000000; color:#fff;
+          border-radius:10px; padding:18px 20px; }
+  .card.green { background:#1e9aff; }
+  .card.gold  { background:#ff7300; }
+  .card.red   { background:#b01060; }
+  .card .lbl  { font-size:12px; opacity:.85; text-transform:uppercase;
+                letter-spacing:.5px; }
+  .card .val  { font-size:26px; font-weight:700; margin-top:6px; }
+  .card .sub  { font-size:12px; opacity:.8; margin-top:4px; }
+  table.fin { width:100%; border-collapse:collapse; margin-top:10px;
+              background:#fff; }
+  table.fin th, table.fin td { padding:9px 12px; text-align:right;
+              border-bottom:1px solid #e6e6e6; font-size:13px; }
+  table.fin th { background:#000000; color:#fff; text-align:right; }
+  table.fin th:first-child, table.fin td:first-child { text-align:left; }
+  table.fin tr:last-child td { font-weight:700; background:#f2f2f2; }
+  .pos { color:#1e9aff; font-weight:600; }
+  .neg { color:#fa5598; font-weight:600; }
+  .banner { padding:16px 20px; border-radius:10px; margin:18px 0;
+            font-size:15px; font-weight:600; }
+  .banner.ok   { background:#e7f3ff; color:#1e9aff; border:1px solid #bfe2ff; }
+  .banner.warn { background:#fff7cc; color:#a85f00; border:1px solid #ffd900; }
+  .note { color:#666; font-size:12px; margin-top:6px; }
+  h2 { margin-top:34px; }
+  .msg { padding:10px 14px; border:2px solid #000; border-radius:8px; margin:10px 0; font-size:13px; font-weight:600; }
+  .msg.success { background:#e7f3ff; } .msg.error { background:#ffe6f1; }
+  .frm { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;
+         background:#fafafa; border:2px solid #000; border-radius:10px; padding:12px; margin:12px 0; }
+  .frm label { font-size:12px; font-weight:700; display:block; margin-bottom:3px; }
+  .frm input, .frm select { border:2px solid #000; border-radius:8px; padding:7px 9px; font-size:13px; }
+  .btn { border:2px solid #000; border-radius:8px; padding:8px 14px; font-weight:800;
+         cursor:pointer; box-shadow:3px 3px 0 #000; background:#1e9aff; color:#fff; font-size:13px; }
+  .btn:hover { background:#0d80e0; }
+  .btn.del { background:#fa5598; padding:4px 9px; box-shadow:none; font-size:12px; }
+  table.fin th.c, table.fin td.c { text-align:right; }
+  .grp td { background:#f5f5f5; font-weight:700; }
+</style>
+
+<div class="fin-wrap">
+  <h1>💵 Panel financiero — SHAKE</h1>
+
+  {% if messages %}{% for m in messages %}<div class="msg {{ m.tags }}">{{ m }}</div>{% endfor %}{% endif %}
+
+  <div class="kpis">
+    <div class="card">
+      <div class="lbl">Costos fijos / mes</div>
+      <div class="val">${{ costos_fijos|floatformat:2|intcomma }}</div>
+    </div>
+    <div class="card green">
+      <div class="lbl">Margen de contribución</div>
+      <div class="val">${{ margen_contribucion|floatformat:2|intcomma }}</div>
+      <div class="sub">promedio por shake</div>
+    </div>
+    <div class="card gold">
+      <div class="lbl">Punto de equilibrio</div>
+      {% if pe_unidades_mes %}
+      <div class="val">{{ pe_unidades_mes|floatformat:0 }} / mes</div>
+      <div class="sub">≈ {{ pe_unidades_dia|floatformat:1 }} shakes al día</div>
+      {% else %}
+      <div class="val">—</div>
+      <div class="sub">falta margen o costos</div>
+      {% endif %}
+    </div>
+    <div class="card red">
+      <div class="lbl">Inversión inicial</div>
+      <div class="val">${{ inversion|floatformat:2|intcomma }}</div>
+    </div>
+  </div>
+
+  {% if inversion %}
+    {% if recuperado_txt %}
+    <div class="banner ok">
+      ✅ Recuperas tu inversión en <b>{{ recuperado_txt }}</b>.
+      Ganancia acumulada: ${{ ganancia_acumulada|floatformat:2|intcomma }}.
+    </div>
+    {% else %}
+    <div class="banner warn">
+      ⏳ Aún no recuperas la inversión. Llevas
+      ${{ ganancia_acumulada|floatformat:2|intcomma }} acumulado;
+      faltan <b>${{ inversion_pendiente|floatformat:2|intcomma }}</b>.
+    </div>
+    {% endif %}
+  {% else %}
+    <div class="banner warn">
+      Captura tu <b>Inversión inicial</b> en el admin para ver en qué mes la recuperas.
+    </div>
+  {% endif %}
+
+  <h2>Flujo de efectivo mensual</h2>
+  <table class="fin">
+    <thead>
+      <tr>
+        <th>Mes</th>
+        <th>Ingresos</th>
+        <th>Costo variable</th>
+        <th>Compras</th>
+        <th>Costos fijos</th>
+        <th>Flujo de efectivo</th>
+        <th>Ganancia operativa</th>
+        <th>Acumulado</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for f in filas %}
+      <tr>
+        <td>{{ f.mes_nombre }}</td>
+        <td>${{ f.ingresos|floatformat:2|intcomma }}</td>
+        <td>${{ f.costo_variable|floatformat:2|intcomma }}</td>
+        <td>${{ f.compras|floatformat:2|intcomma }}</td>
+        <td>${{ f.costos_fijos|floatformat:2|intcomma }}</td>
+        <td class="{% if f.flujo_efectivo >= 0 %}pos{% else %}neg{% endif %}">
+          ${{ f.flujo_efectivo|floatformat:2|intcomma }}</td>
+        <td class="{% if f.ganancia_operativa >= 0 %}pos{% else %}neg{% endif %}">
+          ${{ f.ganancia_operativa|floatformat:2|intcomma }}</td>
+        <td>${{ f.ganancia_acumulada|floatformat:2|intcomma }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="8" style="text-align:center;color:#888;">
+        Aún no hay ventas ni compras registradas.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="note">
+    Flujo de efectivo = ingresos − compras − costos fijos + movimientos extra (dinero real que entra/sale).<br>
+    Ganancia operativa = ingresos − costo variable de lo vendido − costos fijos (sirve para medir recuperación).
+  </p>
+
+  <!-- ══ PRONÓSTICO vs REAL — DESGLOSADO POR CUENTA ══════════════════ -->
+  <h2>🔮 Pronóstico vs. real — Flujo de dinero por cuenta</h2>
+
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0;">
+    <a class="btn" href="?fanio={{ f_prev_a }}&fmes={{ f_prev_m }}" style="background:#fff;color:#000;">◀</a>
+    <span style="font-size:20px;font-weight:800;min-width:170px;text-align:center;">{{ f_mes_nombre }} {{ f_anio }}</span>
+    <a class="btn" href="?fanio={{ f_next_a }}&fmes={{ f_next_m }}" style="background:#fff;color:#000;">▶</a>
+    <select onchange="if(this.value)location.href=this.value" style="border:2px solid #000;border-radius:8px;padding:6px;">
+      <option value="">— Ir a un mes —</option>
+      {% for p in f_periodos %}<option value="?fanio={{ p.anio }}&fmes={{ p.mes }}" {% if p.sel %}selected{% endif %}>{{ p.label }}</option>{% endfor %}
+    </select>
+  </div>
+
+  <table class="fin">
+    <thead><tr>
+      <th class="l">Cuenta</th><th class="l">Tipo</th>
+      <th class="c">Pronóstico</th><th class="c">Real</th><th class="c">Diferencia</th>
+    </tr></thead>
+    <tbody>
+      {% for f in flujo.filas %}
+      <tr>
+        <td class="l">{{ f.codigo }} · {{ f.nombre }}</td>
+        <td class="l">{% if f.es_entrada %}<span class="pos">▲ Entrada</span>{% else %}<span class="neg">▼ Salida</span>{% endif %}</td>
+        <td class="c">${{ f.pronostico|floatformat:2|intcomma }}</td>
+        <td class="c">${{ f.real|floatformat:2|intcomma }}</td>
+        <td class="c {% if f.dif >= 0 %}pos{% else %}neg{% endif %}">${{ f.dif|floatformat:2|intcomma }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" style="text-align:center;color:#888;">Sin pronóstico ni movimientos reales este mes.</td></tr>
+      {% endfor %}
+      <tr class="tot"><td class="l" colspan="2">Total entradas</td>
+        <td class="c">${{ flujo.pron_entradas|floatformat:2|intcomma }}</td>
+        <td class="c">${{ flujo.real_entradas|floatformat:2|intcomma }}</td><td></td></tr>
+      <tr class="tot"><td class="l" colspan="2">Total salidas</td>
+        <td class="c">${{ flujo.pron_salidas|floatformat:2|intcomma }}</td>
+        <td class="c">${{ flujo.real_salidas|floatformat:2|intcomma }}</td><td></td></tr>
+      <tr class="tot"><td class="l" colspan="2">Flujo neto</td>
+        <td class="c {% if flujo.pron_neto >= 0 %}pos{% else %}neg{% endif %}">${{ flujo.pron_neto|floatformat:2|intcomma }}</td>
+        <td class="c {% if flujo.real_neto >= 0 %}pos{% else %}neg{% endif %}">${{ flujo.real_neto|floatformat:2|intcomma }}</td>
+        <td class="c {% if flujo.real_neto >= flujo.pron_neto %}pos{% else %}neg{% endif %}">${{ flujo.real_neto|floatformat:2|intcomma }}</td></tr>
+    </tbody>
+  </table>
+  <p class="note">
+    <b>Real</b> = ventas (cobros) y compras (pagos) del libro de movimientos + costos fijos mensuales, cada uno en su cuenta.
+    Las entradas suman ingresos/capital; las salidas suman gastos.
+  </p>
+
+  <!-- Captura del pronóstico por cuenta para el mes visible -->
+  <details class="mods" style="margin:12px 0;">
+    <summary style="cursor:pointer;font-weight:800;font-size:14px;padding:6px 0;">✏️ Capturar pronóstico de {{ f_mes_nombre }} {{ f_anio }} (por cuenta)</summary>
+    <form method="post" action="{% url 'pronostico_guardar' %}" style="margin-top:10px;">
+      {% csrf_token %}
+      <input type="hidden" name="anio" value="{{ f_anio }}">
+      <input type="hidden" name="mes" value="{{ f_mes }}">
+      <table class="fin">
+        <thead><tr><th class="l">Cuenta</th><th class="l">Tipo</th><th class="c">Monto pronosticado ($)</th></tr></thead>
+        <tbody>
+          {% for c in cuentas_form %}
+          <tr>
+            <td class="l">{{ c.codigo }} · {{ c.nombre }}</td>
+            <td class="l">{% if c.es_entrada %}Entrada{% else %}Salida{% endif %}</td>
+            <td class="c"><input type="number" step="0.01" min="0" name="cuenta_{{ c.id }}"
+                    value="{% if c.valor %}{{ c.valor }}{% endif %}" placeholder="0.00"
+                    style="width:120px;border:2px solid #000;border-radius:8px;padding:6px;"></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <button class="btn" type="submit" style="margin-top:10px;">Guardar pronóstico del mes</button>
+    </form>
+  </details>
+
+  <!-- ══ DESGLOSE DE INVERSIÓN INICIAL ═══════════════════════════════ -->
+  <h2>🏗️ Desglose de la inversión inicial</h2>
+  <form class="frm" method="post" action="{% url 'inversion_agregar' %}">
+    {% csrf_token %}
+    <div><label>Concepto</label><input type="text" name="concepto" placeholder="Ej. Licuadora industrial" style="width:200px;" required></div>
+    <div><label>Categoría</label>
+      <select name="categoria">
+        {% for k, lbl in categorias_inv %}<option value="{{ k }}">{{ lbl }}</option>{% endfor %}
+      </select></div>
+    <div><label>Monto ($)</label><input type="number" step="0.01" min="0" name="monto" placeholder="0.00" required></div>
+    <div><label>Fecha — opcional</label><input type="date" name="fecha"></div>
+    <button class="btn" type="submit">Agregar partida</button>
+  </form>
+  <table class="fin">
+    <thead><tr><th>Concepto</th><th>Categoría</th><th class="c">Monto</th><th>Acción</th></tr></thead>
+    <tbody>
+      {% for g in desglose.grupos %}
+        <tr class="grp"><td colspan="2">{{ g.categoria }}</td><td class="c">${{ g.subtotal|floatformat:2|intcomma }}</td><td></td></tr>
+        {% for it in g.items %}
+        <tr>
+          <td style="padding-left:24px;">{{ it.concepto }}</td>
+          <td>{{ g.categoria }}</td>
+          <td class="c">${{ it.monto|floatformat:2|intcomma }}</td>
+          <td style="text-align:center;">
+            <form method="post" action="{% url 'inversion_eliminar' it.pk %}" style="display:inline;"
+                  onsubmit="return confirm('¿Eliminar esta partida?');">
+              {% csrf_token %}<button class="btn del" type="submit">Eliminar</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      {% empty %}
+        <tr><td colspan="4" style="text-align:center;color:#888;">Sin partidas de inversión. Agrega la primera arriba.</td></tr>
+      {% endfor %}
+      <tr><td colspan="2">Total inversión inicial</td><td class="c">${{ desglose.total|floatformat:2|intcomma }}</td><td></td></tr>
+    </tbody>
+  </table>
+
+  <p style="margin-top:18px;"><a href="../">← Volver al panel principal</a></p>
+</div>
+{% endblock %}

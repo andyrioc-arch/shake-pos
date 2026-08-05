@@ -1,0 +1,90 @@
+{% load humanize %}<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ title|default:"SHAKE" }}{% endblock %} · SHAKE</title>
+  <style>
+    :root {
+      --black:#000000; --white:#ffffff;
+      --pink:#fa5598; --orange:#ff7300; --yellow:#ffd900;
+      --purple:#8700ff; --blue:#1e9aff;
+      --bg:#ffffff; --ink:#000000;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,
+           Helvetica,Arial,sans-serif; background:var(--bg); color:var(--ink); }
+    header.topbar { background:var(--black); color:var(--white); padding:0 22px;
+           display:flex; align-items:center; gap:24px; height:60px;
+           box-shadow:0 2px 0 var(--pink); position:sticky; top:0; z-index:10; }
+    header.topbar .brand { font-weight:900; font-size:22px; letter-spacing:3px;
+           white-space:nowrap; color:var(--white); }
+    header.topbar .brand .dot { color:var(--pink); }
+    header.topbar nav { display:flex; gap:4px; flex:1; flex-wrap:wrap; }
+    header.topbar nav a { color:rgba(255,255,255,.72); text-decoration:none; padding:8px 12px;
+           border-radius:7px; font-size:14px; font-weight:600; }
+    header.topbar nav a:hover { background:rgba(255,255,255,.12); color:var(--white); }
+    header.topbar nav a.active { background:var(--white); color:var(--black); }
+    header.topbar nav a.discreto { color:rgba(255,255,255,.32); margin-left:auto; font-size:16px; }
+    header.topbar nav a.discreto:hover { color:rgba(255,255,255,.85); background:transparent; }
+    header.topbar .user { font-size:13px; color:rgba(255,255,255,.72); white-space:nowrap; }
+    header.topbar .user a { color:var(--white); }
+    main.wrap { max-width:1080px; margin:0 auto; padding:26px 22px 60px; }
+    h1 { margin:4px 0 18px; font-weight:800; }
+    .muted { color:#666; }
+
+    /* ── Responsivo (iPad / tablets / móvil) ─────────────────────────── */
+    @media (max-width: 900px) {
+      main.wrap { padding:18px 14px 60px; }
+      /* Las tablas anchas se deslizan dentro de su tarjeta en vez de
+         empujar toda la página de lado. */
+      main.wrap table {
+        display:block; width:100%; overflow-x:auto;
+        -webkit-overflow-scrolling:touch;
+      }
+      /* Columnas que van lado a lado se apilan. */
+      main.wrap .cols, main.wrap .kpis, main.wrap .forms, main.wrap .dash {
+        flex-direction:column;
+      }
+      /* Evita el zoom automático de iOS al enfocar un campo (fuente ≥16px). */
+      main.wrap input, main.wrap select, main.wrap textarea { font-size:16px; }
+      /* Objetivos táctiles más cómodos. */
+      main.wrap .btn, main.wrap button { padding-top:10px; padding-bottom:10px; }
+      header.topbar { flex-wrap:wrap; height:auto; padding:8px 14px; gap:8px 14px; }
+      header.topbar nav { order:3; width:100%; }
+    }
+  </style>
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand">SHAKE<span class="dot">.</span></span>
+    {% if user.is_authenticated %}
+    <nav>
+      <a href="/" class="{% if active == 'home' %}active{% endif %}">Inicio</a>
+      <a href="/inventario/" class="{% if active == 'inventario' %}active{% endif %}">📦 Inventario</a>
+      <a href="/lealtad/" class="{% if active == 'lealtad' %}active{% endif %}">💗 Lealtad</a>
+      {% if user.is_superuser %}
+        <a href="/catalogo/" class="{% if active == 'catalogo' %}active{% endif %}">🧾 Catálogo</a>
+        <a href="/finanzas/" class="{% if active == 'finanzas' %}active{% endif %}">💰 Finanzas</a>
+        <a href="/contabilidad/" class="{% if active == 'contabilidad' %}active{% endif %}">📒 Contabilidad</a>
+        <a href="/presupuesto/" class="{% if active == 'presupuesto' %}active{% endif %}">🎯 Presupuesto</a>
+        <a href="/actividad/" class="{% if active == 'actividad' %}active{% endif %}">📋 Actividad</a>
+      {% endif %}
+      <a href="/admin/" class="discreto" title="Registrar y gestionar datos">⚙️</a>
+    </nav>
+    <span class="user">
+      {{ user.username }}{% if not user.is_superuser %} · staff{% endif %}
+      &nbsp;·&nbsp;
+      <form action="/logout/" method="post" style="display:inline">{% csrf_token %}
+        <button type="submit" style="background:none;border:none;color:#fff;cursor:pointer;
+                font-size:13px;text-decoration:underline;padding:0">Salir</button>
+      </form>
+    </span>
+    {% endif %}
+  </header>
+  <main class="wrap">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

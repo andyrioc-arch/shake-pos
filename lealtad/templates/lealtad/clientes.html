@@ -1,0 +1,86 @@
+{% extends "lealtad/_base_lealtad.html" %}
+{% load humanize %}
+{% block title %}Clientes de lealtad{% endblock %}
+{% block lealtad %}
+<h1>👥 Clientes</h1>
+
+<div class="blk">
+  <h2>Buscar <span class="sub">por celular, código o nombre</span></h2>
+  <form method="get" class="formrow">
+    <div class="campo" style="flex:1 1 260px">
+      <label for="q">Celular, código o nombre</label>
+      <input class="inp" id="q" name="q" value="{{ q }}"
+             placeholder="55 1234 5678 · A1B2C3 · Ana">
+    </div>
+    <div class="campo">
+      <label for="estado">Estado</label>
+      <select class="inp" id="estado" name="estado">
+        <option value="">Todos</option>
+        {% for valor, texto in estados %}
+          <option value="{{ valor }}" {% if estado == valor %}selected{% endif %}>{{ texto }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button class="btn pri" type="submit">Buscar</button>
+    {% if q or estado %}<a class="btn ghost" href="{% url 'lealtad_clientes' %}">Limpiar</a>{% endif %}
+  </form>
+</div>
+
+<div class="blk">
+  <h2>Registrar un cliente nuevo
+    <span class="sub">o comparte la página de registro para que lo haga él</span></h2>
+  <form method="post" action="{% url 'lealtad_cliente_crear' %}" class="formrow">
+    {% csrf_token %}
+    <div class="campo">
+      <label for="telefono">Celular *</label>
+      <input class="inp" id="telefono" name="telefono" inputmode="numeric"
+             placeholder="55 1234 5678" required>
+    </div>
+    <div class="campo">
+      <label for="nombre">Nombre</label>
+      <input class="inp" id="nombre" name="nombre" placeholder="Ana">
+    </div>
+    <div class="campo">
+      <label for="cumpleanos">Cumpleaños</label>
+      <input class="inp" id="cumpleanos" name="cumpleanos" type="date">
+    </div>
+    <button class="btn pri" type="submit">Dar de alta</button>
+  </form>
+</div>
+
+<div class="blk">
+  <h2>{{ total|intcomma }} cliente(s)
+    <span class="sub">se muestran los 200 más recientes</span></h2>
+  <table class="t">
+    <thead><tr>
+      <th class="izq">Cliente</th><th class="izq">Nivel</th><th>Puntos</th>
+      <th>Visitas</th><th>Gasto</th><th>Última compra</th><th class="izq">Estado</th>
+    </tr></thead>
+    <tbody>
+      {% for c in clientes %}
+      <tr>
+        <td class="izq">
+          <a href="{% url 'lealtad_cliente' c.pk %}"><b>{{ c.telefono_display }}</b></a>
+          {% if c.nombre %}<span class="muted"> · {{ c.nombre }}</span>{% endif %}
+          {% if not c.acepta_mensajes %}<span class="tag off">sin mensajes</span>{% endif %}
+        </td>
+        <td class="izq">{{ c.nivel|default:"—" }}</td>
+        <td>{{ c.puntos_saldo }}</td>
+        <td>{{ c.visitas }}</td>
+        <td>${{ c.gasto_historico|floatformat:0|intcomma }}</td>
+        <td>{{ c.ultima_compra|date:"d/m/Y"|default:"—" }}</td>
+        <td class="izq">
+          <span class="tag {% if c.estado == 'activo' %}ok{% elif c.estado == 'inactivo' %}warn{% else %}off{% endif %}">
+            {{ c.get_estado_display }}</span>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="7" class="nada">
+        Todavía no hay clientes. Captura el celular al registrar una venta o
+        pon el QR de <a href="{% url 'lealtad_unete' %}" target="_blank">la página de registro</a>
+        en el mostrador.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

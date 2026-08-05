@@ -1,0 +1,92 @@
+{% comment %}Alta/edición de una automatización. `auto` puede ser None.{% endcomment %}
+<form method="post" action="{% url 'lealtad_automatizacion_guardar' %}"
+      style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;padding:6px 0 14px">
+  {% csrf_token %}
+  {% if auto %}<input type="hidden" name="pk" value="{{ auto.pk }}">{% endif %}
+
+  <div class="campo" style="flex:1 1 200px">
+    <label>Nombre de la regla *</label>
+    <input class="inp" name="nombre" style="width:100%" required
+           value="{{ auto.nombre|default:'' }}"
+           placeholder="Recuperar clientes inactivos">
+  </div>
+  <div class="campo">
+    <label>Cuándo se dispara *</label>
+    <select class="inp" name="disparador">
+      {% for valor, texto in disparadores %}
+        <option value="{{ valor }}" {% if auto.disparador == valor %}selected{% endif %}>{{ texto }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="campo">
+    <label>Qué texto manda *</label>
+    <select class="inp" name="plantilla" required>
+      {% for p in plantillas %}
+        <option value="{{ p.pk }}" {% if auto.plantilla_id == p.pk %}selected{% endif %}>{{ p.nombre }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="campo" style="flex:1 1 100%">
+    <label style="color:#000">Condición — se usa solo el campo que corresponde al disparador</label>
+  </div>
+  <div class="campo">
+    <label>% de avance al premio</label>
+    <input class="inp" name="umbral_porcentaje" type="number" min="1" max="100"
+           style="width:90px" value="{{ auto.umbral_porcentaje|default:80 }}">
+  </div>
+  <div class="campo">
+    <label>Días</label>
+    <input class="inp" name="dias" type="number" min="0" style="width:90px"
+           value="{{ auto.dias|default:30 }}">
+  </div>
+  <div class="campo">
+    <label>Nivel objetivo</label>
+    <select class="inp" name="nivel_objetivo">
+      <option value="">— cualquiera —</option>
+      {% for n in niveles %}
+        <option value="{{ n.pk }}" {% if auto.nivel_objetivo_id == n.pk %}selected{% endif %}>{{ n }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div class="campo" style="flex:1 1 100%">
+    <label style="color:#000">Cuándo puede salir</label>
+  </div>
+  <div class="campo">
+    <label>Hora de envío</label>
+    <input class="inp" name="hora_envio" type="number" min="0" max="23"
+           style="width:80px" value="{{ auto.hora_envio|default:11 }}">
+  </div>
+  <div class="campo" style="flex:1 1 260px">
+    <label>Días permitidos</label>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;padding-top:4px">
+      {% for valor, texto in dias_semana %}
+        <label style="font-size:13px;text-transform:none;color:#000;font-weight:600">
+          <input type="checkbox" name="dias_semana" value="{{ valor }}"
+                 {% if not auto or valor in auto.dias_semana %}checked{% endif %}>
+          {{ texto }}
+        </label>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="campo">
+    <label>No repetir en (días)</label>
+    <input class="inp" name="no_repetir_dias" type="number" min="0" style="width:110px"
+           value="{{ auto.no_repetir_dias|default:30 }}">
+  </div>
+  <div class="campo">
+    <label>Máx. por cliente</label>
+    <input class="inp" name="max_por_cliente" type="number" min="0" style="width:100px"
+           value="{{ auto.max_por_cliente|default:0 }}">
+  </div>
+  <div class="campo">
+    <label>&nbsp;</label>
+    <label style="font-size:13px;text-transform:none;color:#000;font-weight:600">
+      <input type="checkbox" name="activa" value="1"
+             {% if not auto or auto.activa %}checked{% endif %}> Activa
+    </label>
+  </div>
+  <button class="btn pri" type="submit">
+    {% if auto %}Guardar cambios{% else %}Crear automatización{% endif %}</button>
+</form>

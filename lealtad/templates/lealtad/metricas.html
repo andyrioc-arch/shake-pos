@@ -1,0 +1,101 @@
+{% extends "lealtad/_base_lealtad.html" %}
+{% load humanize %}
+{% block title %}Métricas de lealtad{% endblock %}
+{% block lealtad %}
+<h1>📈 Métricas del programa</h1>
+<p class="muted">
+  Todo se calcula en vivo con tus ventas reales. El objetivo del programa es
+  subir la frecuencia de visita sin comprometer más del 5% del margen bruto.
+</p>
+
+<div class="kpis">
+  <div class="kpi pink">
+    <div class="lbl">Frecuencia</div>
+    <div class="val">{{ comportamiento.frecuencia_mensual|floatformat:1 }}</div>
+    <div class="pie">visitas al mes por cliente</div>
+  </div>
+  <div class="kpi blue">
+    <div class="lbl">Ticket promedio</div>
+    <div class="val">${{ comportamiento.ticket_promedio|floatformat:0|intcomma }}</div>
+    <div class="pie">{{ comportamiento.visitas_promedio|floatformat:1 }} visitas por cliente</div>
+  </div>
+  <div class="kpi yellow">
+    <div class="lbl">LTV (ventas)</div>
+    <div class="val">${{ comportamiento.ltv|floatformat:0|intcomma }}</div>
+    <div class="pie">margen de por vida ${{ comportamiento.ltv_margen|floatformat:0|intcomma }}</div>
+  </div>
+  <div class="kpi purple">
+    <div class="lbl">Tasa de canje</div>
+    <div class="val">{% if puntos.tasa_redencion %}{{ puntos.tasa_redencion|floatformat:0 }}%{% else %}—{% endif %}</div>
+    <div class="pie">{{ puntos.canjes }} canjes en total</div>
+  </div>
+</div>
+
+<div class="blk">
+  <h2>🔁 Retención <span class="sub">clientes que volvieron dentro del plazo</span></h2>
+  <table class="t">
+    <thead><tr><th class="izq">Plazo</th><th>Clientes en la cohorte</th>
+      <th>Volvieron</th><th>Retención</th></tr></thead>
+    <tbody>
+      {% for etiqueta, r in retenciones %}
+      <tr>
+        <td class="izq">{{ etiqueta }}</td>
+        <td>{{ r.cohorte }}</td>
+        <td>{{ r.repitieron }}</td>
+        <td>{% if r.pct is not None %}<b class="good">{{ r.pct|floatformat:1 }}%</b>{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted" style="padding:10px 16px;font-size:12px;margin:0">
+    Solo cuenta a los clientes que ya tuvieron tiempo de volver, para no
+    castigar a los que acaban de registrarse.
+  </p>
+</div>
+
+<div class="blk">
+  <h2>💰 Retorno del programa</h2>
+  <table class="t">
+    <tr><td class="izq">Ventas de clientes del programa</td>
+        <td>${{ retorno.ventas_miembros|floatformat:2|intcomma }}</td></tr>
+    <tr><td class="izq">Margen bruto que dejaron</td>
+        <td>${{ retorno.margen_miembros|floatformat:2|intcomma }}</td></tr>
+    <tr><td class="izq">Costo de los premios entregados</td>
+        <td>${{ retorno.costo_premios|floatformat:2|intcomma }}</td></tr>
+    <tr><td class="izq"><b>% del margen que consume el programa</b></td>
+        <td>{% if retorno.pct_margen is not None %}
+          <b class="{% if retorno.dentro_objetivo %}good{% else %}bad{% endif %}">
+            {{ retorno.pct_margen|floatformat:1 }}%</b>
+          <span class="muted">(objetivo ≤ 5%)</span>
+        {% else %}—{% endif %}</td></tr>
+    <tr><td class="izq">Utilidad neta después de premios</td>
+        <td><b>${{ retorno.utilidad_neta|floatformat:2|intcomma }}</b></td></tr>
+  </table>
+</div>
+
+<div class="blk">
+  <h2>⭐ Puntos <span class="sub">el pasivo que trae el programa</span></h2>
+  <table class="t">
+    <tr><td class="izq">Puntos emitidos</td><td>{{ puntos.emitidos|intcomma }}</td></tr>
+    <tr><td class="izq">Puntos redimidos</td><td>{{ puntos.redimidos|intcomma }}</td></tr>
+    <tr><td class="izq">Puntos caducados</td><td>{{ puntos.caducados|intcomma }}</td></tr>
+    <tr><td class="izq">Puntos vivos (pasivo)</td><td><b>{{ puntos.pasivo|intcomma }}</b></td></tr>
+    <tr><td class="izq">Costo si todos canjearan hoy</td>
+        <td>${{ puntos.costo_pasivo|floatformat:2|intcomma }}</td></tr>
+    <tr><td class="izq">Costo promedio por punto</td>
+        <td>${{ costo_punto|floatformat:2 }}</td></tr>
+  </table>
+</div>
+
+<div class="blk">
+  <h2>👥 Base de clientes</h2>
+  <table class="t">
+    <tr><td class="izq">Total</td><td>{{ clientes.total|intcomma }}</td></tr>
+    <tr><td class="izq">Activos</td><td>{{ clientes.activos|intcomma }}
+      {% if clientes.pct_activos %}<span class="muted">({{ clientes.pct_activos|floatformat:0 }}%)</span>{% endif %}</td></tr>
+    <tr><td class="izq">Inactivos</td><td>{{ clientes.inactivos|intcomma }}</td></tr>
+    <tr><td class="izq">Registrados sin comprar aún</td><td>{{ clientes.sin_comprar|intcomma }}</td></tr>
+    <tr><td class="izq">Nuevos en los últimos 30 días</td><td>{{ clientes.nuevos|intcomma }}</td></tr>
+  </table>
+</div>
+{% endblock %}

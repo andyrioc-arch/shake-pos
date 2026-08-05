@@ -1,0 +1,187 @@
+{% load humanize %}<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Mi tarjeta · {{ cfg.nombre_negocio }}</title>
+  <link rel="manifest" href="{% url 'lealtad_tarjeta_manifest' cliente.token %}">
+  <meta name="theme-color" content="{{ color }}">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="{{ cfg.nombre_negocio }}">
+  <style>
+    :root { --acento: {{ color }}; }
+    * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+    body { margin:0; background:#000; color:#fff; padding:16px 14px 40px;
+           font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,
+           Helvetica,Arial,sans-serif; }
+    .wrap { max-width:460px; margin:0 auto; }
+
+    .tarjeta { background:var(--acento); color:#000; border-radius:22px;
+               padding:22px 20px 20px; box-shadow:0 10px 30px rgba(255,255,255,.08);
+               position:relative; overflow:hidden; }
+    .tarjeta .marca { font-weight:900; letter-spacing:3px; font-size:15px;
+               text-transform:uppercase; opacity:.75; }
+    .tarjeta .quien { font-size:22px; font-weight:800; margin:2px 0 16px; }
+    .tarjeta .puntos { font-size:58px; font-weight:900; line-height:1; }
+    .tarjeta .puntos span { font-size:18px; font-weight:700; }
+    .tarjeta .nivel { display:inline-block; background:#000; color:#fff;
+               border-radius:999px; padding:6px 14px; font-size:13px;
+               font-weight:800; margin-top:14px; }
+    .tarjeta .tel { position:absolute; top:22px; right:20px; font-size:13px;
+               font-weight:700; opacity:.7; }
+
+    .barra { height:12px; background:rgba(0,0,0,.18); border-radius:999px;
+             margin:16px 0 8px; overflow:hidden; }
+    .barra > i { display:block; height:100%; background:#000; border-radius:999px; }
+    .falta { font-size:13px; font-weight:700; }
+
+    .bloque { background:#111; border:1px solid #262626; border-radius:18px;
+              padding:18px; margin-top:16px; }
+    .bloque h2 { margin:0 0 12px; font-size:14px; text-transform:uppercase;
+              letter-spacing:1.5px; color:#8b8b8b; font-weight:800; }
+
+    .premio { display:flex; gap:12px; align-items:center; padding:12px 0;
+              border-bottom:1px solid #222; }
+    .premio:last-child { border-bottom:0; }
+    .premio .ico { font-size:26px; width:34px; text-align:center; }
+    .premio .txt { flex:1; }
+    .premio .nom { font-weight:700; font-size:15px; }
+    .premio .det { font-size:12px; color:#8b8b8b; margin-top:2px; }
+    .premio .estado { font-size:12px; font-weight:800; white-space:nowrap;
+              padding:5px 10px; border-radius:999px; }
+    .premio .listo { background:var(--acento); color:#000; }
+    .premio .falta2 { background:#1c1c1c; color:#8b8b8b; }
+    .premio.bloqueado .ico, .premio.bloqueado .nom { opacity:.45; }
+
+    .mini { height:5px; background:#1c1c1c; border-radius:999px; margin-top:7px; }
+    .mini > i { display:block; height:100%; background:var(--acento);
+              border-radius:999px; }
+
+    .canje { background:var(--acento); color:#000; border-radius:14px;
+             padding:14px; margin-bottom:10px; }
+    .canje .cod { font-size:30px; font-weight:900; letter-spacing:5px; }
+
+    .qr { text-align:center; padding:6px 0 0; }
+    .qr svg { width:170px; height:170px; background:#fff; border-radius:14px;
+              padding:10px; }
+    .qr .cod { font-size:26px; font-weight:900; letter-spacing:6px; margin-top:10px; }
+    .qr .ayuda { font-size:12px; color:#8b8b8b; margin-top:6px; }
+
+    .mov { display:flex; justify-content:space-between; font-size:13px;
+           padding:9px 0; border-bottom:1px solid #1c1c1c; }
+    .mov:last-child { border-bottom:0; }
+    .mov .fecha { color:#8b8b8b; }
+    .mov .mas { color:var(--acento); font-weight:800; }
+    .mov .menos { color:#8b8b8b; font-weight:800; }
+
+    .btn { display:block; text-align:center; background:#fff; color:#000;
+           text-decoration:none; font-weight:800; padding:15px; border-radius:14px;
+           margin-top:16px; font-size:15px; }
+    .btn.wallet { background:#000; color:#fff; border:1px solid #333; }
+    .pie { text-align:center; color:#666; font-size:12px; margin-top:26px;
+           line-height:1.6; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="tarjeta">
+    <div class="tel">{{ cliente.telefono_display }}</div>
+    <div class="marca">{{ cfg.nombre_negocio }}</div>
+    <div class="quien">Hola, {{ cliente.nombre_corto }}</div>
+    <div class="puntos">{{ cliente.puntos_saldo|intcomma }} <span>puntos</span></div>
+    {% if nivel %}<div class="nivel">{{ nivel }}</div>{% endif %}
+
+    {% if siguiente_nivel %}
+      <div class="barra">
+        <i style="width:{{ progreso_nivel }}%"></i>
+      </div>
+      <div class="falta">
+        Te faltan {{ falta_nivel }} puntos para ser {{ siguiente_nivel.nombre }}
+        {{ siguiente_nivel.emoji }}
+      </div>
+    {% else %}
+      <div class="falta" style="margin-top:16px">
+        Estás en el nivel más alto. ¡Gracias por tu preferencia! 👑
+      </div>
+    {% endif %}
+  </div>
+
+  {% if pendientes %}
+  <div class="bloque">
+    <h2>Premios listos para recoger</h2>
+    {% for c in pendientes %}
+      <div class="canje">
+        <div style="font-weight:800">{{ c.premio }}</div>
+        <div class="cod">{{ c.codigo }}</div>
+        <div style="font-size:12px;font-weight:700">
+          Muestra este código en el mostrador{% if c.vence_el %} ·
+          válido hasta el {{ c.vence_el|date:"d/m/Y" }}{% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="bloque">
+    <h2>Tus premios</h2>
+    {% for item in catalogo %}
+      <div class="premio {% if not item.puede %}bloqueado{% endif %}">
+        <div class="ico">{{ item.premio.emoji|default:"🎁" }}</div>
+        <div class="txt">
+          <div class="nom">{{ item.premio.nombre }}</div>
+          <div class="det">
+            {{ item.premio.puntos_requeridos }} puntos{% if item.premio.descripcion %}
+            · {{ item.premio.descripcion }}{% endif %}
+          </div>
+          {% if not item.puede %}<div class="mini"><i style="width:{{ item.avance }}%"></i></div>{% endif %}
+        </div>
+        <div class="estado {% if item.puede %}listo{% else %}falta2{% endif %}">
+          {% if item.puede %}¡Listo!{% else %}−{{ item.faltan }}{% endif %}
+        </div>
+      </div>
+    {% empty %}
+      <p style="color:#8b8b8b;font-size:13px;margin:0">
+        Muy pronto habrá premios para canjear.</p>
+    {% endfor %}
+    <p style="color:#666;font-size:12px;margin:14px 0 0">
+      Pide tu premio en el mostrador y te lo canjeamos al instante.</p>
+  </div>
+
+  <div class="bloque">
+    <h2>Tu código</h2>
+    <div class="qr">
+      {{ qr_svg|safe }}
+      <div class="cod">{{ cliente.codigo }}</div>
+      <div class="ayuda">Muéstralo al pagar para acumular tus puntos.</div>
+    </div>
+  </div>
+
+  {% if movimientos %}
+  <div class="bloque">
+    <h2>Tus últimos movimientos</h2>
+    {% for m in movimientos %}
+      <div class="mov">
+        <span class="fecha">{{ m.compra.fecha|default:m.creado|date:"d/m/Y" }} · {{ m.descripcion|default:m.get_tipo_display }}</span>
+        <span class="{% if m.puntos > 0 %}mas{% else %}menos{% endif %}">
+          {% if m.puntos > 0 %}+{% endif %}{{ m.puntos }}
+        </span>
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if wallet_url %}
+    <a class="btn wallet" href="{{ wallet_url }}">📲 Guardar en Google Wallet</a>
+  {% endif %}
+
+  <div class="pie">
+    Guarda esta página en tu pantalla de inicio para tenerla siempre a la mano.<br>
+    {% if cliente.puntos_saldo %}
+      Tus puntos vencen 12 meses después de ganarlos.<br>
+    {% endif %}
+    {{ cfg.nombre_negocio }}
+  </div>
+</div>
+</body>
+</html>

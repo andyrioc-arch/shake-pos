@@ -1,0 +1,248 @@
+{% extends "lealtad/_base_lealtad.html" %}
+{% load humanize %}
+{% block title %}Mensajes y automatizaciones{% endblock %}
+{% block lealtad %}
+<h1>📨 Mensajes y automatizaciones</h1>
+<p class="muted">
+  Aquí decides <b>qué</b> se manda, <b>a quién</b>, <b>cuándo</b> y <b>cada cuánto</b>.
+  Cada automatización es una regla independiente: puedes apagarla, cambiarle el
+  texto o la hora sin tocar nada más.
+</p>
+
+<div class="kpis">
+  <div class="kpi purple">
+    <div class="lbl">En cola</div>
+    <div class="val">{{ pendientes }}</div>
+    <div class="pie">
+      {% if en_horario %}dentro del horario de envío{% else %}fuera de horario ({{ cfg.envio_hora_inicio }}–{{ cfg.envio_hora_fin }} h){% endif %}
+    </div>
+  </div>
+  <div class="kpi blue">
+    <div class="lbl">Se envía por</div>
+    <div class="val" style="font-size:16px">{{ cfg.get_proveedor_mensajes_display }}</div>
+    <div class="pie">se cambia en el admin → configuración</div>
+  </div>
+  <div class="kpi" style="flex:2 1 300px">
+    <div class="lbl">Mandar ahora lo que está en cola</div>
+    <form method="post" action="{% url 'lealtad_despachar' %}" style="margin-top:8px">
+      {% csrf_token %}
+      <button class="btn pri" type="submit">Despachar la bandeja</button>
+    </form>
+    <div class="pie" style="margin-top:8px">
+      Normalmente lo hace solo el comando <code>lealtad_run</code> cada 10 min.
+    </div>
+  </div>
+</div>
+
+<!-- ── AUTOMATIZACIONES ─────────────────────────────────────────────────── -->
+<div class="blk">
+  <h2>🤖 Automatizaciones <span class="sub">reglas de envío</span></h2>
+  <table class="t">
+    <thead><tr>
+      <th class="izq">Regla</th><th class="izq">Cuándo se dispara</th>
+      <th class="izq">Condición</th><th>Hora</th><th class="izq">Días</th>
+      <th>No repetir</th><th class="cen">Estado</th><th class="cen"></th>
+    </tr></thead>
+    <tbody>
+      {% for a in automatizaciones %}
+      <tr>
+        <td class="izq"><b>{{ a.nombre }}</b>
+          <div class="muted" style="font-size:12px">{{ a.plantilla.nombre }}</div></td>
+        <td class="izq">{{ a.get_disparador_display }}</td>
+        <td class="izq">
+          {% if a.disparador == 'cerca_premio' %}≥ {{ a.umbral_porcentaje }}% del premio
+          {% elif a.disparador == 'inactividad' %}{{ a.dias }} días sin comprar
+          {% elif a.disparador == 'cumpleanos' %}{{ a.dias }} días antes
+          {% elif a.disparador == 'por_expirar' %}caducan en {{ a.dias }} días
+          {% elif a.disparador == 'nivel' %}{{ a.nivel_objetivo|default:"cualquier nivel" }}
+          {% else %}—{% endif %}
+        </td>
+        <td>{% if a.es_por_evento %}al instante{% else %}{{ a.hora_envio }}:00{% endif %}</td>
+        <td class="izq" style="font-size:11px">
+          {% for d in dias_semana %}{% if d.0 in a.dias_semana %}{{ d.1 }} {% endif %}{% endfor %}
+        </td>
+        <td>{% if a.no_repetir_dias %}{{ a.no_repetir_dias }} d{% else %}—{% endif %}</td>
+        <td class="cen">
+          <form method="post" action="{% url 'lealtad_automatizacion_alternar' a.pk %}" style="display:inline">
+            {% csrf_token %}
+            <button class="btn sm" type="submit" style="border:0;background:none;box-shadow:none;padding:0">
+              <span class="tag {% if a.activa %}on{% else %}off{% endif %}">
+                {% if a.activa %}activa{% else %}apagada{% endif %}</span>
+            </button>
+          </form>
+        </td>
+        <td class="cen">
+          <form method="post" action="{% url 'lealtad_automatizacion_eliminar' a.pk %}" style="display:inline"
+                onsubmit="return confirm('¿Eliminar «{{ a.nombre|escapejs }}»?')">
+            {% csrf_token %}
+            <button class="btn del" type="submit">Borrar</button>
+          </form>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="8" style="text-align:left;background:#fcfcfc;padding:0 16px 10px">
+          <details class="editor">
+            <summary>Editar «{{ a.nombre }}»</summary>
+            {% include "lealtad/_form_automatizacion.html" with auto=a %}
+          </details>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="8" class="nada">
+        Sin automatizaciones. Corre <code>python manage.py seed_lealtad</code>
+        para cargar las básicas, o crea una abajo.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div style="padding:0 16px 4px;background:#fafafa;border-top:2px solid #000">
+    <details class="editor" style="padding:12px 0">
+      <summary><b>➕ Crear una automatización</b></summary>
+      {% include "lealtad/_form_automatizacion.html" with auto=None %}
+    </details>
+  </div>
+</div>
+
+<!-- ── PLANTILLAS ───────────────────────────────────────────────────────── -->
+<div class="blk">
+  <h2>✍️ Textos de los mensajes
+    <span class="sub">variables: {nombre} {saldo} {puntos} {premio} {faltan} {nivel} {negocio} {link} {monto} {dias}</span></h2>
+  <table class="t">
+    <thead><tr><th class="izq">Plantilla</th><th class="izq">Texto</th>
+      <th class="izq">Canal</th><th class="cen">Activa</th></tr></thead>
+    <tbody>
+      {% for p in plantillas %}
+      <tr>
+        <td class="izq"><b>{{ p.nombre }}</b>
+          {% if p.plantilla_meta %}<div class="muted" style="font-size:11px">Meta: {{ p.plantilla_meta }}</div>{% endif %}</td>
+        <td class="izq" style="max-width:460px;white-space:pre-wrap">{{ p.cuerpo }}</td>
+        <td class="izq">{{ p.get_canal_display }}</td>
+        <td class="cen"><span class="tag {% if p.activa %}on{% else %}off{% endif %}">
+          {% if p.activa %}sí{% else %}no{% endif %}</span></td>
+      </tr>
+      <tr>
+        <td colspan="4" style="text-align:left;background:#fcfcfc;padding:0 16px 10px">
+          <details class="editor">
+            <summary>Editar el texto de «{{ p.nombre }}»</summary>
+            {% include "lealtad/_form_plantilla.html" with plantilla=p %}
+          </details>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="4" class="nada">Sin plantillas.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div style="padding:0 16px 4px;background:#fafafa;border-top:2px solid #000">
+    <details class="editor" style="padding:12px 0">
+      <summary><b>➕ Crear una plantilla</b></summary>
+      {% include "lealtad/_form_plantilla.html" with plantilla=None %}
+    </details>
+  </div>
+</div>
+
+<!-- ── CAMPAÑAS ─────────────────────────────────────────────────────────── -->
+<div class="blk">
+  <h2>📢 Campañas <span class="sub">envíos puntuales a un grupo de clientes</span></h2>
+  <table class="t">
+    <thead><tr><th class="izq">Campaña</th><th class="izq">Segmento</th>
+      <th class="izq">Estado</th><th>Programada</th><th>Mensajes</th><th class="cen"></th></tr></thead>
+    <tbody>
+      {% for c in campanas %}
+      <tr>
+        <td class="izq"><b>{{ c.nombre }}</b>
+          <div class="muted" style="font-size:12px">{{ c.cuerpo|default:c.plantilla|truncatechars:80 }}</div></td>
+        <td class="izq">{{ c.get_segmento_display }}{% if c.nivel %} · {{ c.nivel }}{% endif %}</td>
+        <td class="izq"><span class="tag {% if c.estado == 'enviada' %}ok{% elif c.estado == 'programada' %}on{% else %}off{% endif %}">
+          {{ c.get_estado_display }}</span></td>
+        <td>{{ c.programada_para|date:"d/m/Y H:i"|default:"—" }}</td>
+        <td>{{ c.mensajes.count }}</td>
+        <td class="cen">
+          {% if c.estado != 'enviada' %}
+            <form method="post" action="{% url 'lealtad_campana_enviar' c.pk %}" style="display:inline"
+                  onsubmit="return confirm('¿Encolar esta campaña ahora?')">
+              {% csrf_token %}
+              <button class="btn sm pri" type="submit">Enviar ahora</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="6" class="nada">Sin campañas todavía.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <form method="post" action="{% url 'lealtad_campana_guardar' %}" class="formrow">
+    {% csrf_token %}
+    <div class="campo">
+      <label for="camp_nombre">Nombre</label>
+      <input class="inp" id="camp_nombre" name="nombre" required
+             placeholder="Promo de agosto">
+    </div>
+    <div class="campo">
+      <label for="segmento">A quién</label>
+      <select class="inp" id="segmento" name="segmento">
+        {% for valor, texto in segmentos %}<option value="{{ valor }}">{{ texto }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="campo">
+      <label for="camp_nivel">Nivel (si aplica)</label>
+      <select class="inp" id="camp_nivel" name="nivel">
+        <option value="">—</option>
+        {% for n in niveles %}<option value="{{ n.pk }}">{{ n }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="campo">
+      <label for="programada_para">Programar para</label>
+      <input class="inp" id="programada_para" name="programada_para" type="datetime-local">
+    </div>
+    <div class="campo" style="flex:1 1 100%">
+      <label for="camp_cuerpo">Mensaje</label>
+      <textarea class="inp" id="camp_cuerpo" name="cuerpo"
+                placeholder="¡Hola {nombre}! Este fin de semana tenemos puntos dobles 🔥"></textarea>
+    </div>
+    <button class="btn pri" type="submit">Guardar campaña</button>
+  </form>
+</div>
+
+<!-- ── BANDEJA ──────────────────────────────────────────────────────────── -->
+<div class="blk">
+  <h2>📥 Bandeja de salida <span class="sub">últimos 50 mensajes</span></h2>
+  <table class="t">
+    <thead><tr><th class="izq">Fecha</th><th class="izq">Cliente</th>
+      <th class="izq">Origen</th><th class="izq">Mensaje</th>
+      <th class="izq">Estado</th><th class="cen">Acción</th></tr></thead>
+    <tbody>
+      {% for m in bandeja %}
+      <tr>
+        <td class="izq">{{ m.creado|date:"d/m H:i" }}</td>
+        <td class="izq"><a href="{% url 'lealtad_cliente' m.cliente.pk %}">{{ m.telefono }}</a></td>
+        <td class="izq">{{ m.automatizacion|default:m.campana|default:"Manual" }}</td>
+        <td class="izq" style="max-width:340px">{{ m.cuerpo|truncatechars:80 }}</td>
+        <td class="izq">
+          <span class="tag {% if m.estado == 'fallido' %}warn{% elif m.estado == 'programado' %}on{% elif m.estado == 'cancelado' %}off{% else %}ok{% endif %}">
+            {{ m.get_estado_display }}</span>
+          {% if m.error %}<div class="muted" style="font-size:11px">{{ m.error|truncatechars:60 }}</div>{% endif %}
+          {% if m.compra_atribuida %}<span class="tag ok">compró 🎉</span>{% endif %}
+        </td>
+        <td class="cen" style="white-space:nowrap">
+          <a class="btn sm" href="{{ m.enlace_wa }}" target="_blank" title="Mandarlo a mano">WA</a>
+          {% if m.estado == 'programado' %}
+            <form method="post" action="{% url 'lealtad_mensaje_cancelar' m.pk %}" style="display:inline">
+              {% csrf_token %}<button class="btn del" type="submit">Cancelar</button>
+            </form>
+          {% elif m.estado == 'fallido' %}
+            <form method="post" action="{% url 'lealtad_mensaje_reintentar' m.pk %}" style="display:inline">
+              {% csrf_token %}<button class="btn sm" type="submit">Reintentar</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="6" class="nada">
+        La bandeja está vacía. Registra una venta con teléfono y aquí verás el
+        mensaje de bienvenida.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

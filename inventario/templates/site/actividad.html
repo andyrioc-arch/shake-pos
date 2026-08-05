@@ -1,0 +1,51 @@
+{% extends "site/base.html" %}
+{% block title %}Actividad{% endblock %}
+{% block extra_head %}
+<style>
+  .log { background:#fff; border:2px solid #000; border-radius:12px;
+         box-shadow:5px 5px 0 #000; overflow:hidden; }
+  .log h2 { background:#000; color:#fff; margin:0; padding:12px 18px; font-size:16px; }
+  table.lg { width:100%; border-collapse:collapse; }
+  table.lg th, table.lg td { padding:9px 14px; font-size:13px;
+            border-bottom:1px solid #ececec; text-align:left; vertical-align:top; }
+  table.lg th { background:#f5f5f5; }
+  .acc { font-weight:700; padding:2px 9px; border-radius:6px; color:#fff; font-size:12px; white-space:nowrap; }
+  .acc.add { background:#1e9aff; }
+  .acc.mod { background:#ff7300; }
+  .acc.del { background:#fa5598; }
+  .mod-pill { background:#000; color:#fff; padding:2px 9px; border-radius:6px; font-size:12px; white-space:nowrap; }
+  .who { font-weight:700; }
+  .who .tag { font-size:11px; color:#666; font-weight:500; }
+  .muted { color:#999; }
+  td.fecha { white-space:nowrap; color:#444; }
+</style>
+{% endblock %}
+{% block content %}
+<h1>📋 Bitácora de actividad</h1>
+<p class="muted">Movimientos registrados en el sistema. Visible solo para administración.</p>
+
+<div class="log">
+  <h2>Últimos {{ filas|length }} movimientos</h2>
+  <table class="lg">
+    <thead>
+      <tr><th>Fecha</th><th>Cuenta</th><th>Movimiento</th><th>Módulo</th><th>Detalle</th></tr>
+    </thead>
+    <tbody>
+      {% for f in filas %}
+      <tr>
+        <td class="fecha">{{ f.fecha|date:"d/m/Y H:i" }}</td>
+        <td class="who">{{ f.usuario }}{% if not f.es_super %} <span class="tag">· staff</span>{% endif %}</td>
+        <td>
+          <span class="acc {% if f.accion == 'Agregó' %}add{% elif f.accion == 'Modificó' %}mod{% else %}del{% endif %}">{{ f.accion }}</span>
+        </td>
+        <td><span class="mod-pill">{{ f.modulo }}</span></td>
+        <td>{{ f.objeto }}{% if f.detalle %}<br><span class="muted">{{ f.detalle }}</span>{% endif %}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" style="text-align:center;color:#999;padding:22px;">
+        Aún no hay movimientos registrados.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

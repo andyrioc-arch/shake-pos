@@ -1,0 +1,178 @@
+{% extends "site/base.html" %}
+{% load humanize %}
+{% block content %}
+<style>
+  .pp-wrap { max-width: 1000px; }
+  .blk { background:#fff; border:2px solid #000; border-radius:12px; margin:22px 0;
+         box-shadow:5px 5px 0 #000; overflow:hidden; }
+  .blk h2 { background:#000; color:#fff; margin:0; padding:12px 18px; font-size:16px;
+            display:flex; justify-content:space-between; align-items:center; }
+  table.p { width:100%; border-collapse:collapse; }
+  table.p th, table.p td { padding:9px 16px; font-size:13px;
+            border-bottom:1px solid #ececec; text-align:right; }
+  table.p th { background:#f5f5f5; text-align:right; }
+  table.p th:first-child, table.p td:first-child { text-align:left; }
+  .tot td { font-weight:700; background:#f2f2f2; border-top:2px solid #000; }
+  .good { color:#1e9aff; font-weight:600; }
+  .bad  { color:#fa5598; font-weight:600; }
+  .note { color:#777; font-size:12px; padding:6px 18px 14px; }
+
+  .monthnav { display:flex; align-items:center; gap:12px; margin:6px 0 4px; flex-wrap:wrap; }
+  .monthnav .cur { font-size:22px; font-weight:800; min-width:190px; text-align:center; }
+  .btn { border:2px solid #000; background:#fff; color:#000; border-radius:8px;
+         padding:7px 13px; font-weight:700; cursor:pointer; text-decoration:none;
+         font-size:14px; display:inline-block; box-shadow:2px 2px 0 #000; }
+  .btn:hover { background:#ffd900; }
+  .btn.arrow { padding:7px 15px; font-size:16px; }
+  .btn.add { background:#1e9aff; color:#fff; }
+  .btn.add:hover { background:#0d80e0; }
+  .btn.del { background:#fa5598; color:#fff; border-color:#000; padding:5px 10px;
+             box-shadow:none; font-size:12px; }
+  .btn.del:hover { background:#d81b76; }
+  select.msel, input.inp { border:2px solid #000; border-radius:8px; padding:7px 9px; font-size:13px; }
+  input.inp { width:120px; }
+  .formrow { display:flex; gap:10px; align-items:center; flex-wrap:wrap;
+             padding:12px 16px; background:#fafafa; border-top:2px solid #000; }
+  .formrow label { font-size:12px; font-weight:700; }
+  .msg { padding:10px 14px; border:2px solid #000; border-radius:8px; margin:10px 0; font-size:13px; font-weight:600; }
+  .msg.success { background:#e7f3ff; }
+  .msg.error { background:#ffe6f1; }
+  td.actions { text-align:center; }
+  form.inline { display:inline; margin:0; }
+</style>
+
+<div class="pp-wrap">
+  <h1>🎯 Presupuesto vs. real — SHAKE</h1>
+
+  {% if messages %}
+    {% for m in messages %}
+      <div class="msg {{ m.tags }}">{{ m }}</div>
+    {% endfor %}
+  {% endif %}
+
+  <!-- NAVEGACIÓN POR MES -->
+  <div class="monthnav">
+    <a class="btn arrow" href="?anio={{ prev_a }}&mes={{ prev_m }}" title="Mes anterior">◀</a>
+    <span class="cur">{{ mes_nombre }} {{ anio }}</span>
+    <a class="btn arrow" href="?anio={{ next_a }}&mes={{ next_m }}" title="Mes siguiente">▶</a>
+    <select class="msel" onchange="if(this.value)location.href=this.value">
+      <option value="">— Ir a un mes con datos —</option>
+      {% for p in periodos %}
+        <option value="?anio={{ p.anio }}&mes={{ p.mes }}" {% if p.sel %}selected{% endif %}>{{ p.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <!-- VENTAS -->
+  <div class="blk">
+    <h2>Ventas (meta vs. real) — {{ mes_nombre }} {{ anio }}</h2>
+    <table class="p">
+      <thead><tr><th>Concepto</th><th>Meta</th><th>Real</th>
+        <th>Diferencia</th><th>% cumplido</th><th>Acción</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Meta de ventas del mes</td>
+          <td>${{ ventas.meta|floatformat:2|intcomma }}</td>
+          <td>${{ ventas.real|floatformat:2|intcomma }}</td>
+          <td class="{% if ventas.diferencia >= 0 %}good{% else %}bad{% endif %}">
+            ${{ ventas.diferencia|floatformat:2|intcomma }}</td>
+          <td>{% if ventas.pct is not None %}{{ ventas.pct|floatformat:0 }}%{% else %}—{% endif %}</td>
+          <td class="actions">
+            {% if ventas.obj %}
+              <form class="inline" method="post" action="{% url 'presupuesto_venta_eliminar' %}"
+                    onsubmit="return confirm('¿Eliminar la meta de ventas de este mes?');">
+                {% csrf_token %}
+                <input type="hidden" name="anio" value="{{ anio }}">
+                <input type="hidden" name="mes" value="{{ mes }}">
+                <button class="btn del" type="submit">Eliminar</button>
+              </form>
+            {% else %}<span style="color:#999;">sin meta</span>{% endif %}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <form class="formrow" method="post" action="{% url 'presupuesto_venta_guardar' %}">
+      {% csrf_token %}
+      <input type="hidden" name="anio" value="{{ anio }}">
+      <input type="hidden" name="mes" value="{{ mes }}">
+      <label>{% if ventas.obj %}Actualizar meta ($){% else %}Agregar meta ($){% endif %}</label>
+      <input class="inp" type="number" step="0.01" min="0" name="monto"
+             value="{% if ventas.obj %}{{ ventas.meta|floatformat:2 }}{% endif %}" required>
+      <button class="btn add" type="submit">{% if ventas.obj %}Guardar{% else %}Agregar línea{% endif %}</button>
+    </form>
+    <p class="note">En ventas, lo azul es bueno: vendiste más que la meta.</p>
+  </div>
+
+  <!-- GASTOS -->
+  <div class="blk">
+    <h2>Gastos por categoría — {{ mes_nombre }} {{ anio }}</h2>
+    <table class="p">
+      <thead><tr><th>Categoría</th><th>Meta</th><th>Real</th>
+        <th>Diferencia</th><th>% usado</th><th>Acción</th></tr></thead>
+      <tbody>
+        {% for f in gastos %}
+        <tr>
+          <td>{{ f.categoria }}</td>
+          <td>${{ f.meta|floatformat:2|intcomma }}</td>
+          <td>${{ f.real|floatformat:2|intcomma }}</td>
+          <td class="{% if f.diferencia <= 0 %}good{% else %}bad{% endif %}">
+            ${{ f.diferencia|floatformat:2|intcomma }}</td>
+          <td>{% if f.pct is not None %}{{ f.pct|floatformat:0 }}%{% else %}—{% endif %}</td>
+          <td class="actions">
+            {% if f.obj %}
+              <form class="inline" method="post" action="{% url 'presupuesto_gasto_eliminar' %}"
+                    onsubmit="return confirm('¿Eliminar esta línea de gasto?');">
+                {% csrf_token %}
+                <input type="hidden" name="anio" value="{{ anio }}">
+                <input type="hidden" name="mes" value="{{ mes }}">
+                <input type="hidden" name="pk" value="{{ f.obj.pk }}">
+                <button class="btn del" type="submit">Eliminar</button>
+              </form>
+            {% else %}<span style="color:#999;">solo real</span>{% endif %}
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="6" style="text-align:center;color:#999;">
+          Sin líneas de presupuesto ni gastos en este mes.</td></tr>
+        {% endfor %}
+        <tr class="tot">
+          <td>Total</td>
+          <td>${{ tot_meta_gastos|floatformat:2|intcomma }}</td>
+          <td>${{ tot_real_gastos|floatformat:2|intcomma }}</td>
+          <td colspan="3"></td>
+        </tr>
+      </tbody>
+    </table>
+    <form class="formrow" method="post" action="{% url 'presupuesto_gasto_guardar' %}">
+      {% csrf_token %}
+      <input type="hidden" name="anio" value="{{ anio }}">
+      <input type="hidden" name="mes" value="{{ mes }}">
+      <label>Agregar línea de gasto</label>
+      <select class="msel" name="categoria" required>
+        {% for key, label in categorias_libres %}
+          <option value="{{ key }}">{{ label }}</option>
+        {% empty %}
+          <option value="" disabled>Todas las categorías ya tienen línea</option>
+        {% endfor %}
+      </select>
+      <input class="inp" type="number" step="0.01" min="0" name="monto" placeholder="Meta $" required>
+      <button class="btn add" type="submit">Agregar línea</button>
+    </form>
+    <form class="formrow" method="post" action="{% url 'presupuesto_categoria_crear' %}"
+          style="background:#fff7cc;">
+      {% csrf_token %}
+      <input type="hidden" name="anio" value="{{ anio }}">
+      <input type="hidden" name="mes" value="{{ mes }}">
+      <label>➕ Nueva categoría de gasto</label>
+      <input class="inp" type="text" name="nombre" placeholder="Ej. Logística" style="width:170px;" required>
+      <input class="inp" type="text" name="cuenta_codigo" placeholder="Cuenta (opc.)" style="width:110px;">
+      <button class="btn" type="submit" style="background:#8700ff;color:#fff;">Crear categoría</button>
+    </form>
+    <p class="note">En gastos, lo azul es bueno: gastaste menos que la meta.
+      Diferencia positiva = te pasaste del presupuesto.
+      Las categorías nuevas quedan disponibles también para registrar facturas de gasto reales.</p>
+  </div>
+
+  <p><a class="btn" href="/">← Volver al panel principal</a></p>
+</div>
+{% endblock %}

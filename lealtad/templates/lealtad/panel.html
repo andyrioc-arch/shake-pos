@@ -1,0 +1,173 @@
+{% extends "lealtad/_base_lealtad.html" %}
+{% load humanize %}
+{% block title %}Lealtad{% endblock %}
+{% block lealtad %}
+<h1>💗 Programa de lealtad</h1>
+<p class="muted">
+  1 punto por cada ${{ cfg.pesos_por_punto|floatformat:0 }} de compra ·
+  vigencia {{ cfg.vigencia_puntos_meses }} meses ·
+  {% if cfg.activo %}programa activo{% else %}<b>programa apagado</b>{% endif %}
+  {% if promo %}· 🔥 {{ promo.nombre }} ({{ promo.multiplicador|floatformat:0 }}× puntos hasta el {{ promo.hasta|date:"d/m" }}){% endif %}
+</p>
+
+<!-- ── CLIENTES ─────────────────────────────────────────────────────────── -->
+<div class="kpis">
+  <div class="kpi pink">
+    <div class="lbl">Clientes</div>
+    <div class="val">{{ clientes.total|intcomma }}</div>
+    <div class="pie">{{ clientes.nuevos }} nuevos este mes</div>
+  </div>
+  <div class="kpi blue">
+    <div class="lbl">Activos</div>
+    <div class="val">{{ clientes.activos|intcomma }}</div>
+    <div class="pie">
+      {% if clientes.pct_activos %}{{ clientes.pct_activos|floatformat:0 }}% del total{% else %}sin datos{% endif %}
+      · {{ clientes.inactivos }} inactivos
+    </div>
+  </div>
+  <div class="kpi yellow">
+    <div class="lbl">Gasto promedio</div>
+    <div class="val">${{ clientes.gasto_promedio|floatformat:0|intcomma }}</div>
+    <div class="pie">{{ clientes.visitas_promedio|floatformat:1 }} visitas por cliente</div>
+  </div>
+  <div class="kpi purple">
+    <div class="lbl">Puntos vivos</div>
+    <div class="val">{{ puntos.pasivo|intcomma }}</div>
+    <div class="pie">te costarían ${{ puntos.costo_pasivo|floatformat:0|intcomma }}</div>
+  </div>
+  <div class="kpi orange">
+    <div class="lbl">Tasa de canje</div>
+    <div class="val">
+      {% if puntos.tasa_redencion %}{{ puntos.tasa_redencion|floatformat:0 }}%{% else %}—{% endif %}
+    </div>
+    <div class="pie">{{ puntos.redimidos|intcomma }} de {{ puntos.emitidos|intcomma }} puntos</div>
+  </div>
+</div>
+
+<!-- ── MARGEN ───────────────────────────────────────────────────────────── -->
+<div class="blk">
+  <h2>🎯 ¿El programa cabe en tu margen?
+    <span class="sub">objetivo: no más del 5%</span></h2>
+  <table class="t">
+    <tr>
+      <td>Ventas de clientes del programa</td>
+      <td>${{ retorno.ventas_miembros|floatformat:2|intcomma }}</td>
+    </tr>
+    <tr>
+      <td>Margen bruto que dejaron</td>
+      <td>${{ retorno.margen_miembros|floatformat:2|intcomma }}</td>
+    </tr>
+    <tr>
+      <td>Costo de los premios entregados</td>
+      <td>${{ retorno.costo_premios|floatformat:2|intcomma }}</td>
+    </tr>
+    <tr>
+      <td><b>% del margen que se lleva el programa</b></td>
+      <td>
+        {% if retorno.pct_margen is not None %}
+          <b class="{% if retorno.dentro_objetivo %}good{% else %}bad{% endif %}">
+            {{ retorno.pct_margen|floatformat:1 }}%</b>
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    <tr>
+      <td>Utilidad neta después de premios</td>
+      <td><b>${{ retorno.utilidad_neta|floatformat:2|intcomma }}</b></td>
+    </tr>
+  </table>
+</div>
+
+<!-- ── CANJES PENDIENTES ────────────────────────────────────────────────── -->
+{% if canjes_pendientes %}
+<div class="blk">
+  <h2>🎟 Premios por entregar <span class="sub">{{ puntos.canjes_pendientes }} pendiente(s)</span></h2>
+  <table class="t">
+    <thead><tr><th class="izq">Código</th><th class="izq">Cliente</th>
+      <th class="izq">Premio</th><th>Vence</th><th class="cen">Acción</th></tr></thead>
+    <tbody>
+      {% for c in canjes_pendientes %}
+      <tr>
+        <td><b>{{ c.codigo }}</b></td>
+        <td class="izq"><a href="{% url 'lealtad_cliente' c.cliente.pk %}">{{ c.cliente.nombre_corto }} · {{ c.cliente.telefono_display }}</a></td>
+        <td class="izq">{{ c.premio }}</td>
+        <td>{% if c.vence_el %}{{ c.vence_el|date:"d/m/Y" }}{% else %}—{% endif %}</td>
+        <td class="cen">
+          <form method="post" action="{% url 'lealtad_canje_entregar' c.pk %}" style="display:inline">
+            {% csrf_token %}
+            <button class="btn sm pri" type="submit">Entregar</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- ── CERCA DE PREMIO ──────────────────────────────────────────────────── -->
+<div class="blk">
+  <h2>🔥 Clientes cerca de un premio
+    <span class="sub">al 80% o más — buen momento para un mensaje</span></h2>
+  <table class="t">
+    <thead><tr><th class="izq">Cliente</th><th class="izq">Premio</th>
+      <th>Puntos</th><th>Le faltan</th><th class="izq">Avance</th></tr></thead>
+    <tbody>
+      {% for c in cerca %}
+      <tr>
+        <td class="izq"><a href="{% url 'lealtad_cliente' c.cliente.pk %}">
+          {{ c.cliente.nombre_corto }} · {{ c.cliente.telefono_display }}</a></td>
+        <td class="izq">{{ c.premio }}</td>
+        <td>{{ c.cliente.puntos_saldo }}</td>
+        <td><b>{{ c.faltan }}</b></td>
+        <td class="izq"><div class="bar"><i style="width:{{ c.avance|floatformat:0 }}%"></i></div></td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" class="nada">Nadie está cerca de un premio todavía.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- ── TOP CLIENTES ─────────────────────────────────────────────────────── -->
+<div class="blk">
+  <h2>👑 Tus mejores clientes</h2>
+  <table class="t">
+    <thead><tr><th class="izq">Cliente</th><th class="izq">Nivel</th><th>Visitas</th>
+      <th>Gasto</th><th>Ticket prom.</th><th>Puntos</th><th>Última compra</th></tr></thead>
+    <tbody>
+      {% for c in top %}
+      <tr>
+        <td class="izq"><a href="{% url 'lealtad_cliente' c.pk %}">
+          {{ c.nombre_corto }} · {{ c.telefono_display }}</a></td>
+        <td class="izq">{{ c.nivel|default:"—" }}</td>
+        <td>{{ c.visitas }}</td>
+        <td>${{ c.gasto_historico|floatformat:0|intcomma }}</td>
+        <td>${{ c.ticket_promedio|floatformat:0|intcomma }}</td>
+        <td>{{ c.puntos_saldo }}</td>
+        <td>{{ c.ultima_compra|date:"d/m/Y"|default:"—" }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="7" class="nada">
+        Aún no hay compras ligadas a un cliente. Captura el celular al registrar
+        una venta y aquí aparecerán.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- ── MARKETING ────────────────────────────────────────────────────────── -->
+{% if es_super %}
+<div class="blk">
+  <h2>📨 Mensajería <span class="sub">últimos envíos del programa</span></h2>
+  <table class="t">
+    <tr><td>En cola por salir</td><td>{{ marketing.encolados }}</td></tr>
+    <tr><td>Enviados</td><td>{{ marketing.enviados }}</td></tr>
+    <tr><td>Leídos</td><td>{{ marketing.leidos }}
+      {% if marketing.tasa_lectura %}<span class="muted">({{ marketing.tasa_lectura|floatformat:0 }}%)</span>{% endif %}</td></tr>
+    <tr><td>Compras atribuidas</td><td>{{ marketing.conversiones }}
+      {% if marketing.tasa_conversion %}<span class="muted">({{ marketing.tasa_conversion|floatformat:0 }}%)</span>{% endif %}</td></tr>
+    <tr><td>Ventas atribuidas</td><td><b>${{ marketing.ventas_atribuidas|floatformat:2|intcomma }}</b></td></tr>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

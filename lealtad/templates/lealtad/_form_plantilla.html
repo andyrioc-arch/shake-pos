@@ -1,0 +1,38 @@
+{% comment %}Alta/edición del texto de un mensaje. `plantilla` puede ser None.{% endcomment %}
+<form method="post" action="{% url 'lealtad_plantilla_guardar' %}"
+      style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;padding:6px 0 14px">
+  {% csrf_token %}
+  {% if plantilla %}<input type="hidden" name="pk" value="{{ plantilla.pk }}">{% endif %}
+
+  <div class="campo" style="flex:1 1 220px">
+    <label>Nombre *</label>
+    <input class="inp" name="nombre" style="width:100%" required
+           value="{{ plantilla.nombre|default:'' }}" placeholder="Bienvenida">
+  </div>
+  <div class="campo">
+    <label>Canal</label>
+    <select class="inp" name="canal">
+      <option value="whatsapp" {% if plantilla.canal == 'whatsapp' %}selected{% endif %}>WhatsApp</option>
+      <option value="sms" {% if plantilla.canal == 'sms' %}selected{% endif %}>SMS</option>
+    </select>
+  </div>
+  <div class="campo">
+    <label>Plantilla aprobada en Meta</label>
+    <input class="inp" name="plantilla_meta" value="{{ plantilla.plantilla_meta|default:'' }}"
+           placeholder="opcional">
+  </div>
+  <div class="campo">
+    <label>&nbsp;</label>
+    <label style="font-size:13px;text-transform:none;color:#000;font-weight:600">
+      <input type="checkbox" name="activa" value="1"
+             {% if not plantilla or plantilla.activa %}checked{% endif %}> Activa
+    </label>
+  </div>
+  <div class="campo" style="flex:1 1 100%">
+    <label>Texto del mensaje *</label>
+    <textarea class="inp" name="cuerpo" required
+      placeholder="¡Hola {nombre}! Ganaste {puntos} puntos. Tu saldo es {saldo}.">{{ plantilla.cuerpo|default:'' }}</textarea>
+  </div>
+  <button class="btn pri" type="submit">
+    {% if plantilla %}Guardar texto{% else %}Crear plantilla{% endif %}</button>
+</form>

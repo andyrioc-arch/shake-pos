@@ -1,0 +1,42 @@
+{% comment %}Formulario de alta/edición de un nivel. `nivel` puede ser None.{% endcomment %}
+<form method="post" action="{% url 'lealtad_nivel_guardar' %}"
+      style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;padding:6px 0 14px">
+  {% csrf_token %}
+  {% if nivel %}<input type="hidden" name="pk" value="{{ nivel.pk }}">{% endif %}
+
+  <div class="campo">
+    <label>Emoji</label>
+    <input class="inp" name="emoji" style="width:64px" maxlength="8"
+           value="{{ nivel.emoji|default:'' }}" placeholder="💛">
+  </div>
+  <div class="campo">
+    <label>Nombre *</label>
+    <input class="inp" name="nombre" required value="{{ nivel.nombre|default:'' }}"
+           placeholder="Fan">
+  </div>
+  <div class="campo">
+    <label>Se alcanza con (puntos de por vida) *</label>
+    <input class="inp" name="puntos_requeridos" type="number" min="0" required
+           style="width:140px" value="{{ nivel.puntos_requeridos|default:0 }}">
+  </div>
+  <div class="campo">
+    <label>Color de la tarjeta</label>
+    <input class="inp" name="color" type="color" style="width:70px;padding:3px"
+           value="{{ nivel.color|default:'#fa5598' }}">
+  </div>
+  <div class="campo">
+    <label>&nbsp;</label>
+    <label style="font-size:13px;text-transform:none;color:#000;font-weight:600">
+      <input type="checkbox" name="activo" value="1"
+             {% if not nivel or nivel.activo %}checked{% endif %}> Activo
+    </label>
+  </div>
+  <div class="campo" style="flex:1 1 100%">
+    <label>Beneficios (los ve el cliente)</label>
+    <input class="inp" name="beneficios" style="width:100%"
+           value="{{ nivel.beneficios|default:'' }}"
+           placeholder="Un latte gratis al llegar a 100 puntos.">
+  </div>
+  <button class="btn pri" type="submit">
+    {% if nivel %}Guardar cambios{% else %}Crear nivel{% endif %}</button>
+</form>

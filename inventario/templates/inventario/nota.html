@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nota {{ nota.folio }} · SHAKE</title>
+  <style>
+    :root { --pink:#fa5598; --blue:#1e9aff; --yellow:#ffd900; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#f0f0f0; font-family:-apple-system,BlinkMacSystemFont,
+           "Segoe UI",Roboto,Helvetica,Arial,sans-serif; color:#111; padding:18px; }
+    .ticket { max-width:420px; margin:0 auto; background:#fff; border:2px solid #000;
+              border-radius:16px; box-shadow:6px 6px 0 #000; overflow:hidden; }
+    .head { background:#000; color:#fff; text-align:center; padding:18px 16px; }
+    .head .brand { font-size:30px; font-weight:900; letter-spacing:5px; }
+    .head .brand .dot { color:var(--pink); }
+    .head .sub { font-size:12px; opacity:.8; margin-top:4px; }
+    .meta { display:flex; justify-content:space-between; font-size:12px; color:#555;
+            padding:12px 18px; border-bottom:2px dashed #bbb; }
+    .items { padding:6px 18px; }
+    .item { padding:10px 0; border-bottom:1px solid #eee; }
+    .item .top { display:flex; justify-content:space-between; font-weight:700; font-size:14px; }
+    .item .det { font-size:11px; color:#777; margin-top:2px; }
+    .tots { padding:12px 18px; }
+    .row { display:flex; justify-content:space-between; font-size:13px; padding:3px 0; }
+    .row.big { font-size:20px; font-weight:900; border-top:2px solid #000; margin-top:6px; padding-top:8px; }
+    .pago { background:#fff7cc; padding:10px 18px; font-size:13px; }
+    .pago .cambio { font-weight:800; color:var(--blue); }
+    .qr { text-align:center; padding:16px; background:#fafafa; border-top:2px dashed #bbb; }
+    .qr svg { width:190px; height:190px; }
+    .qr p { font-size:12px; color:#666; margin:6px 0 0; }
+    .acts { display:flex; gap:8px; padding:14px 18px; flex-wrap:wrap; }
+    .btn { flex:1; text-align:center; text-decoration:none; border:2px solid #000; border-radius:10px;
+           padding:11px; font-weight:800; font-size:13px; box-shadow:3px 3px 0 #000; color:#000; cursor:pointer; }
+    .btn.wa { background:#25D366; color:#fff; }
+    .btn.print { background:var(--yellow); }
+    .btn.new { background:var(--blue); color:#fff; }
+    .foot { text-align:center; font-size:11px; color:#999; padding:12px; }
+    .lealtad { background:#fff0f6; border-top:2px dashed #bbb; padding:16px 18px;
+               text-align:center; }
+    .lealtad-tit { font-size:16px; font-weight:900; color:var(--pink); }
+    .lealtad-saldo { font-size:13px; font-weight:700; margin-top:4px; }
+    .lealtad-sig { font-size:12px; color:#555; margin-top:4px; }
+    .lealtad-qr { margin-top:10px; }
+    .lealtad-qr svg { width:140px; height:140px; background:#fff; border-radius:10px;
+               padding:6px; }
+    .lealtad-pie { font-size:11px; color:#888; margin:6px 0 0; }
+    @media print { .acts, .no-print { display:none !important; } body { background:#fff; padding:0; } .ticket { box-shadow:none; border:none; } }
+  </style>
+</head>
+<body>
+  <div class="ticket">
+    <div class="head">
+      <div class="brand">SHAKE<span class="dot">.</span></div>
+      <div class="sub">Gracias por tu compra 🥤</div>
+    </div>
+
+    <div class="meta">
+      <span>Nota <b>{{ nota.folio }}</b></span>
+      <span>{{ nota.creada|date:"d/m/Y H:i" }}</span>
+    </div>
+
+    <div class="items">
+      {% for l in lineas %}
+      <div class="item">
+        <div class="top"><span>{{ l.cantidad }}× {{ l.nombre }}</span><span>${{ l.importe|floatformat:2 }}</span></div>
+        {% if l.extras or l.subs %}
+        <div class="det">
+          {% for e in l.extras %}➕ {{ e }}{% if not forloop.last %} · {% endif %}{% endfor %}
+          {% if l.extras and l.subs %} · {% endif %}
+          {% for s in l.subs %}🔄 {{ s }}{% if not forloop.last %} · {% endif %}{% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="tots">
+      <div class="row"><span>Subtotal</span><span>${{ nota.subtotal|floatformat:2 }}</span></div>
+      <div class="row"><span>IVA (16%)</span><span>${{ nota.iva|floatformat:2 }}</span></div>
+      <div class="row big"><span>Total</span><span>${{ nota.total|floatformat:2 }}</span></div>
+    </div>
+
+    <div class="pago">
+      {% if nota.es_cortesia %}
+        🎁 <b>CORTESÍA</b> — sin costo para el cliente
+        {% if nota.motivo_cortesia %}<br><span style="color:#8700ff;">{{ nota.motivo_cortesia }}</span>{% endif %}
+      {% else %}
+        Pago: <b>{{ nota.get_metodo_pago_display }}</b>
+        {% if nota.metodo_pago == "efectivo" and nota.pago_con is not None %}
+          · Recibido ${{ nota.pago_con|floatformat:2 }} ·
+          <span class="cambio">Cambio ${{ nota.cambio|floatformat:2 }}</span>
+        {% endif %}
+      {% endif %}
+    </div>
+
+    {% if lealtad %}
+    <div class="lealtad">
+      <div class="lealtad-tit">💗 {{ lealtad.cliente.nombre_corto }}, ganaste {{ lealtad.compra.puntos_ganados }} puntos</div>
+      <div class="lealtad-saldo">{{ lealtad.cliente.puntos_saldo }} puntos disponibles
+        {% if lealtad.cliente.nivel %} · {{ lealtad.cliente.nivel }}{% endif %}</div>
+      {% if lealtad.falta %}
+        <div class="lealtad-sig">Te faltan {{ lealtad.falta }} puntos
+          para {{ lealtad.premio.nombre }}</div>
+      {% elif lealtad.premio_listo %}
+        <div class="lealtad-sig">🎁 ¡Ya puedes canjear {{ lealtad.premio_listo.nombre }}!</div>
+      {% endif %}
+      <div class="lealtad-qr">{{ lealtad.qr|safe }}</div>
+      <p class="lealtad-pie">Escanea para ver tu tarjeta y tus premios</p>
+    </div>
+    {% endif %}
+
+    <div class="qr">
+      {{ qr_svg|safe }}
+      <p>Escanea para guardar tu nota</p>
+    </div>
+
+    <div class="acts">
+      <a class="btn wa" href="https://wa.me/?text={{ url|urlencode }}" target="_blank" rel="noopener">Enviar por WhatsApp</a>
+      <a class="btn print" href="#" onclick="window.print();return false;">Imprimir</a>
+      {% if es_staff %}<a class="btn new" href="/inventario/">Nueva venta</a>{% endif %}
+    </div>
+
+    <div class="foot">SHAKE · comprobante digital</div>
+  </div>
+</body>
+</html>

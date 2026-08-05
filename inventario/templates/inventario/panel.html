@@ -1,0 +1,577 @@
+{% extends "site/base.html" %}
+{% load humanize %}
+{% block content %}
+<style>
+  .iv-wrap { max-width: 1050px; }
+  .blk { background:#fff; border-radius:10px; margin:22px 0;
+         box-shadow:0 1px 4px rgba(0,0,0,.08); overflow:hidden; }
+  .blk h2 { background:#000000; color:#fff; margin:0; padding:12px 18px; font-size:16px;
+            display:flex; justify-content:space-between; align-items:center; }
+  .blk h2 .pill { background:#fa5598; font-size:12px; padding:2px 10px; border-radius:10px; }
+  .blk h2 .pill.ok { background:#1e9aff; }
+  table.iv { width:100%; border-collapse:collapse; }
+  table.iv th, table.iv td { padding:9px 16px; font-size:13px;
+            border-bottom:1px solid #ececec; text-align:right; }
+  table.iv th { background:#f5f5f5; text-align:right; }
+  table.iv th:first-child, table.iv td:first-child { text-align:left; }
+  table.iv th:nth-child(2), table.iv td:nth-child(2) { text-align:left; }
+  .tot td { font-weight:700; background:#f2f2f2; border-top:2px solid #000000; }
+  .good { color:#1e9aff; font-weight:600; }
+  .bad  { color:#fa5598; font-weight:600; }
+  .muted { color:#888; }
+  .tagfalta { color:#fff; background:#fa5598; padding:2px 8px; border-radius:4px; font-weight:600; }
+  .tagok { color:#fff; background:#1e9aff; padding:2px 8px; border-radius:4px; font-weight:600; }
+  .note { color:#777; font-size:12px; padding:6px 18px 14px; }
+
+  .forms { display:flex; gap:18px; flex-wrap:wrap; margin:18px 0; }
+  .card-form { flex:1 1 340px; background:#fff; border:2px solid #000; border-radius:12px;
+               box-shadow:5px 5px 0 #000; overflow:hidden; }
+  .card-form h3 { margin:0; padding:12px 16px; font-size:15px; color:#fff; }
+  .card-form.venta h3 { background:#fa5598; }
+  .card-form.compra h3 { background:#000; }
+  .card-form .body { padding:14px 16px; display:flex; flex-direction:column; gap:10px; }
+  .card-form label { font-size:12px; font-weight:700; display:block; margin-bottom:3px; }
+  .card-form input, .card-form select {
+      width:100%; border:2px solid #000; border-radius:8px; padding:8px 10px; font-size:13px; }
+  .card-form .row2 { display:flex; gap:10px; }
+  .card-form .row2 > div { flex:1; }
+  .btn-reg { border:2px solid #000; border-radius:8px; padding:9px; font-weight:800;
+             cursor:pointer; box-shadow:3px 3px 0 #000; font-size:14px; }
+  .btn-reg.venta { background:#ffd900; color:#000; }
+  .btn-reg.venta:hover { background:#fa5598; color:#fff; }
+  .btn-reg.compra { background:#1e9aff; color:#fff; }
+  .btn-reg.compra:hover { background:#0d80e0; }
+  .msg { padding:10px 14px; border:2px solid #000; border-radius:8px; margin:10px 0; font-size:13px; font-weight:600; }
+  .msg.success { background:#e7f3ff; }
+  .msg.error { background:#ffe6f1; }
+
+  .mods, .addons { border:2px dashed #000; border-radius:8px; padding:6px 12px; background:#fffdf2; }
+  .addons { background:#f3ecff; }
+  .mods summary, .addons summary { cursor:pointer; font-weight:800; font-size:13px; padding:4px 0; }
+  .mods-note { color:#777; font-size:11px; margin:4px 0 8px; }
+  .sub-row select[disabled] { background:#f0f0f0; color:#999; }
+  .addon-row { display:flex; justify-content:space-between; align-items:center; gap:10px;
+               padding:5px 0; font-size:13px; font-weight:600; border-bottom:1px solid #e3d6ff; }
+  .addon-row:last-child { border-bottom:none; }
+  .addon-row input { width:70px; }
+
+  .builder { display:flex; flex-direction:column; gap:10px;
+             border:2px solid #000; border-radius:10px; padding:12px; background:#fafafa; }
+  .btn-add-prod { border:2px solid #000; border-radius:8px; padding:9px; font-weight:800;
+                  cursor:pointer; background:#1e9aff; color:#fff; box-shadow:3px 3px 0 #000; }
+  .btn-add-prod:hover { background:#0d80e0; }
+  .cart { margin:14px 0; border:2px solid #000; border-radius:10px; overflow:hidden; }
+  .cart-head { background:#fa5598; color:#fff; font-weight:800; font-size:14px; padding:9px 14px; }
+  .cart ul { list-style:none; margin:0; padding:0; }
+  .cart li { display:flex; justify-content:space-between; align-items:flex-start; gap:10px;
+             padding:9px 14px; border-bottom:1px solid #eee; font-size:13px; }
+  .cart li.cart-empty { color:#999; justify-content:center; }
+  .cart .ci-desc { flex:1; }
+  .cart .ci-desc .ci-mods { color:#777; font-size:11px; }
+  .cart .ci-sub { font-weight:700; white-space:nowrap; }
+  .cart .ci-del { border:none; background:none; color:#fa5598; cursor:pointer; font-weight:800; font-size:15px; }
+  .cart-total { padding:10px 14px; background:#f2f2f2; text-align:right; font-size:15px; border-top:2px solid #000; }
+  .btn-reg.venta:disabled { background:#ddd; color:#999; box-shadow:none; cursor:not-allowed; }
+
+  .pago { border:2px solid #000; border-radius:10px; padding:12px; margin:12px 0; background:#fff; }
+  .pago-opts { display:flex; gap:10px; margin:4px 0 8px; }
+  .pago-op { flex:1; display:flex; align-items:center; gap:6px; justify-content:center;
+             border:2px solid #000; border-radius:8px; padding:8px; font-weight:700;
+             cursor:pointer; font-size:13px; }
+  .pago-op:has(input:checked) { background:#ffd900; }
+  .cambio { margin-top:8px; font-size:15px; text-align:right; }
+  .cambio strong { color:#1e9aff; }
+  .cambio.neg strong { color:#fa5598; }
+  .costo-unit { font-size:13px; text-align:right; color:#444; }
+  .costo-unit strong { color:#1e9aff; }
+  .cortesia-box { border:2px dashed #8700ff; border-radius:8px; padding:10px 12px; margin:10px 0; background:#f3ecff; }
+  .cortesia-check { font-weight:800; font-size:13px; cursor:pointer; display:flex; align-items:center; gap:6px; }
+  #cortesia-motivo-box { margin-top:8px; }
+  .lealtad-box { border:2px dashed #fa5598; border-radius:8px; padding:10px 12px;
+        margin:10px 0; background:#fff0f6; }
+  .lealtad-box label { font-weight:800; font-size:13px; display:block; margin-bottom:5px; }
+  .lealtad-box input { width:100%; border:2px solid #000; border-radius:7px;
+        padding:8px 10px; font-size:15px; }
+  .lealtad-info { font-size:12px; margin-top:6px; min-height:16px; font-weight:700; }
+  .lealtad-info.ok { color:#8700ff; }
+  .lealtad-info.nuevo { color:#777; font-weight:600; }
+</style>
+
+<div class="iv-wrap">
+  <h1>📦 Panel de inventario — SHAKE</h1>
+  {% if not es_super %}
+    <p class="muted">Vista operativa. Los costos y montos financieros están reservados a administración.</p>
+  {% endif %}
+
+  {% if messages %}
+    {% for m in messages %}<div class="msg {{ m.tags }}">{{ m }}</div>{% endfor %}
+  {% endif %}
+
+  <!-- ── Registro rápido: venta y compra ───────────────────────────── -->
+  <div class="forms">
+    <!-- Agregar venta (carrito de productos) — staff y admin -->
+    <div class="card-form venta">
+      <h3>➕ Agregar venta</h3>
+      <div class="body">
+
+        <!-- ░░ Constructor de producto ░░ -->
+        <div class="builder">
+          <div>
+            <label>Producto</label>
+            <select id="pb-receta">
+              <option value="">— Elige un producto —</option>
+              {% for r in recetas_activas %}
+                <option value="{{ r.pk }}">{{ r.emoji }} {{ r.nombre }} (${{ r.precio_venta|floatformat:2|intcomma }})</option>
+              {% empty %}
+                <option value="" disabled>No hay productos activos</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div style="max-width:120px;">
+            <label>Cantidad</label>
+            <input type="number" id="pb-cantidad" min="1" step="1" value="1">
+          </div>
+
+          <!-- Modificaciones: sustituir ingredientes -->
+          <details class="mods">
+            <summary>🔧 Modificaciones (si el cliente pide cambios)</summary>
+            <p class="mods-note">No alteran el producto base; solo ajustan el consumo de inventario.</p>
+            {% for i in rango_sub %}
+            <div class="row2 sub-row">
+              <div>
+                <label>Cambiar</label>
+                <select class="pb-sub-orig" disabled>
+                  <option value="">— elige producto primero —</option>
+                </select>
+              </div>
+              <div>
+                <label>Por</label>
+                <select class="pb-sub-nuevo">
+                  <option value="">— ninguno —</option>
+                  {% for ing in ingredientes_lista %}
+                    <option value="{{ ing.pk }}">{{ ing.nombre }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            </div>
+            {% endfor %}
+          </details>
+
+          <!-- Add-ons: +$10 cada uno -->
+          <details class="addons" open>
+            <summary>➕ Add-ons (+$10 c/u)</summary>
+            {% for a in addons %}
+            <div class="addon-row">
+              <span>{{ a.nombre }} <span class="muted">(+${{ a.cargo|floatformat:2|intcomma }})</span></span>
+              <input type="number" class="pb-addon" data-id="{{ a.pk }}" min="0" step="1" value="0">
+            </div>
+            {% endfor %}
+          </details>
+
+          <button type="button" class="btn-add-prod" id="pb-add">＋ Agregar producto a la venta</button>
+        </div>
+
+        <!-- ░░ Carrito ░░ -->
+        <div class="cart">
+          <div class="cart-head">🧾 Productos en esta venta</div>
+          <ul id="cart-list"><li class="cart-empty">Aún no has agregado productos.</li></ul>
+          <div class="cart-total">Total: <strong id="cart-total">$0.00</strong></div>
+        </div>
+
+        <!-- Form real que envía el carrito -->
+        <form id="venta-form" method="post" action="{% url 'inventario_venta_agregar' %}">
+          {% csrf_token %}
+          <input type="hidden" name="productos_json" id="productos-json">
+
+          <!-- Lealtad: celular del cliente para acumular sus puntos -->
+          <div class="lealtad-box">
+            <label>💗 Celular del cliente <span class="muted">(opcional)</span></label>
+            <input type="tel" name="telefono_lealtad" id="lealtad-tel"
+                   inputmode="numeric" placeholder="55 1234 5678 o su código"
+                   autocomplete="off">
+            <div id="lealtad-info" class="lealtad-info"></div>
+          </div>
+
+          <!-- Cortesía (activación / regalo) -->
+          <div class="cortesia-box">
+            <label class="cortesia-check">
+              <input type="checkbox" name="cortesia" value="1" id="cortesia-chk"> 🎁 Cortesía (regalo / activación)
+            </label>
+            <div id="cortesia-motivo-box" style="display:none;">
+              <label>Motivo de la cortesía</label>
+              <input type="text" name="motivo_cortesia" id="cortesia-motivo" placeholder="Ej. Activación en plaza norte">
+              <p class="mods-note">No se cobra, pero sí se descuenta el inventario.</p>
+            </div>
+          </div>
+
+          <!-- Método de pago -->
+          <div class="pago" id="pago-box">
+            <label>Método de pago</label>
+            <div class="pago-opts">
+              <label class="pago-op"><input type="radio" name="metodo_pago" value="efectivo" checked> 💵 Efectivo</label>
+              <label class="pago-op"><input type="radio" name="metodo_pago" value="tarjeta"> 💳 Tarjeta</label>
+            </div>
+            <div id="efectivo-box">
+              <label>Paga con ($)</label>
+              <input type="number" name="pago_con" id="pago-con" step="0.01" min="0" placeholder="0.00">
+              <div class="cambio" id="cambio-box">Cambio: <strong id="cambio">$0.00</strong></div>
+            </div>
+          </div>
+
+          <div style="margin:10px 0;"><label>Fecha</label>
+            <input type="date" name="fecha" value="{{ hoy }}"></div>
+          <button class="btn-reg venta" type="submit" id="btn-registrar" disabled>Registrar venta</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Agregar compra de stock (solo superusuario) -->
+    {% if es_super %}
+    <form class="card-form compra" method="post" action="{% url 'inventario_compra_agregar' %}">
+      {% csrf_token %}
+      <h3>🛒 Agregar compra de stock</h3>
+      <div class="body">
+        <div>
+          <label>Ingrediente</label>
+          <select name="ingrediente" id="compra-ing" required>
+            <option value="">— Elige un ingrediente —</option>
+            {% for i in ingredientes_lista %}
+              <option value="{{ i.pk }}" data-unidad="{{ i.unidad_compra }}">{{ i.nombre }} ({{ i.unidad_compra }})</option>
+            {% empty %}
+              <option value="" disabled>No hay ingredientes</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="row2">
+          <div><label>Cantidad comprada</label>
+            <input type="number" name="cantidad" id="compra-cant" step="0.01" min="0.01" placeholder="0.00" required></div>
+          <div><label>Costo total ($)</label>
+            <input type="number" name="costo_total" id="compra-total" step="0.01" min="0" placeholder="0.00" required></div>
+        </div>
+        <div class="costo-unit" id="compra-unit">Costo unitario: <strong>—</strong></div>
+        <div class="row2">
+          <div><label>Proveedor — opcional</label>
+            <input type="text" name="proveedor" placeholder="Proveedor"></div>
+          <div><label>Fecha</label>
+            <input type="date" name="fecha" value="{{ hoy }}"></div>
+        </div>
+        <button class="btn-reg compra" type="submit">Registrar compra</button>
+      </div>
+    </form>
+    {% endif %}
+  </div>
+
+  <!-- ── Stock y faltantes ─────────────────────────────────────────── -->
+  <div class="blk">
+    <h2>🧪 Stock y faltantes
+      {% if num_faltantes %}
+        <span class="pill">{{ num_faltantes }} con faltante</span>
+      {% else %}
+        <span class="pill ok">Todo en orden</span>
+      {% endif %}
+    </h2>
+    <table class="iv">
+      <tr>
+        <th>Ingrediente</th><th>Categoría</th><th>Stock disp.</th>
+        <th>Mín. (5 shakes)</th><th>Estado</th>
+      </tr>
+      {% for i in ingredientes %}
+      <tr>
+        <td>{{ i.nombre }}</td>
+        <td>{{ i.categoria }}</td>
+        <td>{{ i.stock|floatformat:1 }} {{ i.unidad }}</td>
+        <td>{% if i.minimo > 0 %}{{ i.minimo|floatformat:1 }} {{ i.unidad }}{% else %}—{% endif %}</td>
+        <td>
+          {% if i.falta %}
+            <span class="tagfalta">🔴 Falta {{ i.faltante|floatformat:1 }} {{ i.unidad }}</span>
+          {% elif i.minimo > 0 %}
+            <span class="tagok">✅ OK</span>
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" class="muted">Sin ingredientes registrados.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <!-- ── Catálogo de recetas ───────────────────────────────────────── -->
+  <div class="blk">
+    <h2>🥤 Catálogo de productos</h2>
+    <table class="iv">
+      <tr>
+        <th>Producto</th><th>Perfil</th><th>Precio</th><th>Vendidos</th>
+        {% if es_super %}<th>Costo</th><th>Ganancia/u.</th><th>Margen</th>{% endif %}
+        <th>Activa</th>
+      </tr>
+      {% for r in recetas %}
+      <tr>
+        <td>{{ r.nombre }}</td>
+        <td>{{ r.perfil }}</td>
+        <td>${{ r.precio|floatformat:2|intcomma }}</td>
+        <td>{{ r.unidades }}</td>
+        {% if es_super %}
+          <td>${{ r.costo|floatformat:2|intcomma }}</td>
+          <td>${{ r.ganancia|floatformat:2|intcomma }}</td>
+          <td>{{ r.margen|floatformat:3 }}</td>
+        {% endif %}
+        <td>{% if r.activa %}<span class="good">Sí</span>{% else %}<span class="muted">No</span>{% endif %}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="8" class="muted">Sin recetas registradas.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <!-- ── Resumen de ventas ─────────────────────────────────────────── -->
+  <div class="blk">
+    <h2>📈 Resumen de ventas</h2>
+    <table class="iv">
+      <tr>
+        <th>Producto</th><th>Unidades vendidas</th>
+        {% if es_super %}<th>Ingreso</th>{% endif %}
+      </tr>
+      {% for r in recetas %}
+      <tr>
+        <td>{{ r.nombre }}</td>
+        <td>{{ r.unidades }}</td>
+        {% if es_super %}<td>${{ r.ingreso|floatformat:2|intcomma }}</td>{% endif %}
+      </tr>
+      {% endfor %}
+      <tr class="tot">
+        <td>Total</td>
+        <td>{{ total_unidades }}</td>
+        {% if es_super %}<td>${{ total_ingreso|floatformat:2|intcomma }}</td>{% endif %}
+      </tr>
+    </table>
+  </div>
+</div>
+
+{{ productos_map|json_script:"productos-data" }}
+{{ addons_map|json_script:"addons-data" }}
+<script>
+  (function () {
+    const PRODUCTOS = JSON.parse(document.getElementById("productos-data").textContent);
+    const ADDONS = JSON.parse(document.getElementById("addons-data").textContent);
+    const fmt = function (n) { return "$" + n.toLocaleString("es-MX", {minimumFractionDigits:2, maximumFractionDigits:2}); };
+
+    const receta = document.getElementById("pb-receta");
+    const cantidad = document.getElementById("pb-cantidad");
+    const origs = document.querySelectorAll(".pb-sub-orig");
+    const nuevos = document.querySelectorAll(".pb-sub-nuevo");
+    const addonInputs = document.querySelectorAll(".pb-addon");
+    const cartList = document.getElementById("cart-list");
+    const cartTotalEl = document.getElementById("cart-total");
+    const btnRegistrar = document.getElementById("btn-registrar");
+    const hiddenJson = document.getElementById("productos-json");
+    const efectivoBox = document.getElementById("efectivo-box");
+    const pagoCon = document.getElementById("pago-con");
+    const cambioBox = document.getElementById("cambio-box");
+    const cambioEl = document.getElementById("cambio");
+    const metodos = document.querySelectorAll('input[name="metodo_pago"]');
+    const cortesiaChk = document.getElementById("cortesia-chk");
+    const cortesiaMotivoBox = document.getElementById("cortesia-motivo-box");
+    const pagoBox = document.getElementById("pago-box");
+
+    let carrito = [];
+    let totalActual = 0;
+
+    function esCortesia() { return cortesiaChk.checked; }
+
+    function metodoActual() {
+      const m = document.querySelector('input[name="metodo_pago"]:checked');
+      return m ? m.value : "efectivo";
+    }
+
+    function actualizarCambio() {
+      // Cortesía: sin cobro. Se oculta el pago y se muestra el motivo.
+      cortesiaMotivoBox.style.display = esCortesia() ? "" : "none";
+      pagoBox.style.display = esCortesia() ? "none" : "";
+      if (esCortesia()) return;
+      const esEfectivo = metodoActual() === "efectivo";
+      efectivoBox.style.display = esEfectivo ? "" : "none";
+      if (!esEfectivo) return;
+      const pago = parseFloat(pagoCon.value || "0");
+      const cambio = pago - totalActual;
+      cambioEl.textContent = fmt(cambio);
+      cambioBox.classList.toggle("neg", cambio < 0);
+    }
+    metodos.forEach(function (m) { m.addEventListener("change", actualizarCambio); });
+    pagoCon.addEventListener("input", actualizarCambio);
+    cortesiaChk.addEventListener("change", actualizarCambio);
+
+    // Llena "ingrediente original" con los del producto elegido.
+    function refrescarOrig() {
+      const ings = (PRODUCTOS[receta.value] || {}).ings || [];
+      origs.forEach(function (sel) {
+        sel.innerHTML = '<option value="">— ninguno —</option>';
+        ings.forEach(function (par) {
+          const o = document.createElement("option");
+          o.value = par[0]; o.textContent = par[1];
+          sel.appendChild(o);
+        });
+        sel.disabled = ings.length === 0;
+      });
+    }
+    receta.addEventListener("change", refrescarOrig);
+    refrescarOrig();
+
+    function resetBuilder() {
+      receta.value = ""; cantidad.value = "1";
+      nuevos.forEach(function (s) { s.value = ""; });
+      addonInputs.forEach(function (i) { i.value = "0"; });
+      refrescarOrig();
+    }
+
+    document.getElementById("pb-add").addEventListener("click", function () {
+      const rid = receta.value;
+      if (!rid) { alert("Elige un producto."); return; }
+      const cant = Math.max(1, parseInt(cantidad.value || "1", 10));
+      const info = PRODUCTOS[rid];
+
+      // Sustituciones
+      const subs = [];
+      origs.forEach(function (sel, i) {
+        const o = sel.value, n = nuevos[i].value;
+        if (o && n && o !== n) subs.push([parseInt(o,10), parseInt(n,10)]);
+      });
+      // Add-ons
+      const addons = [];
+      let addonCargo = 0;
+      addonInputs.forEach(function (inp) {
+        const q = parseInt(inp.value || "0", 10);
+        if (q > 0) {
+          const id = parseInt(inp.dataset.id, 10);
+          addons.push([id, q]);
+          addonCargo += q * (ADDONS[id] ? ADDONS[id].cargo : 0);
+        }
+      });
+
+      // Add-ons se cobran una vez por la línea (no por cada shake).
+      const subtotal = cant * info.precio + addonCargo;
+      carrito.push({ receta: parseInt(rid,10), cantidad: cant, subs: subs, addons: addons,
+                     _nombre: info.nombre, _subtotal: subtotal,
+                     _nsubs: subs.length, _naddons: addons.reduce(function(a,p){return a+p[1];},0) });
+      render();
+      resetBuilder();
+    });
+
+    function render() {
+      cartList.innerHTML = "";
+      if (carrito.length === 0) {
+        cartList.innerHTML = '<li class="cart-empty">Aún no has agregado productos.</li>';
+        btnRegistrar.disabled = true;
+        cartTotalEl.textContent = fmt(0);
+        return;
+      }
+      let total = 0;
+      carrito.forEach(function (it, idx) {
+        total += it._subtotal;
+        const detalles = [];
+        if (it._nsubs) detalles.push(it._nsubs + " sustitución(es)");
+        if (it._naddons) detalles.push(it._naddons + " add-on(s)");
+        const li = document.createElement("li");
+        li.innerHTML =
+          '<span class="ci-desc"><strong>' + it.cantidad + '× ' + it._nombre + '</strong>' +
+          (detalles.length ? '<br><span class="ci-mods">' + detalles.join(" · ") + '</span>' : '') +
+          '</span><span class="ci-sub">' + fmt(it._subtotal) + '</span>' +
+          '<button type="button" class="ci-del" data-i="' + idx + '" title="Quitar">✕</button>';
+        cartList.appendChild(li);
+      });
+      cartTotalEl.textContent = fmt(total);
+      btnRegistrar.disabled = false;
+      totalActual = total;
+      actualizarCambio();
+      cartList.querySelectorAll(".ci-del").forEach(function (b) {
+        b.addEventListener("click", function () {
+          carrito.splice(parseInt(b.dataset.i, 10), 1);
+          render();
+        });
+      });
+    }
+
+    document.getElementById("venta-form").addEventListener("submit", function (e) {
+      if (carrito.length === 0) { e.preventDefault(); return; }
+      if (esCortesia()) {
+        if (!document.getElementById("cortesia-motivo").value.trim()) {
+          e.preventDefault(); alert("Escribe el motivo de la cortesía."); return;
+        }
+      } else if (metodoActual() === "efectivo") {
+        const pago = parseFloat(pagoCon.value || "");
+        if (isNaN(pago)) { e.preventDefault(); alert("Indica con cuánto paga el cliente."); return; }
+        if (pago < totalActual) {
+          e.preventDefault();
+          alert("El efectivo no alcanza el total (" + fmt(totalActual) + ").");
+          return;
+        }
+      }
+      hiddenJson.value = JSON.stringify(carrito.map(function (it) {
+        return { receta: it.receta, cantidad: it.cantidad, subs: it.subs, addons: it.addons };
+      }));
+    });
+
+    actualizarCambio();
+  })();
+
+  // Compra: calcula el costo unitario (total ÷ cantidad) en vivo.
+  (function () {
+    const ing = document.getElementById("compra-ing");
+    const cant = document.getElementById("compra-cant");
+    const total = document.getElementById("compra-total");
+    const out = document.getElementById("compra-unit");
+    if (!ing || !out) return;
+    const fmt = function (n) { return "$" + n.toLocaleString("es-MX", {minimumFractionDigits:2, maximumFractionDigits:2}); };
+    function calc() {
+      const c = parseFloat(cant.value || "0");
+      const t = parseFloat(total.value || "0");
+      const opt = ing.options[ing.selectedIndex];
+      const unidad = opt ? (opt.dataset.unidad || "unidad") : "unidad";
+      if (c > 0 && t >= 0) {
+        out.innerHTML = "Costo unitario: <strong>" + fmt(t / c) + " / " + unidad + "</strong>";
+      } else {
+        out.innerHTML = "Costo unitario: <strong>—</strong>";
+      }
+    }
+    [ing, cant, total].forEach(function (el) {
+      el.addEventListener("input", calc); el.addEventListener("change", calc);
+    });
+  })();
+
+  // Lealtad: al teclear el celular, muestra quién es y cuántos puntos tiene.
+  (function () {
+    const tel = document.getElementById("lealtad-tel");
+    const info = document.getElementById("lealtad-info");
+    if (!tel || !info) return;
+    let timer = null;
+
+    function limpiar() { info.textContent = ""; info.className = "lealtad-info"; }
+
+    function consultar() {
+      const q = tel.value.trim();
+      if (q.replace(/\D/g, "").length < 6) { limpiar(); return; }
+      fetch("{% url 'lealtad_buscar' %}?q=" + encodeURIComponent(q))
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d.encontrado) {
+            info.textContent = "Cliente nuevo: se registra solo al guardar la venta.";
+            info.className = "lealtad-info nuevo";
+            return;
+          }
+          let texto = (d.nombre || "Cliente") + " · " + d.puntos + " puntos";
+          if (d.nivel) { texto += " · " + d.nivel; }
+          if (d.premios.length) { texto += " · 🎁 puede canjear: " + d.premios.join(", "); }
+          info.textContent = texto;
+          info.className = "lealtad-info ok";
+        })
+        .catch(limpiar);
+    }
+
+    tel.addEventListener("input", function () {
+      clearTimeout(timer);
+      timer = setTimeout(consultar, 350);
+    });
+  })();
+</script>
+{% endblock %}

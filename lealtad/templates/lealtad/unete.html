@@ -1,0 +1,118 @@
+{% load humanize %}<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Únete · {{ cfg.nombre_negocio }}</title>
+  <meta name="theme-color" content="#000000">
+  <style>
+    * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+    body { margin:0; background:#000; color:#fff; padding:26px 16px 50px;
+           font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,
+           Helvetica,Arial,sans-serif; }
+    .wrap { max-width:440px; margin:0 auto; }
+    .marca { font-weight:900; letter-spacing:4px; font-size:15px;
+             text-transform:uppercase; color:#fa5598; }
+    h1 { font-size:30px; font-weight:900; margin:8px 0 6px; line-height:1.15; }
+    .lead { color:#9a9a9a; font-size:15px; margin:0 0 22px; line-height:1.5; }
+
+    .beneficios { display:flex; flex-direction:column; gap:10px; margin:0 0 26px; }
+    .ben { display:flex; gap:12px; align-items:center; background:#111;
+           border:1px solid #242424; border-radius:14px; padding:13px 15px; }
+    .ben .ico { font-size:22px; }
+    .ben .txt { font-size:14px; }
+    .ben .txt b { display:block; font-size:15px; }
+    .ben .txt span { color:#8b8b8b; font-size:12px; }
+
+    form { background:#111; border:1px solid #242424; border-radius:18px;
+           padding:20px; }
+    label { display:block; font-size:12px; font-weight:800; text-transform:uppercase;
+            letter-spacing:1px; color:#8b8b8b; margin:14px 0 6px; }
+    label:first-of-type { margin-top:0; }
+    input[type=tel], input[type=text], input[type=date] {
+            width:100%; background:#000; border:2px solid #333; color:#fff;
+            border-radius:12px; padding:14px; font-size:17px; }
+    input:focus { outline:none; border-color:#fa5598; }
+    .ayuda { color:#666; font-size:12px; margin-top:6px; }
+
+    .acepta { display:flex; gap:11px; align-items:flex-start; margin:20px 0 0;
+              font-size:13px; color:#9a9a9a; line-height:1.45; }
+    .acepta input { width:22px; height:22px; accent-color:#fa5598; flex:none;
+              margin-top:1px; }
+
+    button { width:100%; margin-top:20px; background:#fa5598; color:#000;
+             border:0; border-radius:14px; padding:17px; font-size:17px;
+             font-weight:900; cursor:pointer; }
+    button:active { transform:scale(.99); }
+
+    .error { background:#3a0f22; border:1px solid #fa5598; color:#ffd0e2;
+             border-radius:12px; padding:13px 15px; font-size:14px;
+             margin:0 0 18px; }
+    .pie { text-align:center; color:#555; font-size:12px; margin-top:24px;
+           line-height:1.6; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="marca">{{ cfg.nombre_negocio }}</div>
+  <h1>Acumula puntos<br>en cada visita</h1>
+  <p class="lead">
+    Regístrate con tu celular y empieza a juntar puntos desde tu próxima compra.
+    Sin plásticos, sin apps que instalar.
+  </p>
+
+  <div class="beneficios">
+    {% for premio in premios %}
+      <div class="ben">
+        <div class="ico">{{ premio.emoji|default:"🎁" }}</div>
+        <div class="txt">
+          <b>{{ premio.nombre }}</b>
+          <span>con {{ premio.puntos_requeridos }} puntos</span>
+        </div>
+      </div>
+    {% empty %}
+      <div class="ben">
+        <div class="ico">⭐</div>
+        <div class="txt"><b>Puntos en cada compra</b>
+          <span>y premios exclusivos para miembros</span></div>
+      </div>
+    {% endfor %}
+  </div>
+
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+    <label for="telefono">Tu celular</label>
+    <input type="tel" id="telefono" name="telefono" inputmode="numeric"
+           placeholder="55 1234 5678" autocomplete="tel" required
+           value="{{ datos.telefono|default:'' }}">
+    <div class="ayuda">10 dígitos. Es tu identificación en el programa.</div>
+
+    <label for="nombre">Tu nombre</label>
+    <input type="text" id="nombre" name="nombre" placeholder="¿Cómo te llamamos?"
+           autocomplete="given-name" value="{{ datos.nombre|default:'' }}">
+
+    <label for="cumpleanos">Tu cumpleaños <span style="text-transform:none">(opcional)</span></label>
+    <input type="date" id="cumpleanos" name="cumpleanos"
+           value="{{ datos.cumpleanos|default:'' }}">
+    <div class="ayuda">Para consentirte en tu mes 🎂</div>
+
+    <label class="acepta">
+      <input type="checkbox" name="acepta" value="1"
+             {% if datos.acepta %}checked{% endif %}>
+      <span>Acepto recibir por WhatsApp mis puntos, premios y promociones de
+        {{ cfg.nombre_negocio }}. Puedo darme de baja cuando quiera
+        respondiendo <b>BAJA</b>.</span>
+    </label>
+
+    <button type="submit">Crear mi tarjeta</button>
+  </form>
+
+  <div class="pie">
+    Solo usamos tu número para tu tarjeta de lealtad.<br>
+    Nunca lo compartimos con nadie más.
+  </div>
+</div>
+</body>
+</html>

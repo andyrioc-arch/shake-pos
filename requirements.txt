@@ -1,0 +1,7 @@
+Django>=5.0
+django-reversion>=5.0
+qrcode>=7.4
+openpyxl>=3.1
+whitenoise>=6.0
+# Solo para firmar los pases de Google Wallet (opcional).
+cryptography>=42.0

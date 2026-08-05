@@ -1,0 +1,203 @@
+{% extends "lealtad/_base_lealtad.html" %}
+{% load humanize %}
+{% block title %}Premios y niveles{% endblock %}
+{% block lealtad %}
+<h1>🎁 Premios y niveles</h1>
+<p class="muted">
+  Todo lo de esta pantalla es tuyo para cambiar: cuánto cuesta cada premio,
+  qué producto entrega y en qué punto sube de nivel el cliente. El costo y el
+  margen se calculan solos desde tus recetas.
+</p>
+
+<!-- ── REGLA DE PUNTOS ──────────────────────────────────────────────────── -->
+<div class="blk">
+  <h2>⚙️ Regla de puntos</h2>
+  <form method="post" action="{% url 'lealtad_config_guardar' %}" class="formrow">
+    {% csrf_token %}
+    <input type="hidden" name="volver" value="{% url 'lealtad_premios' %}">
+    <div class="campo">
+      <label for="nombre_negocio">Nombre del negocio</label>
+      <input class="inp" id="nombre_negocio" name="nombre_negocio"
+             value="{{ cfg.nombre_negocio }}">
+    </div>
+    <div class="campo">
+      <label for="pesos_por_punto">$ por cada punto</label>
+      <input class="inp" id="pesos_por_punto" name="pesos_por_punto" type="number"
+             step="0.01" min="0.01" style="width:100px"
+             value="{{ cfg.pesos_por_punto|floatformat:2 }}">
+    </div>
+    <div class="campo">
+      <label for="vigencia_puntos_meses">Vigencia (meses)</label>
+      <input class="inp" id="vigencia_puntos_meses" name="vigencia_puntos_meses"
+             type="number" min="0" style="width:90px"
+             value="{{ cfg.vigencia_puntos_meses }}">
+    </div>
+    <div class="campo">
+      <label for="dias_inactividad">Inactivo tras (días)</label>
+      <input class="inp" id="dias_inactividad" name="dias_inactividad"
+             type="number" min="1" style="width:90px"
+             value="{{ cfg.dias_inactividad }}">
+    </div>
+    <div class="campo">
+      <label>&nbsp;</label>
+      <label style="font-size:13px;text-transform:none;color:#000;font-weight:600">
+        <input type="checkbox" name="activo" value="1" {% if cfg.activo %}checked{% endif %}>
+        Programa activo
+      </label>
+    </div>
+    <button class="btn pri" type="submit">Guardar</button>
+  </form>
+  <p class="muted" style="padding:10px 16px;font-size:12px;margin:0">
+    Hoy una compra de $130 otorga {% widthratio 130 cfg.pesos_por_punto 1 %} puntos,
+    y cada punto te cuesta ${{ costo_punto|floatformat:2 }} en promedio según tus
+    premios activos.
+  </p>
+</div>
+
+<!-- ── PREMIOS ──────────────────────────────────────────────────────────── -->
+<div class="blk">
+  <h2>🎁 Catálogo de premios <span class="sub">lo que el cliente puede canjear</span></h2>
+  <table class="t">
+    <thead><tr>
+      <th class="izq">Premio</th><th>Cuesta</th><th class="izq">Tipo</th>
+      <th class="izq">Producto</th><th>Valor</th><th>Te cuesta</th>
+      <th>$/punto</th><th class="cen">Activo</th><th class="cen"></th>
+    </tr></thead>
+    <tbody>
+      {% for p in premios %}
+      <tr>
+        <td class="izq"><b>{{ p }}</b>
+          {% if p.descripcion %}<div class="muted" style="font-size:12px">{{ p.descripcion }}</div>{% endif %}
+          {% if p.nivel_minimo %}<span class="tag">desde {{ p.nivel_minimo.nombre }}</span>{% endif %}
+          {% if p.limite_por_cliente %}<span class="tag">máx {{ p.limite_por_cliente }}/cliente</span>{% endif %}
+        </td>
+        <td>{{ p.puntos_requeridos }} pts</td>
+        <td class="izq">{{ p.get_tipo_display }}</td>
+        <td class="izq">{{ p.receta|default:"—" }}{% if p.cantidad > 1 %} ×{{ p.cantidad }}{% endif %}</td>
+        <td>${{ p.valor_percibido|floatformat:0|intcomma }}</td>
+        <td>${{ p.costo_estimado|floatformat:0|intcomma }}</td>
+        <td>${{ p.costo_por_punto|floatformat:2 }}</td>
+        <td class="cen"><span class="tag {% if p.activo %}on{% else %}off{% endif %}">
+          {% if p.activo %}sí{% else %}no{% endif %}</span></td>
+        <td class="cen">
+          <form method="post" action="{% url 'lealtad_premio_eliminar' p.pk %}" style="display:inline"
+                onsubmit="return confirm('¿Eliminar «{{ p.nombre|escapejs }}»?')">
+            {% csrf_token %}
+            <button class="btn del" type="submit">Borrar</button>
+          </form>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="9" style="text-align:left;background:#fcfcfc;padding:0 16px 10px">
+          <details class="editor">
+            <summary>Editar «{{ p.nombre }}»</summary>
+            {% include "lealtad/_form_premio.html" with premio=p recetas=recetas tipos=tipos niveles=niveles %}
+          </details>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="9" class="nada">Sin premios. Agrega el primero abajo.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div style="padding:0 16px 4px;background:#fafafa;border-top:2px solid #000">
+    <details class="editor" style="padding:12px 0">
+      <summary><b>➕ Agregar un premio nuevo</b></summary>
+      {% include "lealtad/_form_premio.html" with premio=None recetas=recetas tipos=tipos niveles=niveles %}
+    </details>
+  </div>
+</div>
+
+<!-- ── NIVELES ──────────────────────────────────────────────────────────── -->
+<div class="blk">
+  <h2>🏅 Niveles <span class="sub">estatus según los puntos acumulados de por vida</span></h2>
+  <table class="t">
+    <thead><tr><th class="izq">Nivel</th><th>Se alcanza con</th>
+      <th class="izq">Beneficios</th><th class="cen">Activo</th><th class="cen"></th></tr></thead>
+    <tbody>
+      {% for n in niveles %}
+      <tr>
+        <td class="izq"><b style="color:{{ n.color }}">{{ n }}</b></td>
+        <td>{{ n.puntos_requeridos }} pts</td>
+        <td class="izq">{{ n.beneficios|default:"—" }}</td>
+        <td class="cen"><span class="tag {% if n.activo %}on{% else %}off{% endif %}">
+          {% if n.activo %}sí{% else %}no{% endif %}</span></td>
+        <td class="cen">
+          <form method="post" action="{% url 'lealtad_nivel_eliminar' n.pk %}" style="display:inline"
+                onsubmit="return confirm('¿Eliminar el nivel «{{ n.nombre|escapejs }}»?')">
+            {% csrf_token %}
+            <button class="btn del" type="submit">Borrar</button>
+          </form>
+        </td>
+      </tr>
+      <tr>
+        <td colspan="5" style="text-align:left;background:#fcfcfc;padding:0 16px 10px">
+          <details class="editor">
+            <summary>Editar «{{ n.nombre }}»</summary>
+            {% include "lealtad/_form_nivel.html" with nivel=n %}
+          </details>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" class="nada">Sin niveles configurados.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div style="padding:0 16px 4px;background:#fafafa;border-top:2px solid #000">
+    <details class="editor" style="padding:12px 0">
+      <summary><b>➕ Agregar un nivel</b></summary>
+      {% include "lealtad/_form_nivel.html" with nivel=None %}
+    </details>
+  </div>
+</div>
+
+<!-- ── PROMOCIONES ──────────────────────────────────────────────────────── -->
+<div class="blk">
+  <h2>🔥 Promociones de puntos <span class="sub">puntos dobles y temporadas</span></h2>
+  <table class="t">
+    <thead><tr><th class="izq">Promoción</th><th>Multiplicador</th><th>Desde</th>
+      <th>Hasta</th><th class="cen">Activa</th><th class="cen"></th></tr></thead>
+    <tbody>
+      {% for p in promociones %}
+      <tr>
+        <td class="izq">{{ p.nombre }}</td>
+        <td>{{ p.multiplicador|floatformat:1 }}×</td>
+        <td>{{ p.desde|date:"d/m/Y" }}</td>
+        <td>{{ p.hasta|date:"d/m/Y" }}</td>
+        <td class="cen"><span class="tag {% if p.activa %}on{% else %}off{% endif %}">
+          {% if p.activa %}sí{% else %}no{% endif %}</span></td>
+        <td class="cen">
+          <form method="post" action="{% url 'lealtad_promocion_eliminar' p.pk %}" style="display:inline">
+            {% csrf_token %}
+            <button class="btn del" type="submit">Borrar</button>
+          </form>
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="6" class="nada">Sin promociones. Crea una para dar puntos dobles.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <form method="post" action="{% url 'lealtad_promocion_guardar' %}" class="formrow">
+    {% csrf_token %}
+    <div class="campo">
+      <label for="promo_nombre">Nombre</label>
+      <input class="inp" id="promo_nombre" name="nombre" placeholder="Puntos dobles de agosto" required>
+    </div>
+    <div class="campo">
+      <label for="multiplicador">Multiplicador</label>
+      <input class="inp" id="multiplicador" name="multiplicador" type="number"
+             step="0.5" min="1" value="2" style="width:90px">
+    </div>
+    <div class="campo">
+      <label for="desde">Desde</label>
+      <input class="inp" id="desde" name="desde" type="date" required>
+    </div>
+    <div class="campo">
+      <label for="hasta">Hasta</label>
+      <input class="inp" id="hasta" name="hasta" type="date" required>
+    </div>
+    <button class="btn pri" type="submit">Activar promoción</button>
+  </form>
+</div>
+{% endblock %}

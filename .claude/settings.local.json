@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(run)",
+      "Skill(run:*)",
+      "Bash(python3 -m venv .venv)",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(.venv/bin/python manage.py migrate)",
+      "Bash(.venv/bin/python manage.py runserver 8000)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8000/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8000/admin/)",
+      "Bash(.venv/bin/python -c \"import reversion; print\\('reversion OK', reversion.__version__\\)\")",
+      "Bash(.venv/bin/python manage.py check)",
+      "Bash(pkill -f \"manage.py runserver\")",
+      "Read(//private/tmp/**)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8000/admin/login/)",
+      "Bash(.venv/bin/python -c \"import django; print\\('Django', django.get_version\\(\\)\\)\")",
+      "Bash(.venv/bin/python manage.py makemigrations contabilidad presupuesto)",
+      "Bash(.venv/bin/python manage.py shell -c \"from contabilidad.models import Cuenta; print\\(sorted\\(Cuenta.objects.values_list\\('codigo', flat=True\\)\\)\\)\")",
+      "Bash(python3 -)",
+      "Bash(.venv/bin/python manage.py test)",
+      "Bash(.venv/bin/python manage.py makemigrations inventario)",
+      "Bash(.venv/bin/python manage.py migrate inventario)"
+    ]
+  }
+}

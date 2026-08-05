@@ -1,0 +1,85 @@
+{% comment %}Formulario de alta/edición de un premio. `premio` puede ser None.{% endcomment %}
+<form method="post" action="{% url 'lealtad_premio_guardar' %}"
+      style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;padding:6px 0 14px">
+  {% csrf_token %}
+  {% if premio %}<input type="hidden" name="pk" value="{{ premio.pk }}">{% endif %}
+
+  <div class="campo">
+    <label>Emoji</label>
+    <input class="inp" name="emoji" style="width:64px" maxlength="8"
+           value="{{ premio.emoji|default:'' }}" placeholder="🎁">
+  </div>
+  <div class="campo" style="flex:1 1 190px">
+    <label>Nombre *</label>
+    <input class="inp" name="nombre" style="width:100%" required
+           value="{{ premio.nombre|default:'' }}" placeholder="Latte gratis">
+  </div>
+  <div class="campo">
+    <label>Cuesta (puntos) *</label>
+    <input class="inp" name="puntos_requeridos" type="number" min="1" required
+           style="width:110px" value="{{ premio.puntos_requeridos|default:100 }}">
+  </div>
+  <div class="campo">
+    <label>Tipo</label>
+    <select class="inp" name="tipo">
+      {% for valor, texto in tipos %}
+        <option value="{{ valor }}" {% if premio.tipo == valor %}selected{% endif %}>{{ texto }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="campo">
+    <label>Producto (para costo)</label>
+    <select class="inp" name="receta">
+      <option value="">— sin producto —</option>
+      {% for r in recetas %}
+        <option value="{{ r.pk }}" {% if premio.receta_id == r.pk %}selected{% endif %}>{{ r }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="campo">
+    <label>Cantidad</label>
+    <input class="inp" name="cantidad" type="number" min="1" style="width:80px"
+           value="{{ premio.cantidad|default:1 }}">
+  </div>
+  <div class="campo">
+    <label>Valor / %</label>
+    <input class="inp" name="valor" type="number" step="0.01" min="0" style="width:90px"
+           value="{{ premio.valor|default:0|floatformat:2 }}">
+  </div>
+
+  <div class="campo" style="flex:1 1 100%">
+    <label>Descripción (la ve el cliente en su tarjeta)</label>
+    <input class="inp" name="descripcion" style="width:100%"
+           value="{{ premio.descripcion|default:'' }}"
+           placeholder="Un latte de la casa, por cuenta nuestra.">
+  </div>
+
+  <div class="campo">
+    <label>Nivel mínimo</label>
+    <select class="inp" name="nivel_minimo">
+      <option value="">— cualquiera —</option>
+      {% for n in niveles %}
+        <option value="{{ n.pk }}" {% if premio.nivel_minimo_id == n.pk %}selected{% endif %}>{{ n }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="campo">
+    <label>Límite por cliente</label>
+    <input class="inp" name="limite_por_cliente" type="number" min="0" style="width:90px"
+           value="{{ premio.limite_por_cliente|default:0 }}">
+  </div>
+  <div class="campo">
+    <label>Vigencia del canje (días)</label>
+    <input class="inp" name="vigencia_dias" type="number" min="0" style="width:110px"
+           value="{{ premio.vigencia_dias|default:30 }}">
+  </div>
+  <div class="campo">
+    <label>&nbsp;</label>
+    <label style="font-size:13px;text-transform:none;color:#000;font-weight:600">
+      <input type="checkbox" name="activo" value="1"
+             {% if not premio or premio.activo %}checked{% endif %}> Activo
+    </label>
+  </div>
+  <button class="btn pri" type="submit">
+    {% if premio %}Guardar cambios{% else %}Crear premio{% endif %}</button>
+</form>

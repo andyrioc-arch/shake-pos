@@ -1,0 +1,108 @@
+{% extends "site/base.html" %}
+{% comment %}
+Estilos compartidos por los paneles de lealtad. Sigue el lenguaje visual del
+resto del sitio: bloques con borde negro y sombra dura.
+{% endcomment %}
+{% block extra_head %}
+<style>
+  .lz { max-width:1040px; }
+  .blk { background:#fff; border:2px solid #000; border-radius:12px; margin:22px 0;
+         box-shadow:5px 5px 0 #000; overflow:hidden; }
+  .blk h2 { background:#000; color:#fff; margin:0; padding:12px 18px; font-size:16px;
+            display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .blk h2 .sub { font-size:12px; font-weight:500; opacity:.65; }
+
+  table.t { width:100%; border-collapse:collapse; }
+  table.t th, table.t td { padding:9px 16px; font-size:13px;
+            border-bottom:1px solid #ececec; text-align:right; }
+  table.t th { background:#f5f5f5; text-align:right; font-size:12px; }
+  table.t th:first-child, table.t td:first-child { text-align:left; }
+  table.t tr:last-child td { border-bottom:0; }
+  table.t td.izq, table.t th.izq { text-align:left; }
+  table.t td.cen, table.t th.cen { text-align:center; }
+
+  .kpis { display:flex; flex-wrap:wrap; gap:14px; margin:8px 0 0; }
+  .kpi { flex:1 1 168px; background:#fff; border:2px solid #000; border-radius:12px;
+         padding:14px 16px; box-shadow:4px 4px 0 #000; }
+  .kpi .lbl { font-size:11px; text-transform:uppercase; letter-spacing:1px;
+         color:#777; font-weight:700; }
+  .kpi .val { font-size:26px; font-weight:900; margin-top:4px; line-height:1.1; }
+  .kpi .pie { font-size:12px; color:#777; margin-top:3px; }
+  .kpi.pink { box-shadow:4px 4px 0 var(--pink); }
+  .kpi.blue { box-shadow:4px 4px 0 var(--blue); }
+  .kpi.yellow { box-shadow:4px 4px 0 var(--yellow); }
+  .kpi.purple { box-shadow:4px 4px 0 var(--purple); }
+  .kpi.orange { box-shadow:4px 4px 0 var(--orange); }
+
+  .btn { border:2px solid #000; background:#fff; color:#000; border-radius:8px;
+         padding:7px 13px; font-weight:700; cursor:pointer; text-decoration:none;
+         font-size:13px; display:inline-block; box-shadow:2px 2px 0 #000; }
+  .btn:hover { background:var(--yellow); }
+  .btn.pri { background:var(--blue); color:#fff; }
+  .btn.pri:hover { background:#0d80e0; }
+  .btn.del { background:var(--pink); color:#fff; box-shadow:none; padding:5px 10px;
+         font-size:12px; }
+  .btn.sm { padding:4px 9px; font-size:12px; box-shadow:none; }
+  .btn.ghost { box-shadow:none; border-color:#ccc; color:#555; }
+
+  input.inp, select.inp, textarea.inp { border:2px solid #000; border-radius:8px;
+         padding:8px 10px; font-size:13px; font-family:inherit; background:#fff; }
+  textarea.inp { width:100%; min-height:90px; resize:vertical; }
+  .campo { display:flex; flex-direction:column; gap:4px; }
+  .campo label { font-size:11px; font-weight:800; text-transform:uppercase;
+         letter-spacing:.5px; color:#666; }
+  .formrow { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap;
+         padding:14px 16px; background:#fafafa; border-top:2px solid #000; }
+
+  .msg { padding:10px 14px; border:2px solid #000; border-radius:8px; margin:10px 0;
+         font-size:13px; font-weight:600; }
+  .msg.success { background:#e7f3ff; }
+  .msg.error { background:#ffe6f1; }
+  .msg.info, .msg.warning { background:#fff9d6; }
+
+  .tag { display:inline-block; padding:2px 9px; border-radius:999px; font-size:11px;
+         font-weight:800; border:1.5px solid #000; }
+  .tag.on { background:var(--yellow); }
+  .tag.off { background:#eee; color:#888; border-color:#ccc; }
+  .tag.ok { background:#d8f0ff; }
+  .tag.warn { background:#ffe0ee; }
+
+  .bar { height:9px; background:#eee; border-radius:999px; overflow:hidden;
+         min-width:80px; }
+  .bar > i { display:block; height:100%; background:var(--pink); }
+
+  .nada { text-align:center; color:#999; padding:22px; font-size:13px; }
+  .subnav { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 4px; }
+  .subnav a { text-decoration:none; font-size:13px; font-weight:700; color:#555;
+         padding:7px 12px; border-radius:8px; border:2px solid transparent; }
+  .subnav a:hover { background:#f2f2f2; }
+  .subnav a.act { background:#000; color:#fff; }
+  .good { color:#1e9aff; font-weight:700; }
+  .bad { color:#fa5598; font-weight:700; }
+  details.editor > summary { cursor:pointer; font-size:12px; font-weight:700;
+         color:#666; padding:4px 0; }
+  details.editor[open] > summary { color:#000; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="lz">
+  <div class="subnav">
+    <a href="{% url 'lealtad_panel' %}" class="{% if seccion == 'panel' %}act{% endif %}">💗 Panel</a>
+    <a href="{% url 'lealtad_clientes' %}" class="{% if seccion == 'clientes' %}act{% endif %}">👥 Clientes</a>
+    {% if user.is_superuser %}
+      <a href="{% url 'lealtad_premios' %}" class="{% if seccion == 'premios' %}act{% endif %}">🎁 Premios y niveles</a>
+      <a href="{% url 'lealtad_mensajes' %}" class="{% if seccion == 'mensajes' %}act{% endif %}">📨 Mensajes</a>
+      <a href="{% url 'lealtad_marketing' %}" class="{% if seccion == 'marketing' %}act{% endif %}">📊 Marketing</a>
+      <a href="{% url 'lealtad_metricas' %}" class="{% if seccion == 'metricas' %}act{% endif %}">📈 Métricas</a>
+    {% endif %}
+    <a href="{% url 'lealtad_unete' %}" target="_blank">🔗 Página de registro</a>
+  </div>
+
+  {% if messages %}
+    {% for m in messages %}<div class="msg {{ m.tags }}">{{ m }}</div>{% endfor %}
+  {% endif %}
+
+  {% block lealtad %}{% endblock %}
+</div>
+{% endblock %}

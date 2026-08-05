@@ -1,0 +1,127 @@
+{% extends "site/base.html" %}
+{% load humanize %}
+{% block title %}Inicio{% endblock %}
+{% block extra_head %}
+<style>
+  .dash { display:flex; flex-wrap:wrap; gap:18px; margin:10px 0 0; }
+  .dash a.card { flex:1 1 230px; text-decoration:none; color:var(--ink);
+       background:var(--white); border:2px solid var(--black); border-radius:14px;
+       padding:22px 24px; box-shadow:6px 6px 0 var(--black);
+       transition:transform .08s, box-shadow .08s; }
+  .dash a.card:hover { transform:translate(-2px,-2px); box-shadow:8px 8px 0 var(--accent,var(--black)); }
+  .dash .card .ico { font-size:34px; }
+  .dash .card .ttl { font-size:18px; font-weight:800; margin:10px 0 4px; }
+  .dash .card .desc { font-size:13px; color:#555; }
+  .dash .card .bar { height:8px; border-radius:5px; margin-top:14px; background:var(--accent,var(--black)); }
+  .dash a.inv { --accent:var(--pink); }
+  .dash a.fin { --accent:var(--orange); }
+  .dash a.con { --accent:var(--purple); }
+  .dash a.pre { --accent:var(--yellow); }
+  .dash a.adm { --accent:var(--blue); }
+  .dash a.act { --accent:var(--blue); }
+  .dash a.cat { --accent:var(--pink); }
+  .dash a.lea { --accent:var(--pink); }
+  .gestionar { margin:22px 0 0; }
+  .gestionar a { color:#999; font-size:13px; text-decoration:none; }
+  .gestionar a:hover { color:#000; text-decoration:underline; }
+
+  .cmp { background:#fff; border:2px solid #000; border-radius:12px;
+         box-shadow:5px 5px 0 #000; overflow:hidden; margin:28px 0 0; }
+  .cmp h2 { background:#000; color:#fff; margin:0; padding:12px 18px; font-size:16px;
+            display:flex; align-items:center; gap:8px; }
+  table.cm { width:100%; border-collapse:collapse; }
+  table.cm th, table.cm td { padding:9px 16px; font-size:13px;
+            border-bottom:1px solid #ececec; text-align:right; }
+  table.cm th { background:#f5f5f5; }
+  table.cm th:first-child, table.cm td:first-child { text-align:left; }
+  .good { color:#1e9aff; font-weight:700; }
+  .bad  { color:#fa5598; font-weight:700; }
+  .cmp .note { color:#777; font-size:12px; padding:8px 18px 14px; }
+</style>
+{% endblock %}
+{% block content %}
+<h1>Panel de control</h1>
+<p class="muted">Hola, {{ user.username }}{% if not user.is_superuser %} (staff){% endif %}.</p>
+<div class="dash">
+  <a class="card inv" href="/inventario/">
+    <div class="ico">📦</div>
+    <div class="ttl">Inventario</div>
+    <div class="desc">Stock, faltantes, recetas y resumen de ventas.</div>
+    <div class="bar"></div>
+  </a>
+  <a class="card lea" href="/lealtad/">
+    <div class="ico">💗</div>
+    <div class="ttl">Lealtad</div>
+    <div class="desc">Clientes, puntos, premios y mensajes automáticos.</div>
+    <div class="bar"></div>
+  </a>
+  {% if user.is_superuser %}
+  <a class="card cat" href="/catalogo/">
+    <div class="ico">🧾</div>
+    <div class="ttl">Catálogo</div>
+    <div class="desc">Productos, recetas e ingredientes.</div>
+    <div class="bar"></div>
+  </a>
+  <a class="card fin" href="/finanzas/">
+    <div class="ico">💰</div>
+    <div class="ttl">Finanzas</div>
+    <div class="desc">Punto de equilibrio, flujo y recuperación de inversión.</div>
+    <div class="bar"></div>
+  </a>
+  <a class="card con" href="/contabilidad/">
+    <div class="ico">📒</div>
+    <div class="ttl">Contabilidad</div>
+    <div class="desc">Balanza, estado de resultados y balance general.</div>
+    <div class="bar"></div>
+  </a>
+  <a class="card pre" href="/presupuesto/">
+    <div class="ico">🎯</div>
+    <div class="ttl">Presupuesto</div>
+    <div class="desc">Comparativo de ventas y gastos: meta vs. real.</div>
+    <div class="bar"></div>
+  </a>
+  <a class="card act" href="/actividad/">
+    <div class="ico">📋</div>
+    <div class="ttl">Actividad</div>
+    <div class="desc">Bitácora de movimientos: quién hizo qué y cuándo.</div>
+    <div class="bar"></div>
+  </a>
+  {% endif %}
+</div>
+
+<p class="gestionar">
+  <a href="/admin/">⚙️ {% if user.is_superuser %}Gestionar datos{% else %}Registrar ventas / consultar catálogos{% endif %}</a>
+</p>
+
+<!-- ── Cumplimiento de presupuesto de ventas ─────────────────────────── -->
+<div class="cmp">
+  <h2>🎯 Cumplimiento de presupuesto de ventas</h2>
+  <table class="cm">
+    <tr>
+      <th>Periodo</th>
+      {% if es_super %}<th>Meta</th><th>Real</th><th>Diferencia</th>{% endif %}
+      <th>% cumplimiento</th>
+    </tr>
+    {% for c in cumplimiento %}
+    <tr>
+      <td>{{ c.periodo }}</td>
+      {% if es_super %}
+        <td>${{ c.meta|floatformat:2|intcomma }}</td>
+        <td>${{ c.real|floatformat:2|intcomma }}</td>
+        <td class="{% if c.diferencia >= 0 %}good{% else %}bad{% endif %}">
+          ${{ c.diferencia|floatformat:2|intcomma }}
+        </td>
+      {% endif %}
+      <td class="{% if c.pct >= 100 %}good{% else %}bad{% endif %}">
+        {% if c.pct is not None %}{{ c.pct|floatformat:1 }}%{% else %}—{% endif %}
+      </td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="5" style="text-align:center;color:#999;">Sin presupuesto ni ventas registradas.</td></tr>
+    {% endfor %}
+  </table>
+  {% if not es_super %}
+    <p class="note">El % compara las ventas reales contra la meta del periodo. Los montos están reservados a administración.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Entrar · SHAKE</title>
+  <style>
+    :root { --pink:#fa5598; --orange:#ff7300; --yellow:#ffd900; --purple:#8700ff; --blue:#1e9aff; }
+    body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+           font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+           background:#000000;
+           background-image:
+             radial-gradient(circle at 15% 20%, rgba(250,85,152,.55), transparent 40%),
+             radial-gradient(circle at 85% 15%, rgba(135,0,255,.55), transparent 40%),
+             radial-gradient(circle at 80% 85%, rgba(30,154,255,.50), transparent 42%),
+             radial-gradient(circle at 20% 90%, rgba(255,115,0,.45), transparent 42%); }
+    .box { background:#fff; border-radius:0; border:3px solid #000;
+           box-shadow:10px 10px 0 #000; padding:34px 32px; width:340px; }
+    .brand { text-align:center; font-weight:900; font-size:32px; letter-spacing:5px; margin:0 0 2px; }
+    .brand .dot { color:var(--pink); }
+    .box p.sub { margin:0 0 22px; text-align:center; color:#666; font-size:13px; }
+    .box label { display:block; font-size:13px; font-weight:700; margin:12px 0 4px; color:#000; }
+    .box input { width:100%; padding:11px 12px; border:2px solid #000; border-radius:8px; font-size:14px; }
+    .box input:focus { outline:none; border-color:var(--blue); }
+    .box button { width:100%; margin-top:22px; padding:12px; border:2px solid #000; border-radius:8px;
+           background:var(--yellow); color:#000; font-size:15px; font-weight:800; cursor:pointer;
+           box-shadow:4px 4px 0 #000; }
+    .box button:hover { background:var(--pink); color:#fff; }
+    .err { background:#ffe6f1; color:#b01060; border:2px solid var(--pink);
+           padding:9px 12px; border-radius:8px; font-size:13px; margin-bottom:8px; }
+  </style>
+</head>
+<body>
+  <form class="box" method="post" action="{% url 'login' %}">
+    {% csrf_token %}
+    <h1 class="brand">SHAKE<span class="dot">.</span></h1>
+    <p class="sub">Inicia sesión para continuar</p>
+    {% if form.errors %}
+      <div class="err">Usuario o contraseña incorrectos.</div>
+    {% endif %}
+    <label for="id_username">Usuario</label>
+    {{ form.username }}
+    <label for="id_password">Contraseña</label>
+    {{ form.password }}
+    <input type="hidden" name="next" value="{{ next }}">
+    <button type="submit">Entrar</button>
+  </form>
+</body>
+</html>

@@ -1,0 +1,171 @@
+{% extends "site/base.html" %}
+{% load humanize %}
+{% block content %}
+<style>
+  .cat-wrap { max-width: 1080px; }
+  .blk { background:#fff; border:2px solid #000; border-radius:12px; margin:20px 0;
+         box-shadow:5px 5px 0 #000; overflow:hidden; }
+  .blk h2 { background:#000; color:#fff; margin:0; padding:12px 18px; font-size:16px; }
+  table.t { width:100%; border-collapse:collapse; }
+  table.t th, table.t td { padding:8px 14px; font-size:13px; border-bottom:1px solid #ececec; text-align:right; }
+  table.t th { background:#f5f5f5; }
+  table.t th:first-child, table.t td:first-child { text-align:left; }
+  table.t td.l, table.t th.l { text-align:left; }
+  .tot td { font-weight:800; background:#f2f2f2; border-top:2px solid #000; }
+  .frm { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap;
+         background:#fafafa; border-top:2px solid #000; padding:12px 16px; }
+  .frm label { font-size:11px; font-weight:700; display:block; margin-bottom:3px; }
+  .frm input, .frm select { border:2px solid #000; border-radius:8px; padding:7px 9px; font-size:13px; }
+  .btn { border:2px solid #000; border-radius:8px; padding:8px 13px; font-weight:800; cursor:pointer;
+         box-shadow:3px 3px 0 #000; background:#1e9aff; color:#fff; font-size:13px; text-decoration:none; display:inline-block; }
+  .btn:hover { background:#0d80e0; }
+  .btn.gold { background:#ffd900; color:#000; }
+  .btn.gold:hover { background:#fa5598; color:#fff; }
+  .btn.del { background:#fa5598; padding:4px 9px; box-shadow:none; font-size:12px; }
+  .btn.mini { padding:4px 10px; box-shadow:none; font-size:12px; }
+  .msg { padding:10px 14px; border:2px solid #000; border-radius:8px; margin:10px 0; font-size:13px; font-weight:600; }
+  .msg.success { background:#e7f3ff; } .msg.error { background:#ffe6f1; }
+  .badge { padding:2px 8px; border-radius:6px; color:#fff; font-size:11px; font-weight:800; }
+  .badge.on { background:#1e9aff; } .badge.off { background:#999; }
+  .sel-row { background:#fff7cc !important; }
+</style>
+
+<div class="cat-wrap">
+  <h1>🧾 Catálogo de productos — SHAKE</h1>
+  {% if messages %}{% for m in messages %}<div class="msg {{ m.tags }}">{{ m }}</div>{% endfor %}{% endif %}
+
+  <!-- ══ INGREDIENTES ══════════════════════════════════════════════════ -->
+  <div class="blk">
+    <h2>🧪 Ingredientes</h2>
+    <table class="t">
+      <thead><tr>
+        <th class="l">Ingrediente</th><th class="l">Categoría</th><th class="l">Unidad compra</th>
+        <th>Cant./unidad</th><th class="l">Unidad receta</th><th>Costo compra</th><th>Costo/u. receta</th><th>Acción</th>
+      </tr></thead>
+      <tbody>
+        {% for i in ingredientes %}
+        <tr>
+          <td class="l">{{ i.nombre }}</td>
+          <td class="l">{{ i.get_categoria_display }}</td>
+          <td class="l">{{ i.unidad_compra }}</td>
+          <td>{{ i.cantidad_por_unidad|floatformat:2 }}</td>
+          <td class="l">{{ i.unidad_receta }}</td>
+          <td>${{ i.costo_unidad_compra|floatformat:2|intcomma }}</td>
+          <td>${{ i.costo_unidad_receta|floatformat:4 }}</td>
+          <td style="text-align:center;">
+            <form method="post" action="{% url 'ingrediente_eliminar' i.pk %}" style="display:inline"
+                  onsubmit="return confirm('¿Eliminar ingrediente?');">{% csrf_token %}
+              <button class="btn del" type="submit">Eliminar</button></form>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="8" class="l" style="color:#999;text-align:center;">Sin ingredientes. Registra el primero abajo.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <form class="frm" method="post" action="{% url 'ingrediente_agregar' %}">
+      {% csrf_token %}
+      <div><label>Nombre</label><input type="text" name="nombre" placeholder="Ej. Leche de almendra" style="width:170px;" required></div>
+      <div><label>Categoría</label><select name="categoria">{% for k, lbl in categorias_ing %}<option value="{{ k }}">{{ lbl }}</option>{% endfor %}</select></div>
+      <div><label>Unidad de compra</label><input type="text" name="unidad_compra" placeholder="litro, kg, paquete" style="width:110px;" required></div>
+      <div><label>Cant. por unidad</label><input type="number" step="0.01" min="0.01" name="cantidad_por_unidad" placeholder="1000" style="width:90px;" required></div>
+      <div><label>Unidad de receta</label><input type="text" name="unidad_receta" placeholder="ml, g, pieza" style="width:90px;" required></div>
+      <div><label>Costo por compra ($)</label><input type="number" step="0.01" min="0" name="costo_unidad_compra" placeholder="0.00" style="width:100px;"></div>
+      <button class="btn" type="submit">Registrar ingrediente</button>
+    </form>
+    <p style="font-size:11px;color:#777;padding:6px 16px;">Ej: 1 litro = 1000 ml → unidad compra «litro», cantidad por unidad «1000», unidad receta «ml».</p>
+  </div>
+
+  <!-- ══ PRODUCTOS ═════════════════════════════════════════════════════ -->
+  <div class="blk">
+    <h2>🥤 Productos</h2>
+    <table class="t">
+      <thead><tr><th class="l">Producto</th><th>Precio</th><th>Costo receta</th><th>Ganancia/u.</th><th>Activo</th><th>Receta</th><th>Acción</th></tr></thead>
+      <tbody>
+        {% for p in productos %}
+        <tr {% if producto_sel and p.pk == producto_sel.pk %}class="sel-row"{% endif %}>
+          <td class="l">{{ p.emoji }} {{ p.nombre }}</td>
+          <td>${{ p.precio_venta|floatformat:2|intcomma }}</td>
+          <td>${{ p.costo_receta|floatformat:2|intcomma }}</td>
+          <td>${{ p.ganancia_unitaria|floatformat:2|intcomma }}</td>
+          <td><span class="badge {% if p.activa %}on{% else %}off{% endif %}">{% if p.activa %}Sí{% else %}No{% endif %}</span></td>
+          <td><a class="btn mini gold" href="?producto={{ p.pk }}">Editar receta ({{ p.ingredientes.count }})</a></td>
+          <td style="text-align:center;">
+            <form method="post" action="{% url 'producto_eliminar' p.pk %}" style="display:inline"
+                  onsubmit="return confirm('¿Eliminar producto?');">{% csrf_token %}
+              <button class="btn del" type="submit">Eliminar</button></form>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="7" class="l" style="color:#999;text-align:center;">Sin productos. Crea el primero abajo.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <form class="frm" method="post" action="{% url 'producto_agregar' %}">
+      {% csrf_token %}
+      <div><label>Emoji</label><input type="text" name="emoji" placeholder="🥤" style="width:60px;"></div>
+      <div><label>Nombre del producto</label><input type="text" name="nombre" placeholder="Ej. Choco Proteico" style="width:180px;" required></div>
+      <div><label>Perfil / descripción</label><input type="text" name="perfil" placeholder="Chocolate, alto en proteína" style="width:200px;"></div>
+      <div><label>Precio de venta ($)</label><input type="number" step="0.01" min="0" name="precio_venta" placeholder="0.00" style="width:100px;" required></div>
+      <button class="btn" type="submit">Crear producto</button>
+    </form>
+  </div>
+
+  <!-- ══ RECETA DEL PRODUCTO SELECCIONADO ══════════════════════════════ -->
+  {% if producto_sel %}
+  <div class="blk">
+    <h2>📝 Receta de {{ producto_sel.emoji }} {{ producto_sel.nombre }}</h2>
+
+    <!-- Editar datos del producto -->
+    <form class="frm" method="post" action="{% url 'producto_editar' producto_sel.pk %}">
+      {% csrf_token %}
+      <div><label>Emoji</label><input type="text" name="emoji" value="{{ producto_sel.emoji }}" style="width:60px;"></div>
+      <div><label>Nombre</label><input type="text" name="nombre" value="{{ producto_sel.nombre }}" style="width:160px;" required></div>
+      <div><label>Perfil</label><input type="text" name="perfil" value="{{ producto_sel.perfil }}" style="width:180px;"></div>
+      <div><label>Tamaño</label><input type="text" name="tamano" value="{{ producto_sel.tamano }}" style="width:130px;"></div>
+      <div><label>Precio ($)</label><input type="number" step="0.01" min="0" name="precio_venta" value="{{ producto_sel.precio_venta }}" style="width:90px;" required></div>
+      <div><label>Activo</label><select name="activa"><option value="1" {% if producto_sel.activa %}selected{% endif %}>Sí</option><option value="0" {% if not producto_sel.activa %}selected{% endif %}>No</option></select></div>
+      <button class="btn" type="submit">Guardar producto</button>
+    </form>
+
+    <!-- Ingredientes de la receta -->
+    <table class="t">
+      <thead><tr><th class="l">Ingrediente</th><th>Cantidad</th><th class="l">Unidad</th><th>Costo línea</th><th>Acción</th></tr></thead>
+      <tbody>
+        {% for r in receta_lineas %}
+        <tr>
+          <td class="l">{{ r.nombre }}</td>
+          <td>{{ r.cantidad|floatformat:2 }}</td>
+          <td class="l">{{ r.unidad }}</td>
+          <td>${{ r.costo_linea|floatformat:2|intcomma }}</td>
+          <td style="text-align:center;">
+            <form method="post" action="{% url 'receta_linea_eliminar' r.id %}" style="display:inline">{% csrf_token %}
+              <button class="btn del" type="submit">Quitar</button></form>
+          </td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="5" class="l" style="color:#999;text-align:center;">Esta receta aún no tiene ingredientes.</td></tr>
+        {% endfor %}
+        <tr class="tot"><td class="l" colspan="3">Costo total de la receta</td><td>${{ producto_sel.costo_receta|floatformat:2|intcomma }}</td><td></td></tr>
+      </tbody>
+    </table>
+
+    <!-- Agregar ingrediente a la receta -->
+    <form class="frm" method="post" action="{% url 'receta_linea_agregar' producto_sel.pk %}">
+      {% csrf_token %}
+      <div><label>Ingrediente</label>
+        <select name="ingrediente" required>
+          <option value="">— elige —</option>
+          {% for i in ingredientes_libres %}<option value="{{ i.pk }}">{{ i.nombre }} ({{ i.unidad_receta }})</option>{% endfor %}
+        </select></div>
+      <div><label>Cantidad (en unidad de receta)</label><input type="number" step="0.01" min="0.01" name="cantidad" placeholder="0.00" style="width:110px;" required></div>
+      <button class="btn" type="submit">Agregar a la receta</button>
+      <a class="btn mini" href="{% url 'panel_catalogo' %}" style="background:#fff;color:#000;">Cerrar</a>
+    </form>
+    {% if not ingredientes_libres %}<p style="font-size:11px;color:#777;padding:4px 16px;">Todos los ingredientes ya están en esta receta.</p>{% endif %}
+  </div>
+  {% endif %}
+
+  <p><a class="btn" href="/" style="background:#fff;color:#000;">← Volver al panel principal</a></p>
+</div>
+{% endblock %}

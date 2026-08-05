@@ -1,0 +1,246 @@
+{% extends "lealtad/_base_lealtad.html" %}
+{% load humanize %}
+{% block title %}{{ cliente.nombre_corto }}{% endblock %}
+{% block lealtad %}
+
+<h1>{{ cliente.nombre|default:"Cliente" }}
+  <span class="muted" style="font-size:18px">· {{ cliente.telefono_display }}</span></h1>
+
+<div class="kpis">
+  <div class="kpi pink">
+    <div class="lbl">Puntos disponibles</div>
+    <div class="val">{{ cliente.puntos_saldo|intcomma }}</div>
+    <div class="pie">{{ cliente.puntos_historicos|intcomma }} acumulados de por vida</div>
+  </div>
+  <div class="kpi purple">
+    <div class="lbl">Nivel</div>
+    <div class="val" style="font-size:20px">{{ nivel|default:"—" }}</div>
+    <div class="pie">
+      {% if siguiente %}faltan {{ falta_nivel }} pts → {{ siguiente.nombre }}
+      {% else %}nivel máximo{% endif %}
+    </div>
+  </div>
+  <div class="kpi blue">
+    <div class="lbl">Visitas</div>
+    <div class="val">{{ cliente.visitas }}</div>
+    <div class="pie">ticket promedio ${{ cliente.ticket_promedio|floatformat:0|intcomma }}</div>
+  </div>
+  <div class="kpi yellow">
+    <div class="lbl">Gasto acumulado</div>
+    <div class="val">${{ cliente.gasto_historico|floatformat:0|intcomma }}</div>
+    <div class="pie">
+      {% if cliente.dias_sin_comprar is not None %}
+        hace {{ cliente.dias_sin_comprar }} día(s)
+      {% else %}sin compras aún{% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- ── CANJEAR ──────────────────────────────────────────────────────────── -->
+<div class="blk">
+  <h2>🎁 Canjear un premio
+    <span class="sub">se descuentan los puntos al momento</span></h2>
+  <table class="t">
+    <thead><tr><th class="izq">Premio</th><th>Cuesta</th><th>Te cuesta</th>
+      <th>Valor</th><th class="cen">Acción</th></tr></thead>
+    <tbody>
+      {% for item in catalogo %}
+      <tr>
+        <td class="izq">{{ item.premio }}
+          {% if item.premio.descripcion %}<div class="muted" style="font-size:12px">{{ item.premio.descripcion }}</div>{% endif %}
+        </td>
+        <td>{{ item.premio.puntos_requeridos }} pts</td>
+        <td>${{ item.premio.costo_estimado|floatformat:0|intcomma }}</td>
+        <td>${{ item.premio.valor_percibido|floatformat:0|intcomma }}</td>
+        <td class="cen">
+          {% if item.puede %}
+            <form method="post" action="{% url 'lealtad_cliente_canjear' cliente.pk %}" style="display:inline">
+              {% csrf_token %}
+              <input type="hidden" name="premio" value="{{ item.premio.pk }}">
+              <button class="btn sm pri" type="submit">Canjear</button>
+            </form>
+          {% else %}
+            <span class="muted" style="font-size:12px">
+              {% if item.faltan %}faltan {{ item.faltan }} pts{% else %}no disponible{% endif %}
+            </span>
+          {% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" class="nada">No hay premios activos.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- ── CANJES ───────────────────────────────────────────────────────────── -->
+{% if canjes %}
+<div class="blk">
+  <h2>🎟 Sus canjes</h2>
+  <table class="t">
+    <thead><tr><th class="izq">Código</th><th class="izq">Premio</th><th>Puntos</th>
+      <th>Fecha</th><th class="izq">Estado</th><th class="cen">Acción</th></tr></thead>
+    <tbody>
+      {% for c in canjes %}
+      <tr>
+        <td class="izq"><b>{{ c.codigo }}</b></td>
+        <td class="izq">{{ c.premio }}</td>
+        <td>{{ c.puntos_usados }}</td>
+        <td>{{ c.creado|date:"d/m/Y" }}</td>
+        <td class="izq"><span class="tag {% if c.estado == 'pendiente' %}on{% elif c.estado == 'entregado' %}ok{% else %}off{% endif %}">
+          {{ c.get_estado_display }}</span></td>
+        <td class="cen">
+          {% if c.estado == 'pendiente' %}
+            <form method="post" action="{% url 'lealtad_canje_entregar' c.pk %}" style="display:inline">
+              {% csrf_token %}
+              <input type="hidden" name="volver" value="{% url 'lealtad_cliente' cliente.pk %}">
+              <button class="btn sm pri" type="submit">Entregar</button>
+            </form>
+            <form method="post" action="{% url 'lealtad_canje_cancelar' c.pk %}" style="display:inline"
+                  onsubmit="return confirm('¿Cancelar el canje y devolverle los puntos?')">
+              {% csrf_token %}
+              <input type="hidden" name="volver" value="{% url 'lealtad_cliente' cliente.pk %}">
+              <button class="btn del" type="submit">Cancelar</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- ── DATOS Y TARJETA ──────────────────────────────────────────────────── -->
+<div class="blk">
+  <h2>Datos del cliente</h2>
+  <form method="post" action="{% url 'lealtad_cliente_editar' cliente.pk %}" class="formrow">
+    {% csrf_token %}
+    <div class="campo">
+      <label for="nombre">Nombre</label>
+      <input class="inp" id="nombre" name="nombre" value="{{ cliente.nombre }}">
+    </div>
+    <div class="campo">
+      <label for="cumpleanos">Cumpleaños</label>
+      <input class="inp" id="cumpleanos" name="cumpleanos" type="date"
+             value="{{ cliente.cumpleanos|date:'Y-m-d' }}">
+    </div>
+    <div class="campo" style="flex:1 1 220px">
+      <label for="notas">Notas</label>
+      <input class="inp" id="notas" name="notas" value="{{ cliente.notas }}"
+             style="width:100%">
+    </div>
+    <div class="campo">
+      <label>&nbsp;</label>
+      <label style="font-size:13px;text-transform:none;color:#000;font-weight:600">
+        <input type="checkbox" name="acepta_mensajes" value="1"
+               {% if cliente.acepta_mensajes %}checked{% endif %}> Acepta mensajes
+      </label>
+    </div>
+    <button class="btn pri" type="submit">Guardar</button>
+  </form>
+  <table class="t">
+    <tr>
+      <td class="izq">Tarjeta digital</td>
+      <td class="izq"><a href="{{ url_tarjeta }}" target="_blank">{{ url_tarjeta }}</a></td>
+    </tr>
+    <tr>
+      <td class="izq">Código en el mostrador</td>
+      <td class="izq"><b>{{ cliente.codigo }}</b></td>
+    </tr>
+    <tr>
+      <td class="izq">Alta</td>
+      <td class="izq">{{ cliente.alta|date:"d/m/Y" }} · {{ cliente.get_origen_display }}</td>
+    </tr>
+  </table>
+</div>
+
+{% if es_super %}
+<div class="blk">
+  <h2>⚖️ Ajuste manual de puntos
+    <span class="sub">para correcciones y cortesías</span></h2>
+  <form method="post" action="{% url 'lealtad_cliente_ajustar' cliente.pk %}" class="formrow">
+    {% csrf_token %}
+    <div class="campo">
+      <label for="puntos">Puntos (+ suma / − resta)</label>
+      <input class="inp" id="puntos" name="puntos" type="number" step="1"
+             placeholder="50" required style="width:120px">
+    </div>
+    <div class="campo" style="flex:1 1 260px">
+      <label for="motivo">Motivo</label>
+      <input class="inp" id="motivo" name="motivo" style="width:100%"
+             placeholder="Cortesía por espera" required>
+    </div>
+    <button class="btn" type="submit">Aplicar ajuste</button>
+  </form>
+</div>
+{% endif %}
+
+<!-- ── HISTORIAL ────────────────────────────────────────────────────────── -->
+<div class="blk">
+  <h2>🧾 Sus compras</h2>
+  <table class="t">
+    <thead><tr><th class="izq">Fecha</th><th>Monto</th><th>Puntos</th>
+      <th class="izq">Origen</th><th class="izq">Nota</th></tr></thead>
+    <tbody>
+      {% for c in compras %}
+      <tr>
+        <td class="izq">{{ c.fecha|date:"d/m/Y" }}</td>
+        <td>${{ c.monto|floatformat:2|intcomma }}</td>
+        <td>+{{ c.puntos_ganados }}{% if c.multiplicador > 1 %}
+          <span class="tag on">{{ c.multiplicador|floatformat:0 }}×</span>{% endif %}</td>
+        <td class="izq">{{ c.get_origen_display }}</td>
+        <td class="izq">{% if c.nota %}<a href="{{ c.nota.get_absolute_url }}" target="_blank">{{ c.nota.folio }}</a>{% else %}{{ c.ticket|default:"—" }}{% endif %}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" class="nada">Todavía no tiene compras registradas.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="blk">
+  <h2>⭐ Movimientos de puntos</h2>
+  <table class="t">
+    <thead><tr><th class="izq">Fecha</th><th class="izq">Tipo</th><th>Puntos</th>
+      <th>Vigente hasta</th><th class="izq">Detalle</th></tr></thead>
+    <tbody>
+      {% for m in movimientos %}
+      <tr>
+        <td class="izq">{{ m.creado|date:"d/m/Y H:i" }}</td>
+        <td class="izq">{{ m.get_tipo_display }}</td>
+        <td class="{% if m.puntos > 0 %}good{% else %}bad{% endif %}">
+          {% if m.puntos > 0 %}+{% endif %}{{ m.puntos }}</td>
+        <td>{% if m.expira_el %}{{ m.expira_el|date:"d/m/Y" }}
+          {% if m.saldo_lote %}<span class="muted">({{ m.saldo_lote }} sin usar)</span>{% endif %}
+          {% else %}—{% endif %}</td>
+        <td class="izq">{{ m.descripcion }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" class="nada">Sin movimientos.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if mensajes %}
+<div class="blk">
+  <h2>📨 Mensajes que le hemos mandado</h2>
+  <table class="t">
+    <thead><tr><th class="izq">Fecha</th><th class="izq">Origen</th>
+      <th class="izq">Mensaje</th><th class="izq">Estado</th></tr></thead>
+    <tbody>
+      {% for m in mensajes %}
+      <tr>
+        <td class="izq">{{ m.creado|date:"d/m/Y H:i" }}</td>
+        <td class="izq">{{ m.automatizacion|default:"—" }}</td>
+        <td class="izq" style="max-width:380px">{{ m.cuerpo|truncatechars:90 }}</td>
+        <td class="izq"><span class="tag {% if m.estado == 'fallido' %}warn{% elif m.estado == 'programado' %}off{% else %}ok{% endif %}">
+          {{ m.get_estado_display }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

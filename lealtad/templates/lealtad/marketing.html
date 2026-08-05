@@ -1,0 +1,99 @@
+{% extends "lealtad/_base_lealtad.html" %}
+{% load humanize %}
+{% block title %}Marketing{% endblock %}
+{% block lealtad %}
+<h1>📊 Marketing</h1>
+<p class="muted">
+  Qué mandaste, quién lo leyó y cuánto vendiste gracias a eso. Una compra se
+  atribuye a un mensaje si el cliente compró dentro de los días siguientes.
+</p>
+
+<div class="subnav" style="margin-bottom:14px">
+  <a href="?dias=7" class="{% if dias == 7 %}act{% endif %}">7 días</a>
+  <a href="?dias=30" class="{% if dias == 30 %}act{% endif %}">30 días</a>
+  <a href="?dias=90" class="{% if dias == 90 %}act{% endif %}">90 días</a>
+  <a href="?dias=0" class="{% if not dias %}act{% endif %}">Todo</a>
+</div>
+
+<div class="kpis">
+  <div class="kpi blue">
+    <div class="lbl">Enviados</div>
+    <div class="val">{{ resumen.enviados|intcomma }}</div>
+    <div class="pie">{{ resumen.encolados }} en cola · {{ resumen.fallidos }} fallidos</div>
+  </div>
+  <div class="kpi purple">
+    <div class="lbl">Entregados</div>
+    <div class="val">{{ resumen.entregados|intcomma }}</div>
+    <div class="pie">{% if resumen.tasa_entrega %}{{ resumen.tasa_entrega|floatformat:0 }}% de los enviados{% else %}—{% endif %}</div>
+  </div>
+  <div class="kpi yellow">
+    <div class="lbl">Leídos</div>
+    <div class="val">{{ resumen.leidos|intcomma }}</div>
+    <div class="pie">{% if resumen.tasa_lectura %}{{ resumen.tasa_lectura|floatformat:0 }}% de apertura{% else %}—{% endif %}</div>
+  </div>
+  <div class="kpi pink">
+    <div class="lbl">Compras atribuidas</div>
+    <div class="val">{{ resumen.conversiones|intcomma }}</div>
+    <div class="pie">{% if resumen.tasa_conversion %}{{ resumen.tasa_conversion|floatformat:1 }}% de conversión{% else %}—{% endif %}</div>
+  </div>
+  <div class="kpi orange">
+    <div class="lbl">Ventas atribuidas</div>
+    <div class="val">${{ resumen.ventas_atribuidas|floatformat:0|intcomma }}</div>
+    <div class="pie">de clientes que compraron tras el mensaje</div>
+  </div>
+</div>
+
+<div class="blk">
+  <h2>Resultado por automatización y campaña</h2>
+  <table class="t">
+    <thead><tr><th class="izq">Origen</th><th>En cola</th><th>Enviados</th>
+      <th>Leídos</th><th>Compras</th><th>Ventas</th><th>Conversión</th></tr></thead>
+    <tbody>
+      {% for f in desglose %}
+      <tr>
+        <td class="izq">{{ f.origen }}</td>
+        <td>{{ f.encolados }}</td>
+        <td>{{ f.enviados }}</td>
+        <td>{{ f.leidos }}</td>
+        <td>{{ f.conversiones }}</td>
+        <td>${{ f.ventas|floatformat:0|intcomma }}</td>
+        <td>{% if f.tasa %}<b class="good">{{ f.tasa|floatformat:1 }}%</b>{% else %}—{% endif %}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="7" class="nada">
+        Todavía no hay mensajes en el periodo elegido.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted" style="padding:10px 16px;font-size:12px;margin:0">
+    En modo simulado los mensajes se marcan como «enviados» pero no salen, así
+    que las tasas de entrega y lectura solo se llenan con WhatsApp conectado.
+  </p>
+</div>
+
+<div class="blk">
+  <h2>Últimos mensajes</h2>
+  <table class="t">
+    <thead><tr><th class="izq">Fecha</th><th class="izq">Cliente</th>
+      <th class="izq">Origen</th><th class="izq">Estado</th>
+      <th class="izq">¿Compró después?</th></tr></thead>
+    <tbody>
+      {% for m in recientes %}
+      <tr>
+        <td class="izq">{{ m.creado|date:"d/m H:i" }}</td>
+        <td class="izq"><a href="{% url 'lealtad_cliente' m.cliente.pk %}">{{ m.telefono }}</a></td>
+        <td class="izq">{{ m.automatizacion|default:m.campana|default:"Manual" }}</td>
+        <td class="izq">{{ m.get_estado_display }}</td>
+        <td class="izq">
+          {% if m.compra_atribuida %}
+            <span class="tag ok">sí · ${{ m.compra_atribuida.monto|floatformat:0 }}</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" class="nada">Sin mensajes.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
