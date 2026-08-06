@@ -1,7 +1,11 @@
-Django>=5.0
+Django>=5.0,<7
 django-reversion>=5.0
 qrcode>=7.4
 openpyxl>=3.1
 whitenoise>=6.0
 # Solo para firmar los pases de Google Wallet (opcional).
 cryptography>=42.0
+
+# Producción: Postgres. En local, sin DATABASE_URL, se sigue usando SQLite.
+psycopg[binary]>=3.2
+dj-database-url>=2.2

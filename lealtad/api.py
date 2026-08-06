@@ -8,13 +8,16 @@ configura en el panel:
 """
 
 import hmac
+import io
 import json
 import logging
+import os
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from functools import wraps
 
 from django.conf import settings
+from django.core.management import call_command
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -354,3 +357,51 @@ def _procesa_respuestas(mensajes):
             cliente.acepta_mensajes = False
             cliente.save(update_fields=["acepta_mensajes"])
             log.info("Baja de mensajes solicitada por %s", cliente.telefono)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CRON
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Cuántos mensajes despacha como máximo cada corrida. El envío al proveedor es
+# sincrónico y con timeout de 20 s por mensaje, así que un lote grande se pasa
+# del tope de duración de la función. Con el cron cada 10 minutos esto da hasta
+# ~2,000 mensajes al día, de sobra para un local.
+LIMITE_CRON = 15
+
+
+def requiere_cron_secret(vista):
+    """Exige el secreto del cron en el encabezado Authorization.
+
+    Vercel Cron manda 'Authorization: Bearer <CRON_SECRET>' en cada llamada.
+    """
+    @wraps(vista)
+    def envoltura(request, *args, **kwargs):
+        esperado = os.environ.get("CRON_SECRET", "")
+        if not esperado:
+            return _error("El cron está apagado: falta CRON_SECRET.", 503)
+        cabecera = request.headers.get("Authorization", "")
+        recibido = cabecera[7:] if cabecera.startswith("Bearer ") else ""
+        if not hmac.compare_digest(recibido, esperado):
+            return _error("Secreto inválido.", 401)
+        return vista(request, *args, **kwargs)
+    return envoltura
+
+
+@require_GET
+@requiere_cron_secret
+def cron_run(request):
+    """Latido del programa: lo que en un servidor normal haría el cron del SO.
+
+    Es GET a propósito: RevisionMiddleware envuelve las peticiones mutantes en
+    una sola transacción, y aquí no conviene que un fallo al final deshaga los
+    mensajes que ya se despacharon.
+    """
+    salida = io.StringIO()
+    try:
+        call_command("lealtad_run", limite=LIMITE_CRON, stdout=salida)
+    except Exception:
+        log.exception("Falló el latido del programa de lealtad.")
+        return _error("El latido falló; revisa los logs.", 500,
+                      salida=salida.getvalue().splitlines())
+    return JsonResponse({"ok": True, "salida": salida.getvalue().splitlines()})

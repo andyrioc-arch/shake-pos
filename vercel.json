@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "python manage.py collectstatic --noinput",
+  "crons": [
+    {
+      "path": "/api/lealtad/cron/run",
+      "schedule": "*/10 * * * *"
+    }
+  ]
+}

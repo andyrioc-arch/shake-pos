@@ -78,4 +78,10 @@ api_urls = [
     path("rewards/redeem", api.rewards_redeem, name="lealtad_api_redeem"),
     path("campaigns/send", api.campaigns_send, name="lealtad_api_campaigns"),
     path("webhooks/whatsapp", api.webhook_whatsapp, name="lealtad_api_webhook"),
+
+    # Latido del programa. En un servidor normal lo dispara el cron del sistema
+    # (`manage.py lealtad_run`); en Vercel no hay cron de SO, así que se llama
+    # por HTTP. Sin barra final, como el resto de la API: con ella, APPEND_SLASH
+    # respondería un redirect y el cron quedaría sin ejecutarse en silencio.
+    path("cron/run", api.cron_run, name="lealtad_api_cron"),
 ]

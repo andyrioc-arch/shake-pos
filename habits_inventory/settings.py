@@ -28,9 +28,18 @@ SECRET_KEY = os.environ.get(
     "DJANGO_SECRET_KEY",
     "django-insecure-!ilxestticw7ph83lpmhqbpke2ou5rgvp%w(9ohiudwq%stsv$",
 )
-DEBUG = _env_bool("DJANGO_DEBUG", True)
+# En Vercel siempre es producción, aunque falte la variable: si DEBUG quedara
+# en True durante el build, collectstatic no generaría el manifiesto y en
+# runtime TODAS las páginas darían 500 por "Missing staticfiles manifest entry".
+EN_VERCEL = os.environ.get("VERCEL") == "1"
+DEBUG = False if EN_VERCEL else _env_bool("DJANGO_DEBUG", True)
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get(
     "DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()]
+# Dominios desde los que se aceptan formularios (Vercel y/o dominio propio).
+# Se listan explícitos a propósito: un comodín tipo https://*.vercel.app dejaría
+# que cualquier proyecto de Vercel mandara peticiones a este sitio.
+CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.environ.get(
+    "DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()]
 
 # En producción no se permite arrancar con la clave insegura por defecto.
 if not DEBUG and SECRET_KEY.startswith("django-insecure"):
@@ -103,12 +112,34 @@ WSGI_APPLICATION = 'habits_inventory.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# Con DATABASE_URL definida se usa Postgres; sin ella, el SQLite de siempre.
+# En producción NO hay respaldo a SQLite a propósito: el disco de Vercel es
+# efímero, así que caer a SQLite significaría perder cada venta capturada.
+DATABASE_URL = os.environ.get('DATABASE_URL', '')
+
+if DATABASE_URL:
+    import dj_database_url
+
+    DATABASES = {
+        'default': dj_database_url.parse(
+            DATABASE_URL, conn_max_age=0, ssl_require=True),
     }
-}
+    # El pooler de Supabase (puerto 6543, modo transaction) reparte cada
+    # consulta entre backends distintos: no sobreviven ni los cursores de
+    # servidor ni los prepared statements de psycopg3. Sin estas dos líneas
+    # el admin y los listados largos truenan de forma intermitente.
+    DATABASES['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
+    DATABASES['default'].setdefault('OPTIONS', {})['prepare_threshold'] = None
+elif DEBUG:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
+else:
+    raise RuntimeError(
+        'Falta DATABASE_URL. En producción no se puede usar SQLite.')
 
 
 # Password validation
