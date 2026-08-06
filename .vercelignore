@@ -1,0 +1,13 @@
+# Vercel no lee .gitignore: lo que no deba subir al bundle va aquí.
+# El entorno virtual pesa cientos de MB y Vercel instala las dependencias
+# desde requirements.txt durante el build, así que no hace falta.
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# La base local y los estáticos generados: se rehacen en el build.
+db.sqlite3
+staticfiles/
+
+.git/
