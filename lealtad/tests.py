@@ -5,23 +5,26 @@ la caducidad, los canjes, las automatizaciones y que una venta nunca se caiga
 por culpa del programa.
 """
 
+import hashlib
+import hmac
 import json
 from datetime import date, timedelta
 from decimal import Decimal
 from io import StringIO
 
 from django.contrib.auth.models import User
+from django.core.cache import cache
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from inventario.models import Ingrediente, Nota, Receta, RecetaIngrediente, Venta
-from lealtad import automatizaciones, mensajeria, metricas, servicios
+from lealtad import automatizaciones, mensajeria, metricas, servicios, views
 from lealtad.models import (
     Automatizacion, Campana, Canje, Cliente, Compra, ConfiguracionPrograma,
-    Mensaje, Nivel, Plantilla, Premio, PromocionPuntos, TelefonoInvalido,
-    normaliza_telefono, telefono_bonito,
+    Mensaje, MovimientoPuntos, Nivel, Plantilla, Premio, PromocionPuntos,
+    TelefonoInvalido, normaliza_telefono, telefono_bonito,
 )
 
 
@@ -110,15 +113,52 @@ class PuntosTests(TestCase):
             servicios.registrar_compra(self.cliente, Decimal("0"))
 
     def test_el_ajuste_manual_suma_y_resta(self):
-        servicios.ajustar_puntos(self.cliente, 50, "Cortesía")
-        self.assertEqual(self.cliente.puntos_saldo, 50)
-        servicios.ajustar_puntos(self.cliente, -20, "Corrección")
-        self.assertEqual(self.cliente.puntos_saldo, 30)
+        cliente = servicios.ajustar_puntos(self.cliente, 50, "Cortesía")
+        self.assertEqual(cliente.puntos_saldo, 50)
+        cliente = servicios.ajustar_puntos(cliente, -20, "Corrección")
+        self.assertEqual(cliente.puntos_saldo, 30)
 
     def test_no_se_puede_dejar_el_saldo_en_negativo(self):
         servicios.ajustar_puntos(self.cliente, 10, "Cortesía")
         with self.assertRaises(servicios.ErrorLealtad):
             servicios.ajustar_puntos(self.cliente, -50, "Error")
+
+    def test_los_puntos_de_cortesia_si_se_pueden_gastar(self):
+        """Los ajustes también son lotes: el canje debe poder consumirlos."""
+        cliente = servicios.ajustar_puntos(self.cliente, 100, "Cortesía")
+        premio = Premio.objects.create(nombre="Latte", puntos_requeridos=60)
+        servicios.canjear(cliente, premio)
+
+        cliente.refresh_from_db()
+        self.assertEqual(cliente.puntos_saldo, 40)
+        # El lote de cortesía quedó consumido, no colgado en 100.
+        lote = cliente.movimientos.get(tipo=MovimientoPuntos.Tipo.AJUSTE)
+        self.assertEqual(lote.saldo_lote, 40)
+
+    def test_los_puntos_de_cortesia_tambien_caducan(self):
+        cliente = servicios.ajustar_puntos(self.cliente, 100, "Cortesía")
+        lote = cliente.movimientos.get(tipo=MovimientoPuntos.Tipo.AJUSTE)
+        self.assertIsNotNone(lote.expira_el)
+        lote.expira_el = timezone.localdate() - timedelta(days=1)
+        lote.save()
+
+        self.assertEqual(servicios.expirar_puntos(), 100)
+        cliente.refresh_from_db()
+        self.assertEqual(cliente.puntos_saldo, 0)
+
+    def test_el_saldo_siempre_cuadra_con_los_lotes(self):
+        """Invariante del libro: saldo == suma de los lotes vivos."""
+        servicios.registrar_compra(self.cliente, Decimal("1300"), ticket="a")
+        self.cliente.refresh_from_db()
+        servicios.ajustar_puntos(self.cliente, 40, "Cortesía")
+        premio = Premio.objects.create(nombre="Latte", puntos_requeridos=100)
+        self.cliente.refresh_from_db()
+        canje = servicios.canjear(self.cliente, premio)
+        servicios.cancelar_canje(canje)
+
+        self.cliente.refresh_from_db()
+        lotes = sum(m.saldo_lote for m in servicios.lotes_vivos(self.cliente))
+        self.assertEqual(self.cliente.puntos_saldo, lotes)
 
 
 class CaducidadTests(TestCase):
@@ -236,6 +276,36 @@ class NivelesYPremiosTests(TestCase):
         self.cliente.refresh_from_db()
         self.assertEqual(self.cliente.puntos_saldo, 130)
         self.assertEqual(canje.estado, Canje.Estado.CANCELADO)
+
+    def test_canjear_y_cancelar_no_regala_puntos_de_por_vida(self):
+        """Si la devolución contara como ganancia, se subiría de nivel gratis."""
+        servicios.registrar_compra(self.cliente, Decimal("1300"))
+        self.cliente.refresh_from_db()
+        self.assertEqual(self.cliente.puntos_historicos, 130)
+
+        for _ in range(5):
+            self.cliente.refresh_from_db()
+            servicios.cancelar_canje(servicios.canjear(self.cliente, self.premio))
+
+        self.cliente.refresh_from_db()
+        self.assertEqual(self.cliente.puntos_saldo, 130)
+        self.assertEqual(self.cliente.puntos_historicos, 130)
+        self.assertEqual(self.cliente.nivel, self.fan)
+
+    def test_cancelar_no_le_estrena_vigencia_a_los_puntos(self):
+        """Cancelar un canje no debe revivir puntos a punto de caducar."""
+        servicios.registrar_compra(self.cliente, Decimal("1300"))
+        lote = self.cliente.movimientos.get()
+        lote.expira_el = timezone.localdate() + timedelta(days=3)
+        lote.save()
+
+        self.cliente.refresh_from_db()
+        canje = servicios.canjear(self.cliente, self.premio)
+        servicios.cancelar_canje(canje)
+
+        devuelto = self.cliente.movimientos.get(
+            tipo=MovimientoPuntos.Tipo.DEVOLUCION)
+        self.assertEqual(devuelto.expira_el, lote.expira_el)
 
 
 class AutomatizacionesTests(TestCase):
@@ -453,6 +523,7 @@ class VentaConLealtadTests(TestCase):
         self.assertIn("ganaste 26 puntos", html)
 
 
+@override_settings(WHATSAPP_APP_SECRET="secreto-de-la-app")
 class ApiTests(TestCase):
     def setUp(self):
         cfg = ConfiguracionPrograma.get()
@@ -464,6 +535,16 @@ class ApiTests(TestCase):
         return self.client.post(reverse(nombre), data=json.dumps(cuerpo),
                                 content_type="application/json",
                                 **{**self.cabeceras, **extra})
+
+    def _webhook(self, valor):
+        """POST al webhook firmado como lo haría Meta."""
+        cuerpo = json.dumps({"entry": [{"changes": [{"value": valor}]}]})
+        firma = hmac.new(b"secreto-de-la-app", cuerpo.encode(),
+                         hashlib.sha256).hexdigest()
+        return self.client.post(
+            reverse("lealtad_api_webhook"), data=cuerpo,
+            content_type="application/json",
+            HTTP_X_HUB_SIGNATURE_256=f"sha256={firma}")
 
     def test_sin_token_no_se_puede(self):
         r = self.client.post(reverse("lealtad_api_purchases"), data="{}",
@@ -498,10 +579,39 @@ class ApiTests(TestCase):
         self.assertEqual(Cliente.objects.get().puntos_saldo, 13)
 
     def test_un_monto_invalido_devuelve_error_claro(self):
+        for malo in [0, -5, "abc", None, "NaN", "Infinity"]:
+            with self.subTest(malo=malo):
+                r = self._post("lealtad_api_purchases",
+                               {"phone_number": "9991234567",
+                                "purchase_amount": malo})
+                self.assertEqual(r.status_code, 400)
+                self.assertIn("purchase_amount", r.json()["error"])
+
+    def test_un_id_que_no_es_numero_no_revienta(self):
+        servicios.alta_cliente("9991234567")
+        for cuerpo in [{"customer_id": "abc", "reward_id": 1},
+                       {"customer_id": None, "reward_id": "x"},
+                       {"phone_number": "9991234567", "reward_id": "  "}]:
+            with self.subTest(cuerpo=cuerpo):
+                r = self._post("lealtad_api_redeem", cuerpo)
+                self.assertEqual(r.status_code, 404)
+
+    def test_un_token_con_acentos_no_revienta(self):
+        r = self._post("lealtad_api_purchases", {},
+                       HTTP_AUTHORIZATION="Bearer café")
+        self.assertEqual(r.status_code, 401)
+
+    def test_un_ticket_de_otro_cliente_se_rechaza(self):
+        """El folio es único global: acreditárselo a otro sería regalar puntos."""
+        self._post("lealtad_api_purchases",
+                   {"phone_number": "9991111111", "ticket_number": "A1",
+                    "purchase_amount": 130})
         r = self._post("lealtad_api_purchases",
-                       {"phone_number": "9991234567", "purchase_amount": 0})
-        self.assertEqual(r.status_code, 400)
-        self.assertIn("purchase_amount", r.json()["error"])
+                       {"phone_number": "9992222222", "ticket_number": "A1",
+                        "purchase_amount": 130})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(
+            Cliente.objects.get(telefono="+529992222222").puntos_saldo, 0)
 
     def test_consultar_los_puntos(self):
         cliente, _ = servicios.alta_cliente("9991234567")
@@ -533,27 +643,65 @@ class ApiTests(TestCase):
         mensaje = mensajeria.encolar(cliente, plantilla)
         mensajeria.enviar(mensaje)
 
-        self.client.post(
-            reverse("lealtad_api_webhook"), content_type="application/json",
-            data=json.dumps({"entry": [{"changes": [{"value": {
-                "statuses": [{"id": mensaje.proveedor_id, "status": "read"}]}}]}]}))
+        self._webhook({"statuses": [{"id": mensaje.proveedor_id, "status": "read"}]})
         mensaje.refresh_from_db()
         self.assertEqual(mensaje.estado, Mensaje.Estado.LEIDO)
         self.assertIsNotNone(mensaje.leido_en)
 
     def test_responder_baja_apaga_los_mensajes(self):
         cliente, _ = servicios.alta_cliente("9991234567")
-        self.client.post(
+        self._webhook({"messages": [{"from": "529991234567",
+                                     "text": {"body": "BAJA"}}]})
+        cliente.refresh_from_db()
+        self.assertFalse(cliente.acepta_mensajes)
+
+    def test_un_webhook_sin_firma_se_rechaza(self):
+        """Sin esto, cualquiera da de baja clientes desde internet."""
+        cliente, _ = servicios.alta_cliente("9991234567")
+        r = self.client.post(
             reverse("lealtad_api_webhook"), content_type="application/json",
             data=json.dumps({"entry": [{"changes": [{"value": {
                 "messages": [{"from": "529991234567",
                               "text": {"body": "BAJA"}}]}}]}]}))
         cliente.refresh_from_db()
-        self.assertFalse(cliente.acepta_mensajes)
+        self.assertEqual(r.status_code, 403)
+        self.assertTrue(cliente.acepta_mensajes)
+
+    def test_un_webhook_con_firma_equivocada_se_rechaza(self):
+        r = self.client.post(
+            reverse("lealtad_api_webhook"), content_type="application/json",
+            data=json.dumps({"entry": []}),
+            HTTP_X_HUB_SIGNATURE_256="sha256=" + "0" * 64)
+        self.assertEqual(r.status_code, 403)
+
+    def test_un_status_sin_id_no_toca_los_mensajes_en_cola(self):
+        """Buscar por id vacío coincidía con todo lo que aún no se despacha."""
+        cliente, _ = servicios.alta_cliente("9991234567")
+        plantilla = Plantilla.objects.create(clave="p", nombre="P", cuerpo="Hola")
+        encolado = mensajeria.encolar(cliente, plantilla)
+
+        self._webhook({"statuses": [{"status": "failed",
+                                     "errors": [{"title": "boom"}]}]})
+        encolado.refresh_from_db()
+        self.assertEqual(encolado.estado, Mensaje.Estado.PROGRAMADO)
+
+    def test_un_fallo_tardio_no_borra_un_leido(self):
+        cliente, _ = servicios.alta_cliente("9991234567")
+        plantilla = Plantilla.objects.create(clave="p", nombre="P", cuerpo="Hola")
+        mensaje = mensajeria.enviar(mensajeria.encolar(cliente, plantilla))
+
+        self._webhook({"statuses": [{"id": mensaje.proveedor_id, "status": "read"}]})
+        self._webhook({"statuses": [{"id": mensaje.proveedor_id,
+                                     "status": "failed"}]})
+        mensaje.refresh_from_db()
+        self.assertEqual(mensaje.estado, Mensaje.Estado.LEIDO)
 
 
 class VistasTests(TestCase):
     def setUp(self):
+        # El límite de altas por IP vive en la caché del proceso, que sobrevive
+        # entre tests: sin limpiarla, un test le gasta los intentos al siguiente.
+        cache.clear()
         self.user = User.objects.create_superuser("admin", "a@x.mx", "x")
         self.client.force_login(self.user)
         self.receta = crea_receta()
@@ -583,6 +731,38 @@ class VistasTests(TestCase):
             "telefono": "9997654321", "nombre": "Luis", "acepta": "1"})
         self.assertEqual(r.status_code, 302)
         self.assertTrue(Cliente.objects.filter(telefono="+529997654321").exists())
+
+    def test_un_numero_ajeno_no_revela_la_tarjeta_de_su_dueno(self):
+        """Nadie verifica el número: no puede servir para espiar a otro."""
+        servicios.registrar_compra(self.cliente, Decimal("1300"))
+        self.client.logout()
+
+        r = self.client.post(reverse("lealtad_unete"), {
+            "telefono": "9991234567", "nombre": "Impostor", "acepta": "1"})
+
+        self.assertEqual(r.status_code, 200)     # no redirige a la tarjeta
+        cuerpo = r.content.decode()
+        self.assertNotIn("Ana", cuerpo)
+        self.assertNotIn(str(self.cliente.token), cuerpo)
+        self.assertNotIn("130", cuerpo)
+
+    def test_demasiadas_altas_desde_la_misma_ip_se_frenan(self):
+        cache.clear()
+        self.client.logout()
+        for i in range(views.ALTAS_MAX):
+            self.client.post(reverse("lealtad_unete"), {
+                "telefono": f"55100000{i:02d}", "acepta": "1"})
+        antes = Cliente.objects.count()
+
+        self.client.post(reverse("lealtad_unete"),
+                         {"telefono": "5510009999", "acepta": "1"})
+        self.assertEqual(Cliente.objects.count(), antes)
+
+    def test_cada_cliente_tiene_un_codigo_unico(self):
+        codigos = {servicios.alta_cliente(f"55200000{i:02d}")[0].codigo
+                   for i in range(30)}
+        self.assertEqual(len(codigos), 30)
+        self.assertTrue(all(len(c) == 6 for c in codigos))
 
     def test_el_alta_sin_consentimiento_no_registra(self):
         self.client.logout()
@@ -623,6 +803,88 @@ class VistasTests(TestCase):
             "vigencia_dias": "30", "activo": "1"})
         premio = Premio.objects.get(nombre="Bites gratis")
         self.assertEqual(premio.puntos_requeridos, 80)
+
+    def test_guardar_un_premio_ligando_el_producto(self):
+        self.client.post(reverse("lealtad_premio_guardar"), {
+            "pk": self.premio.pk, "nombre": "Latte gratis",
+            "puntos_requeridos": "100", "tipo": Premio.Tipo.PRODUCTO,
+            "receta": self.receta.pk, "cantidad": "1", "valor": "0",
+            "vigencia_dias": "30", "activo": "1"})
+        self.premio.refresh_from_db()
+        self.assertEqual(self.premio.receta, self.receta)
+        self.assertEqual(self.premio.costo_estimado, Decimal("80"))
+
+    def test_los_selects_vacios_significan_ninguno(self):
+        """El formulario manda "" en los campos opcionales, no los omite."""
+        self.client.post(reverse("lealtad_premio_guardar"), {
+            "nombre": "Sin producto", "puntos_requeridos": "50",
+            "tipo": Premio.Tipo.LIBRE, "receta": "", "nivel_minimo": "",
+            "cantidad": "1", "valor": "0", "vigencia_dias": "30", "activo": "1"})
+        premio = Premio.objects.get(nombre="Sin producto")
+        self.assertIsNone(premio.receta)
+        self.assertIsNone(premio.nivel_minimo)
+
+    def test_un_disparador_inventado_se_rechaza(self):
+        """Si se guardara, la regla se vería activa y no dispararía nunca."""
+        plantilla = Plantilla.objects.create(clave="z", nombre="Z", cuerpo="Hola")
+        self.client.post(reverse("lealtad_automatizacion_guardar"), {
+            "nombre": "Rota", "disparador": "compras", "plantilla": plantilla.pk,
+            "dias": "30", "hora_envio": "11", "activa": "1"})
+        self.assertFalse(Automatizacion.objects.filter(nombre="Rota").exists())
+
+    def test_los_valores_fuera_de_rango_se_acotan(self):
+        plantilla = Plantilla.objects.create(clave="y", nombre="Y", cuerpo="Hola")
+        self.client.post(reverse("lealtad_automatizacion_guardar"), {
+            "nombre": "Acotada", "disparador": Automatizacion.Disparador.COMPRA,
+            "plantilla": plantilla.pk, "dias": "-5", "hora_envio": "99",
+            "umbral_porcentaje": "500", "no_repetir_dias": "-1", "activa": "1"})
+        regla = Automatizacion.objects.get(nombre="Acotada")
+        self.assertEqual(regla.dias, 0)
+        self.assertEqual(regla.hora_envio, 23)
+        self.assertEqual(regla.umbral_porcentaje, 100)
+        self.assertEqual(regla.no_repetir_dias, 0)
+
+    def test_un_nombre_de_premio_repetido_avisa_en_vez_de_reventar(self):
+        r = self.client.post(reverse("lealtad_premio_guardar"), {
+            "nombre": self.premio.nombre, "puntos_requeridos": "50",
+            "tipo": Premio.Tipo.PRODUCTO, "cantidad": "1", "valor": "0",
+            "vigencia_dias": "30", "activo": "1"})
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(Premio.objects.filter(nombre=self.premio.nombre).count(), 1)
+
+    def test_no_se_puede_redirigir_a_otro_dominio(self):
+        servicios.registrar_compra(self.cliente, Decimal("1300"))
+        self.cliente.refresh_from_db()
+        canje = servicios.canjear(self.cliente, self.premio)
+        r = self.client.post(reverse("lealtad_canje_entregar", args=[canje.pk]),
+                             {"volver": "https://sitio-malicioso.mx/robar"})
+        self.assertNotIn("sitio-malicioso", r.url)
+
+    def test_el_filtro_de_dias_no_desborda(self):
+        r = self.client.get(reverse("lealtad_marketing"), {"dias": "99999999999"})
+        self.assertEqual(r.status_code, 200)
+
+    def test_una_automatizacion_sin_nivel_objetivo_se_guarda(self):
+        plantilla = Plantilla.objects.create(clave="q", nombre="Q", cuerpo="Hola")
+        self.client.post(reverse("lealtad_automatizacion_guardar"), {
+            "nombre": "Sin nivel", "disparador": Automatizacion.Disparador.COMPRA,
+            "plantilla": plantilla.pk, "nivel_objetivo": "", "dias": "30",
+            "hora_envio": "11", "no_repetir_dias": "0", "activa": "1"})
+        self.assertIsNone(
+            Automatizacion.objects.get(nombre="Sin nivel").nivel_objetivo)
+
+    def test_una_campana_sin_nivel_ni_plantilla_se_guarda(self):
+        self.client.post(reverse("lealtad_campana_guardar"), {
+            "nombre": "Promo libre", "cuerpo": "Hola {nombre}",
+            "segmento": Campana.Segmento.TODOS, "nivel": "", "plantilla": ""})
+        self.assertTrue(Campana.objects.filter(nombre="Promo libre").exists())
+
+    def test_canjear_sin_elegir_premio_avisa_en_vez_de_reventar(self):
+        r = self.client.post(
+            reverse("lealtad_cliente_canjear", args=[self.cliente.pk]),
+            {"premio": ""})
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(Canje.objects.count(), 0)
 
     def test_guardar_una_automatizacion_desde_el_panel(self):
         plantilla = Plantilla.objects.create(clave="p", nombre="P", cuerpo="Hola")

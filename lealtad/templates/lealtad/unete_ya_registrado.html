@@ -1,0 +1,49 @@
+{% comment %}
+Se muestra cuando el celular capturado YA pertenece a un cliente. A propósito
+no revela NADA de esa cuenta —ni nombre, ni puntos, ni la liga de la tarjeta—
+porque no hay forma de comprobar que quien lo tecleó sea su dueño.
+{% endcomment %}<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Ya estás con nosotros · {{ cfg.nombre_negocio }}</title>
+  <meta name="theme-color" content="#000000">
+  <style>
+    * { box-sizing:border-box; }
+    body { margin:0; background:#000; color:#fff; padding:40px 18px;
+           font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,
+           Helvetica,Arial,sans-serif; }
+    .wrap { max-width:420px; margin:0 auto; text-align:center; }
+    .marca { font-weight:900; letter-spacing:4px; font-size:14px;
+             text-transform:uppercase; color:#fa5598; }
+    .ico { font-size:56px; margin:22px 0 6px; }
+    h1 { font-size:26px; font-weight:900; margin:0 0 12px; line-height:1.2; }
+    p { color:#9a9a9a; font-size:15px; line-height:1.55; margin:0 0 14px; }
+    .caja { background:#111; border:1px solid #242424; border-radius:16px;
+            padding:20px; margin:26px 0 0; }
+    .caja b { color:#fff; }
+    a.btn { display:block; background:#fa5598; color:#000; text-decoration:none;
+            font-weight:900; padding:15px; border-radius:14px; margin-top:22px;
+            font-size:15px; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="marca">{{ cfg.nombre_negocio }}</div>
+  <div class="ico">👋</div>
+  <h1>Ese número ya está registrado</h1>
+  <p>Buenas noticias: ya formas parte del programa y sigues acumulando puntos
+     en cada compra.</p>
+
+  <div class="caja">
+    <p style="margin:0"><b>¿Quieres ver tu tarjeta?</b><br>
+      Pídesela a nuestro equipo en el mostrador y te la mandamos al instante.
+      Por tu seguridad no la mostramos aquí: así nadie más puede ver tus puntos
+      con solo saberse tu número.</p>
+  </div>
+
+  <a class="btn" href="{% url 'lealtad_unete' %}">Registrar otro número</a>
+</div>
+</body>
+</html>

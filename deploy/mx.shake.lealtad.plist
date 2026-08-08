@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Latido del programa de lealtad en macOS.
+
+  Corre `lealtad_run` cada 10 minutos: caduca los puntos vencidos, expira los
+  canjes que nadie recogió, evalúa las automatizaciones programadas y despacha
+  la bandeja de mensajes. Es idempotente, así que correrlo de más no duplica
+  nada.
+
+  Instalar:
+      cp deploy/mx.shake.lealtad.plist ~/Library/LaunchAgents/
+      launchctl load ~/Library/LaunchAgents/mx.shake.lealtad.plist
+
+  Ver que esté vivo:
+      launchctl list | grep lealtad
+      tail -f /Users/andyy/Downloads/habits_django/deploy/lealtad_run.log
+
+  Quitar:
+      launchctl unload ~/Library/LaunchAgents/mx.shake.lealtad.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>mx.shake.lealtad</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/andyy/Downloads/habits_django/.venv/bin/python</string>
+        <string>manage.py</string>
+        <string>lealtad_run</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/andyy/Downloads/habits_django</string>
+
+    <!-- Cada 10 minutos. -->
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <!-- Si la Mac estaba dormida a la hora que tocaba, corre al despertar. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/andyy/Downloads/habits_django/deploy/lealtad_run.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/andyy/Downloads/habits_django/deploy/lealtad_run.log</string>
+</dict>
+</plist>

@@ -1,0 +1,12 @@
+# Latido del programa de lealtad — para el servidor (Linux).
+#
+# Instalar con:  crontab deploy/crontab.txt
+# Revisar con:   crontab -l
+#
+# Corre cada 10 minutos: caduca los puntos vencidos, expira los canjes sin
+# reclamar, evalúa las automatizaciones programadas y despacha los mensajes.
+# Es idempotente: si se corre de más no duplica nada.
+#
+# Ajusta la ruta si el proyecto no vive en /srv/habits.
+
+*/10 * * * * cd /srv/habits && .venv/bin/python manage.py lealtad_run >> /var/log/lealtad_run.log 2>&1
