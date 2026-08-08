@@ -1,16 +1,17 @@
 # shake-pos — contexto del proyecto
 
 Sistema POS para SHAKE: inventario, finanzas, contabilidad de partida doble,
-presupuesto y programa de lealtad. Django 6, 5 apps, 149 tests. El README
+presupuesto y programa de lealtad. Django 6, 5 apps, 174 tests. El README
 explica qué hace cada módulo; este archivo cubre el despliegue y la operación.
 
 ## Estado
 
 En producción desde el 6 de agosto de 2026: **https://shake-pos.vercel.app**
 
-Todo el trabajo de despliegue vive en la rama **`deploy/vercel`**. `main` no
-tiene nada de esto. La rama **no está empujada a GitHub** — solo existe en la
-máquina donde se montó.
+Todo el trabajo de despliegue vive en la rama **`deploy/vercel`**, que ya está
+en GitHub. `main` se mergeó a esta rama el 8 de agosto de 2026, así que aquí
+vive también el trabajo de lealtad (código único de cliente, devoluciones de
+canje); lo contrario no es cierto: `main` no tiene nada del despliegue.
 
 | Pieza | Dónde |
 |---|---|
@@ -77,8 +78,16 @@ puede devolver a `*/10 * * * *`, que es lo que el módulo de lealtad espera.
 vercel deploy --prod --yes
 ```
 
-Antes: `python manage.py test` (deben pasar 149). Las migraciones no corren en
-el despliegue; se aplican aparte con la cadena del session pooler.
+Antes: `python manage.py test` (deben pasar 174). Las migraciones no corren en
+el despliegue; se aplican aparte con la cadena del session pooler (5432):
+
+```
+DATABASE_URL='<session pooler :5432>' python manage.py migrate
+```
+
+**Pendiente de aplicar: `lealtad.0002`.** Agrega la columna única `codigo` a
+`Cliente` y le asigna uno a cada cliente existente. Hasta que corra, cualquier
+vista que toque `Cliente` truena en producción con «column does not exist».
 
 No hay despliegue automático: Vercel no pudo conectar el repo por ser de otra
 cuenta. Cada publicación es manual.
