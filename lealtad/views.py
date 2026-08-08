@@ -6,9 +6,12 @@ from decimal import Decimal, InvalidOperation
 from django.contrib import messages
 from django.contrib.admin.models import ADDITION, CHANGE, DELETION, LogEntry
 from django.contrib.auth.decorators import login_required, user_passes_test
+from django.core.cache import cache
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.db import IntegrityError
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.text import slugify
 from django.views.decorators.http import require_POST
 
@@ -17,7 +20,7 @@ from inventario.views import _qr_svg
 from . import automatizaciones, mensajeria, metricas, servicios, wallet
 from .models import (
     Automatizacion, Campana, Canje, Cliente, ConfiguracionPrograma, Mensaje,
-    Nivel, Plantilla, Premio, PromocionPuntos, TelefonoInvalido,
+    Nivel, Plantilla, Premio, PromocionPuntos, TelefonoInvalido, resuelve_id,
 )
 
 solo_super = user_passes_test(lambda u: u.is_superuser, login_url='/')
@@ -37,11 +40,18 @@ def _decimal(valor, defecto=None):
         return defecto
 
 
-def _entero(valor, defecto=0):
+def _entero(valor, defecto=0, minimo=None, maximo=None):
+    """Entero del formulario, acotado. Los campos `Positive*` no aceptan
+    negativos y guardarlos revienta con IntegrityError."""
     try:
-        return int(valor)
+        numero = int(valor)
     except (TypeError, ValueError):
-        return defecto
+        numero = defecto
+    if minimo is not None:
+        numero = max(minimo, numero)
+    if maximo is not None:
+        numero = min(maximo, numero)
+    return numero
 
 
 def _fecha(valor):
@@ -49,6 +59,25 @@ def _fecha(valor):
         return date.fromisoformat(valor)
     except (TypeError, ValueError):
         return None
+
+
+def _destino(request, defecto):
+    """A dónde volver tras un POST, sin permitir salir a otro dominio."""
+    volver = request.POST.get("volver") or ""
+    if volver and url_has_allowed_host_and_scheme(
+            volver, allowed_hosts={request.get_host()},
+            require_https=request.is_secure()):
+        return volver
+    return defecto
+
+
+def _opcion_valida(valor, choices, defecto):
+    """Un valor de `<select>` que de verdad exista en las opciones del modelo.
+
+    Sin esto se puede guardar un disparador inventado: la automatización se ve
+    activa en el panel y no dispara nunca, en silencio.
+    """
+    return valor if valor in {v for v, _ in choices} else defecto
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -99,7 +128,8 @@ def panel_metricas(request):
 
 @login_required
 def panel_marketing(request):
-    dias = _entero(request.GET.get("dias"), 30)
+    # Acotado a 10 años: un timedelta gigante revienta con OverflowError.
+    dias = _entero(request.GET.get("dias"), 30, minimo=0, maximo=3650)
     desde = timezone.localdate() - timedelta(days=dias) if dias else None
     ctx = {
         "active": "lealtad",
@@ -211,7 +241,10 @@ def cliente_editar(request, pk):
 @login_required
 def cliente_canjear(request, pk):
     cliente = get_object_or_404(Cliente, pk=pk)
-    premio = get_object_or_404(Premio, pk=request.POST.get("premio"))
+    premio = resuelve_id(Premio, request.POST.get("premio"))
+    if not premio:
+        messages.error(request, "Elige el premio que quieres canjear.")
+        return redirect("lealtad_cliente", pk=pk)
     try:
         canje = servicios.canjear(cliente, premio, usuario=request.user)
     except servicios.ErrorLealtad as e:
@@ -238,7 +271,7 @@ def canje_entregar(request, pk):
     else:
         _log(request, canje, CHANGE, "Entregó el premio")
         messages.success(request, f"Premio «{canje.premio.nombre}» entregado.")
-    return redirect(request.POST.get("volver") or "lealtad_panel")
+    return redirect(_destino(request, "lealtad_panel"))
 
 
 @require_POST
@@ -253,7 +286,7 @@ def canje_cancelar(request, pk):
         _log(request, canje, CHANGE, "Canceló el canje y devolvió los puntos")
         messages.success(
             request, f"Canje cancelado. Se devolvieron {canje.puntos_usados} puntos.")
-    return redirect(request.POST.get("volver") or "lealtad_panel")
+    return redirect(_destino(request, "lealtad_panel"))
 
 
 @require_POST
@@ -264,7 +297,10 @@ def cliente_ajustar(request, pk):
     puntos = _entero(request.POST.get("puntos"))
     motivo = request.POST.get("motivo", "").strip() or "Ajuste manual"
     try:
-        servicios.ajustar_puntos(cliente, puntos, motivo, usuario=request.user)
+        # Devuelve el cliente recargado: `ajustar_puntos` bloquea la fila y
+        # trabaja sobre su propia copia, así que la de aquí queda vieja.
+        cliente = servicios.ajustar_puntos(cliente, puntos, motivo,
+                                           usuario=request.user)
     except servicios.ErrorLealtad as e:
         messages.error(request, str(e))
     else:
@@ -320,7 +356,7 @@ def premios(request):
 @solo_super
 def premio_guardar(request):
     pk = request.POST.get("pk")
-    premio = Premio.objects.filter(pk=pk).first() if pk else Premio()
+    premio = resuelve_id(Premio, pk) if pk else Premio()
     if pk and not premio:
         messages.error(request, "Ese premio ya no existe.")
         return redirect("lealtad_premios")
@@ -333,17 +369,23 @@ def premio_guardar(request):
     premio.nombre = nombre
     premio.emoji = request.POST.get("emoji", "").strip()
     premio.descripcion = request.POST.get("descripcion", "").strip()
-    premio.puntos_requeridos = _entero(request.POST.get("puntos_requeridos"))
-    premio.tipo = request.POST.get("tipo") or Premio.Tipo.PRODUCTO
-    premio.receta = Receta.objects.filter(pk=request.POST.get("receta")).first()
-    premio.cantidad = max(1, _entero(request.POST.get("cantidad"), 1))
+    premio.puntos_requeridos = _entero(
+        request.POST.get("puntos_requeridos"), minimo=0)
+    premio.tipo = _opcion_valida(request.POST.get("tipo"), Premio.Tipo.choices,
+                                 Premio.Tipo.PRODUCTO)
+    premio.receta = resuelve_id(Receta, request.POST.get("receta"))
+    premio.cantidad = _entero(request.POST.get("cantidad"), 1, minimo=1)
     premio.valor = _decimal(request.POST.get("valor"), Decimal("0"))
-    premio.nivel_minimo = Nivel.objects.filter(
-        pk=request.POST.get("nivel_minimo")).first()
-    premio.limite_por_cliente = _entero(request.POST.get("limite_por_cliente"))
-    premio.vigencia_dias = _entero(request.POST.get("vigencia_dias"), 30)
+    premio.nivel_minimo = resuelve_id(Nivel, request.POST.get("nivel_minimo"))
+    premio.limite_por_cliente = _entero(
+        request.POST.get("limite_por_cliente"), minimo=0)
+    premio.vigencia_dias = _entero(request.POST.get("vigencia_dias"), 30, minimo=0)
     premio.activo = bool(request.POST.get("activo"))
-    premio.save()
+    try:
+        premio.save()
+    except IntegrityError:
+        messages.error(request, f"Ya existe un premio llamado «{nombre}».")
+        return redirect("lealtad_premios")
 
     _log(request, premio, CHANGE if pk else ADDITION,
          "Editó un premio" if pk else "Creó un premio")
@@ -374,7 +416,7 @@ def premio_eliminar(request, pk):
 @solo_super
 def nivel_guardar(request):
     pk = request.POST.get("pk")
-    nivel = Nivel.objects.filter(pk=pk).first() if pk else Nivel()
+    nivel = resuelve_id(Nivel, pk) if pk else Nivel()
     nombre = request.POST.get("nombre", "").strip()
     if not nombre:
         messages.error(request, "El nivel necesita un nombre.")
@@ -382,11 +424,16 @@ def nivel_guardar(request):
 
     nivel.nombre = nombre
     nivel.emoji = request.POST.get("emoji", "").strip()
-    nivel.puntos_requeridos = _entero(request.POST.get("puntos_requeridos"))
+    nivel.puntos_requeridos = _entero(
+        request.POST.get("puntos_requeridos"), minimo=0)
     nivel.beneficios = request.POST.get("beneficios", "").strip()
     nivel.color = request.POST.get("color") or "#fa5598"
     nivel.activo = bool(request.POST.get("activo"))
-    nivel.save()
+    try:
+        nivel.save()
+    except IntegrityError:
+        messages.error(request, f"Ya existe un nivel llamado «{nombre}».")
+        return redirect("lealtad_premios")
 
     _log(request, nivel, CHANGE if pk else ADDITION,
          "Editó un nivel" if pk else "Creó un nivel")
@@ -414,13 +461,17 @@ def configuracion_guardar(request):
     cfg.pesos_por_punto = _decimal(request.POST.get("pesos_por_punto"),
                                    cfg.pesos_por_punto)
     cfg.vigencia_puntos_meses = _entero(request.POST.get("vigencia_puntos_meses"),
-                                        cfg.vigencia_puntos_meses)
+                                        cfg.vigencia_puntos_meses, minimo=0)
     cfg.dias_inactividad = _entero(request.POST.get("dias_inactividad"),
-                                   cfg.dias_inactividad)
+                                   cfg.dias_inactividad, minimo=1)
     cfg.activo = bool(request.POST.get("activo"))
+    if cfg.pesos_por_punto is None or not cfg.pesos_por_punto.is_finite() \
+            or cfg.pesos_por_punto <= 0:
+        messages.error(request, "Los pesos por punto deben ser mayores a cero.")
+        return redirect(_destino(request, "lealtad_premios"))
     cfg.save()
     messages.success(request, "Configuración del programa guardada.")
-    return redirect(request.POST.get("volver") or "lealtad_premios")
+    return redirect(_destino(request, "lealtad_premios"))
 
 
 @require_POST
@@ -489,25 +540,34 @@ def mensajes(request):
 @solo_super
 def automatizacion_guardar(request):
     pk = request.POST.get("pk")
-    auto = Automatizacion.objects.filter(pk=pk).first() if pk else Automatizacion()
-    plantilla = Plantilla.objects.filter(pk=request.POST.get("plantilla")).first()
+    auto = resuelve_id(Automatizacion, pk) if pk else Automatizacion()
+    plantilla = resuelve_id(Plantilla, request.POST.get("plantilla"))
     nombre = request.POST.get("nombre", "").strip()
     if not (nombre and plantilla):
         messages.error(request, "La automatización necesita nombre y plantilla.")
         return redirect("lealtad_mensajes")
 
+    disparador = _opcion_valida(
+        request.POST.get("disparador"), Automatizacion.Disparador.choices, None)
+    if not disparador:
+        messages.error(request, "Elige cuándo se dispara la automatización.")
+        return redirect("lealtad_mensajes")
+
     auto.nombre = nombre
-    auto.disparador = request.POST.get("disparador")
+    auto.disparador = disparador
     auto.plantilla = plantilla
-    auto.umbral_porcentaje = min(100, _entero(
-        request.POST.get("umbral_porcentaje"), 80))
-    auto.dias = _entero(request.POST.get("dias"), 30)
-    auto.nivel_objetivo = Nivel.objects.filter(
-        pk=request.POST.get("nivel_objetivo")).first()
-    auto.hora_envio = min(23, _entero(request.POST.get("hora_envio"), 11))
-    auto.dias_semana = "".join(request.POST.getlist("dias_semana")) or "0123456"
-    auto.no_repetir_dias = _entero(request.POST.get("no_repetir_dias"))
-    auto.max_por_cliente = _entero(request.POST.get("max_por_cliente"))
+    auto.umbral_porcentaje = _entero(request.POST.get("umbral_porcentaje"), 80,
+                                     minimo=1, maximo=100)
+    auto.dias = _entero(request.POST.get("dias"), 30, minimo=0)
+    auto.nivel_objetivo = resuelve_id(Nivel, request.POST.get("nivel_objetivo"))
+    auto.hora_envio = _entero(request.POST.get("hora_envio"), 11,
+                              minimo=0, maximo=23)
+    # Solo días de la semana reales: un valor inventado nunca coincidiría con
+    # `weekday()` y la regla no se dispararía jamás.
+    dias_validos = [d for d in request.POST.getlist("dias_semana") if d in "0123456"]
+    auto.dias_semana = "".join(sorted(set(dias_validos))) or "0123456"
+    auto.no_repetir_dias = _entero(request.POST.get("no_repetir_dias"), minimo=0)
+    auto.max_por_cliente = _entero(request.POST.get("max_por_cliente"), minimo=0)
     auto.activa = bool(request.POST.get("activa"))
     auto.save()
 
@@ -547,7 +607,7 @@ def automatizacion_eliminar(request, pk):
 @solo_super
 def plantilla_guardar(request):
     pk = request.POST.get("pk")
-    plantilla = Plantilla.objects.filter(pk=pk).first() if pk else Plantilla()
+    plantilla = resuelve_id(Plantilla, pk) if pk else Plantilla()
     nombre = request.POST.get("nombre", "").strip()
     cuerpo = request.POST.get("cuerpo", "").strip()
     if not (nombre and cuerpo):
@@ -579,7 +639,7 @@ def plantilla_guardar(request):
 def campana_guardar(request):
     nombre = request.POST.get("nombre", "").strip()
     cuerpo = request.POST.get("cuerpo", "").strip()
-    plantilla = Plantilla.objects.filter(pk=request.POST.get("plantilla")).first()
+    plantilla = resuelve_id(Plantilla, request.POST.get("plantilla"))
     if not nombre or not (cuerpo or plantilla):
         messages.error(request, "La campaña necesita nombre y un mensaje.")
         return redirect("lealtad_mensajes")
@@ -595,7 +655,7 @@ def campana_guardar(request):
     campana = Campana.objects.create(
         nombre=nombre, cuerpo=cuerpo, plantilla=plantilla,
         segmento=request.POST.get("segmento") or Campana.Segmento.TODOS,
-        nivel=Nivel.objects.filter(pk=request.POST.get("nivel")).first(),
+        nivel=resuelve_id(Nivel, request.POST.get("nivel")),
         programada_para=programada,
         estado=(Campana.Estado.PROGRAMADA if programada
                 else Campana.Estado.BORRADOR),
@@ -670,8 +730,26 @@ def mensaje_reintentar(request, pk):
 #  PÚBLICO: ALTA Y TARJETA DIGITAL
 # ══════════════════════════════════════════════════════════════════════════════
 
+#: Altas por IP antes de empezar a rechazar, y en cuántos segundos.
+ALTAS_MAX = 5
+ALTAS_VENTANA = 3600
+
+
+def _ip(request):
+    reenviada = request.META.get("HTTP_X_FORWARDED_FOR", "")
+    if reenviada:
+        return reenviada.split(",")[0].strip()
+    return request.META.get("REMOTE_ADDR", "")
+
+
 def unete(request):
-    """Alta autoservicio: el cliente escanea el QR del mostrador y se registra."""
+    """Alta autoservicio: el cliente escanea el QR del mostrador y se registra.
+
+    Ojo con la privacidad: aquí no se verifica que el número sea de quien lo
+    teclea (no hay código por SMS). Por eso un número YA registrado nunca
+    devuelve la tarjeta — si lo hiciera, cualquiera podría ver los puntos, el
+    nombre y el historial de otra persona con solo saberse su celular.
+    """
     cfg = ConfiguracionPrograma.get()
     base = {"cfg": cfg, "niveles": Nivel.objects.filter(activo=True),
             "premios": Premio.objects.filter(activo=True)[:4]}
@@ -682,10 +760,17 @@ def unete(request):
         return render(request, "lealtad/unete.html", {
             **base, "datos": request.POST,
             "error": "Necesitamos tu autorización para mandarte tus puntos "
-                     "por WhatsApp."})
+                     "y promociones."})
+
+    llave = f"lealtad:altas:{_ip(request)}"
+    if cache.get(llave, 0) >= ALTAS_MAX:
+        return render(request, "lealtad/unete.html", {
+            **base, "datos": request.POST,
+            "error": "Demasiados registros desde este dispositivo. "
+                     "Inténtalo más tarde o pídenos ayuda en el mostrador."})
 
     try:
-        cliente, _creado = servicios.alta_cliente(
+        cliente, creado = servicios.alta_cliente(
             request.POST.get("telefono"),
             nombre=request.POST.get("nombre", ""),
             cumpleanos=_fecha(request.POST.get("cumpleanos")),
@@ -695,6 +780,11 @@ def unete(request):
         return render(request, "lealtad/unete.html",
                       {**base, "datos": request.POST, "error": str(e)})
 
+    cache.set(llave, cache.get(llave, 0) + 1, ALTAS_VENTANA)
+
+    if not creado:
+        # Ese número ya estaba registrado y no podemos comprobar que sea suyo.
+        return render(request, "lealtad/unete_ya_registrado.html", base)
     return redirect("lealtad_tarjeta", token=cliente.token)
 
 

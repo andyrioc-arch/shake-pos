@@ -211,6 +211,10 @@ WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
 WHATSAPP_API_VERSION = os.environ.get("WHATSAPP_API_VERSION", "v21.0")
 # El que tú inventas y capturas en Meta al dar de alta el webhook.
 WHATSAPP_VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
+# Secreto de la app de Meta. Sin él el webhook rechaza TODO: es lo único que
+# distingue a Meta de cualquiera que conozca la URL, y ese endpoint da de baja
+# clientes. Está en la app de Meta → Configuración → Básica → Clave secreta.
+WHATSAPP_APP_SECRET = os.environ.get("WHATSAPP_APP_SECRET", "")
 
 # Secreto del cron. Vercel lo manda en 'Authorization: Bearer <CRON_SECRET>'.
 # Sin él, el endpoint del latido responde 503 en vez de correr.

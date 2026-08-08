@@ -7,6 +7,7 @@ configura en el panel:
     Authorization: Bearer <token>
 """
 
+import hashlib
 import hmac
 import io
 import json
@@ -26,7 +27,7 @@ from django.views.decorators.http import require_GET, require_POST
 from . import automatizaciones, servicios
 from .models import (
     Campana, Cliente, Compra, ConfiguracionPrograma, Mensaje, Premio,
-    TelefonoInvalido,
+    TelefonoInvalido, resuelve_id,
 )
 
 log = logging.getLogger(__name__)
@@ -41,9 +42,15 @@ def _error(mensaje, codigo=400, **extra):
 
 
 def _bearer(request):
-    """Devuelve el valor de 'Authorization: Bearer <x>' («» si no viene así)."""
+    """Valor de 'Authorization: Bearer <x>' en bytes (b«» si no viene así).
+
+    Se devuelve en bytes porque el único uso es compararlo con
+    `hmac.compare_digest`, que con str revienta si el valor trae acentos, y
+    eso lo controla quien manda la petición.
+    """
     cabecera = request.headers.get("Authorization", "")
-    return cabecera[7:] if cabecera.startswith("Bearer ") else ""
+    recibido = cabecera[7:] if cabecera.startswith("Bearer ") else ""
+    return recibido.encode()
 
 
 def requiere_token(vista):
@@ -54,7 +61,7 @@ def requiere_token(vista):
         if not esperado:
             return _error("La API está apagada: configura el token del "
                           "programa en el panel de lealtad.", 503)
-        if not hmac.compare_digest(_bearer(request), esperado):
+        if not hmac.compare_digest(_bearer(request), esperado.encode()):
             return _error("Token inválido.", 401)
         return vista(request, *args, **kwargs)
     return envoltura
@@ -68,10 +75,16 @@ def _cuerpo(request):
 
 
 def _monto(valor):
+    """Decimal del monto, o None si no es un número usable.
+
+    Ojo con "NaN" e "Infinity": Decimal los acepta sin quejarse y luego
+    revientan al compararlos o al guardarlos.
+    """
     try:
-        return Decimal(str(valor))
+        monto = Decimal(str(valor))
     except (InvalidOperation, TypeError, ValueError):
         return None
+    return None if not monto.is_finite() else monto
 
 
 def _fecha(valor):
@@ -179,8 +192,16 @@ def purchases(request):
     except TelefonoInvalido as e:
         return _error(str(e))
 
+    # El ticket es único a nivel global, no por cliente: si el ERP manda el
+    # mismo folio con otro teléfono es un error de captura suyo, y devolverle
+    # 201 lo dejaría creyendo que acreditó unos puntos que nunca existieron.
     ticket = str(datos.get("ticket_number") or "")[:40]
-    ya_existia = bool(ticket) and cliente.compras.filter(ticket=ticket).exists()
+    previa = Compra.objects.filter(ticket=ticket).first() if ticket else None
+    if previa and previa.cliente_id != cliente.pk:
+        return _error(
+            f"El ticket {ticket} ya está registrado a nombre de otro cliente.",
+            409)
+
     try:
         compra = servicios.registrar_compra(
             cliente, monto, ticket=ticket, fecha=fecha,
@@ -190,6 +211,7 @@ def purchases(request):
 
     if compra is None:
         return _error("El programa de lealtad está apagado.", 503)
+    ya_existia = previa is not None
 
     cliente.refresh_from_db()
     return JsonResponse({
@@ -223,14 +245,14 @@ def rewards_redeem(request):
 
     cliente = None
     if datos.get("customer_id"):
-        cliente = Cliente.objects.filter(pk=datos["customer_id"]).first()
+        cliente = resuelve_id(Cliente, datos["customer_id"])
     elif datos.get("phone_number"):
         cliente = servicios.buscar_cliente(datos["phone_number"])
     if not cliente:
         return _error("No encontré a ese cliente.", 404)
 
-    premio = Premio.objects.filter(pk=datos.get("reward_id"), activo=True).first()
-    if not premio:
+    premio = resuelve_id(Premio, datos.get("reward_id"))
+    if not premio or not premio.activo:
         return _error("No encontré ese premio (o está desactivado).", 404)
 
     try:
@@ -295,18 +317,40 @@ ESTADOS_META = {
 PALABRAS_BAJA = {"baja", "stop", "cancelar", "no molestar", "unsubscribe"}
 
 
+def _firma_valida(request):
+    """Comprueba que el webhook venga de Meta y no de cualquier desconocido.
+
+    Meta firma cada POST con HMAC-SHA256 del cuerpo usando el secreto de la
+    app. Sin secreto configurado no hay forma de distinguir a Meta de un
+    atacante, así que se rechaza: este endpoint da de baja clientes y cambia
+    el estado de los mensajes, no es algo que se pueda dejar abierto.
+    """
+    secreto = getattr(settings, "WHATSAPP_APP_SECRET", "")
+    if not secreto:
+        return False
+    recibida = request.headers.get("X-Hub-Signature-256", "")
+    if not recibida.startswith("sha256="):
+        return False
+    esperada = hmac.new(secreto.encode(), request.body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(recibida[7:], esperada)
+
+
 @csrf_exempt
 def webhook_whatsapp(request):
     """Recibe de Meta los estados de entrega y las respuestas del cliente."""
     if request.method == "GET":
         # Verificación inicial del webhook.
         esperado = getattr(settings, "WHATSAPP_VERIFY_TOKEN", "")
-        if (request.GET.get("hub.mode") == "subscribe"
-                and esperado
-                and hmac.compare_digest(request.GET.get("hub.verify_token", ""),
-                                        esperado)):
+        recibido = request.GET.get("hub.verify_token", "")
+        if (request.GET.get("hub.mode") == "subscribe" and esperado
+                and hmac.compare_digest(recibido.encode(), esperado.encode())):
             return HttpResponse(request.GET.get("hub.challenge", ""))
         return HttpResponse("Token de verificación inválido.", status=403)
+
+    if not _firma_valida(request):
+        log.warning("Webhook de WhatsApp con firma inválida desde %s",
+                    request.META.get("REMOTE_ADDR"))
+        return _error("Firma inválida.", 403)
 
     datos = _cuerpo(request)
     if datos is None:
@@ -323,16 +367,24 @@ def webhook_whatsapp(request):
 def _procesa_estados(estados):
     for estado in estados:
         nuevo = ESTADOS_META.get(estado.get("status"))
-        mensaje = Mensaje.objects.filter(
-            proveedor_id=estado.get("id", "")).first()
-        if not (nuevo and mensaje):
+        # Sin id no hay a qué mensaje aplicarlo. Buscar por cadena vacía
+        # coincidiría con todos los que aún no se despachan.
+        proveedor_id = estado.get("id") or ""
+        if not (nuevo and proveedor_id):
             continue
-        # Meta manda los estados en orden, pero llegan por red: no retrocedas.
+        mensaje = Mensaje.objects.filter(proveedor_id=proveedor_id).first()
+        if not mensaje:
+            continue
+        # Meta manda los estados en orden, pero llegan por red desordenados:
+        # un "entregado" que llega tarde no debe borrar un "leído" ya guardado,
+        # y un "falló" tardío tampoco (si lo leyó, es que sí llegó).
         orden = [Mensaje.Estado.ENVIADO, Mensaje.Estado.ENTREGADO,
                  Mensaje.Estado.LEIDO]
-        if (mensaje.estado in orden and nuevo in orden
-                and orden.index(nuevo) < orden.index(mensaje.estado)):
-            continue
+        if mensaje.estado in orden:
+            if nuevo == Mensaje.Estado.FALLIDO:
+                continue
+            if nuevo in orden and orden.index(nuevo) <= orden.index(mensaje.estado):
+                continue
         mensaje.estado = nuevo
         campos = ["estado"]
         ahora = timezone.now()
@@ -384,7 +436,7 @@ def requiere_cron_secret(vista):
         esperado = settings.CRON_SECRET
         if not esperado:
             return _error("El cron está apagado: falta CRON_SECRET.", 503)
-        if not hmac.compare_digest(_bearer(request), esperado):
+        if not hmac.compare_digest(_bearer(request), esperado.encode()):
             return _error("Secreto inválido.", 401)
         return vista(request, *args, **kwargs)
     return envoltura

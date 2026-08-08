@@ -6,6 +6,7 @@ panel o el admin. El código no trae reglas de negocio "quemadas".
 """
 
 import re
+import secrets
 import uuid
 from decimal import Decimal
 
@@ -13,6 +14,33 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 from django.urls import reverse
 from django.utils import timezone
+
+#: Alfabeto sin I, O, 0 ni 1: se dictan y se teclean en la caja sin confundirse.
+ALFABETO_CODIGO = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def genera_codigo_cliente():
+    """Código corto y único para identificar a un cliente en el mostrador."""
+    for _ in range(20):
+        codigo = "".join(secrets.choice(ALFABETO_CODIGO) for _ in range(6))
+        if not Cliente.objects.filter(codigo=codigo).exists():
+            return codigo
+    raise RuntimeError(
+        "No se pudo generar un código de cliente libre. "
+        "Considera alargar el código si el padrón creció mucho.")
+
+
+def resuelve_id(modelo, valor):
+    """Objeto por su id, o None si el valor viene vacío o no es un número.
+
+    Los `<select>` opcionales de un formulario mandan cadena vacía y un ERP
+    externo puede mandar cualquier cosa; pasarle eso a un filtro por id lanza
+    ValueError. Aquí se traduce a «ninguno».
+    """
+    try:
+        return modelo.objects.filter(pk=int(valor)).first()
+    except (TypeError, ValueError):
+        return None
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  TELÉFONOS
@@ -191,6 +219,9 @@ class Cliente(models.Model):
     cumpleanos = models.DateField("Cumpleaños", null=True, blank=True)
 
     token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    codigo = models.CharField(
+        "Código", max_length=6, unique=True, editable=False,
+        help_text="Código corto que el staff teclea para encontrarlo en la caja.")
 
     puntos_saldo = models.IntegerField("Puntos disponibles", default=0)
     puntos_historicos = models.PositiveIntegerField(
@@ -225,17 +256,16 @@ class Cliente(models.Model):
     def save(self, *args, **kwargs):
         if self.telefono:
             self.telefono = normaliza_telefono(self.telefono)
+        if not self.codigo:
+            self.codigo = genera_codigo_cliente()
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = [*kwargs["update_fields"], "codigo"]
         super().save(*args, **kwargs)
 
     # ── Presentación ──────────────────────────────────────────────────────
     @property
     def telefono_display(self):
         return telefono_bonito(self.telefono)
-
-    @property
-    def codigo(self):
-        """Código corto que el staff puede teclear para encontrarlo."""
-        return self.token.hex[:6].upper()
 
     @property
     def nombre_corto(self):
@@ -440,8 +470,11 @@ class Compra(models.Model):
 class MovimientoPuntos(models.Model):
     """Libro mayor de puntos: todo movimiento queda aquí, nada se borra.
 
-    Los movimientos de tipo `gana` son lotes con vigencia propia; el canje y la
-    expiración los consumen en orden FIFO (primero el que caduca antes).
+    Todo movimiento que SUMA puntos es un «lote»: lleva su propio `saldo_lote`
+    (lo que queda sin gastar) y su `expira_el`. Los canjes y la caducidad los
+    consumen en orden FIFO, primero el que vence antes. Da igual si el lote
+    nació de una compra, de una cortesía o de la devolución de un canje: lo que
+    define a un lote es tener saldo vivo, no su tipo.
     """
 
     class Tipo(models.TextChoices):
@@ -449,14 +482,19 @@ class MovimientoPuntos(models.Model):
         CANJE = "canje", "Canjeó un premio"
         AJUSTE = "ajuste", "Ajuste manual"
         EXPIRA = "expira", "Puntos caducados"
+        DEVOLUCION = "devolucion", "Devolución de un canje"
+
+    #: Tipos que cuentan para los puntos de por vida (los que dan el nivel).
+    #: La devolución NO cuenta: esos puntos ya se habían acreditado al ganarlos.
+    ACUMULAN = (Tipo.GANA, Tipo.AJUSTE)
 
     cliente = models.ForeignKey(
         Cliente, on_delete=models.CASCADE, related_name="movimientos")
-    tipo = models.CharField(max_length=10, choices=Tipo.choices)
+    tipo = models.CharField(max_length=12, choices=Tipo.choices)
     puntos = models.IntegerField(help_text="Positivo suma, negativo resta.")
     saldo_lote = models.IntegerField(
         default=0,
-        help_text="Puntos que quedan sin consumir en este lote (solo 'gana').")
+        help_text="Puntos que quedan sin consumir en este lote.")
     expira_el = models.DateField(null=True, blank=True)
     compra = models.ForeignKey(
         Compra, on_delete=models.SET_NULL, null=True, blank=True,
@@ -497,6 +535,11 @@ class Canje(models.Model):
     estado = models.CharField(max_length=10, choices=Estado.choices,
                               default=Estado.PENDIENTE)
     vence_el = models.DateField(null=True, blank=True)
+    expira_puntos = models.DateField(
+        null=True, blank=True,
+        help_text="Vigencia que tenían los puntos gastados aquí. Si el canje "
+                  "se cancela, se devuelven con esa misma fecha en vez de "
+                  "estrenar 12 meses.")
     creado = models.DateTimeField(auto_now_add=True)
     entregado_en = models.DateTimeField(null=True, blank=True)
     autorizado_por = models.ForeignKey(

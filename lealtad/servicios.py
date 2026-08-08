@@ -13,13 +13,17 @@ from django.db.models import Count, F, Max, Q, Sum
 from django.utils import timezone
 
 from .models import (
-    Canje, Cliente, Compra, ConfiguracionPrograma, MovimientoPuntos, Premio,
-    PromocionPuntos, TelefonoInvalido, normaliza_telefono,
+    ALFABETO_CODIGO, Canje, Cliente, Compra, ConfiguracionPrograma,
+    MovimientoPuntos, PromocionPuntos, TelefonoInvalido, normaliza_telefono,
 )
 
 
 class ErrorLealtad(Exception):
     """Algo impidió completar la operación (saldo, límites, duplicados)."""
+
+
+#: Centinela para distinguir «no me pasaron vigencia» de «vigencia None».
+_SIN_DATO = object()
 
 
 def _suma_meses(fecha, meses):
@@ -47,9 +51,7 @@ def buscar_cliente(texto):
         pass
     codigo = texto.upper().lstrip("#")
     if len(codigo) == 6:
-        for c in Cliente.objects.all().only("id", "token"):
-            if c.codigo == codigo:
-                return c
+        return Cliente.objects.filter(codigo=codigo).first()
     return None
 
 
@@ -88,46 +90,76 @@ def alta_cliente(telefono, nombre="", cumpleanos=None,
 #  PUNTOS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _otorgar_puntos(cliente, puntos, compra=None, descripcion="", cfg=None):
+def lotes_vivos(cliente=None):
+    """Movimientos con puntos sin gastar, del que caduca antes al que después.
+
+    Un lote es cualquier movimiento que sumó puntos y todavía tiene saldo: da
+    igual si vino de una compra, de una cortesía o de un canje cancelado.
+    """
+    qs = MovimientoPuntos.objects.filter(saldo_lote__gt=0)
+    if cliente is not None:
+        qs = qs.filter(cliente=cliente)
+    return qs.order_by(F("expira_el").asc(nulls_last=True), "creado", "id")
+
+
+def _vencimiento(cfg=None):
+    """Hasta cuándo valen los puntos que se ganan hoy. None = no caducan."""
+    cfg = cfg or ConfiguracionPrograma.get()
+    if not cfg.vigencia_puntos_meses:
+        return None
+    return _suma_meses(timezone.localdate(), cfg.vigencia_puntos_meses)
+
+
+def _otorgar_puntos(cliente, puntos, *, tipo=MovimientoPuntos.Tipo.GANA,
+                    compra=None, descripcion="", cfg=None, expira=_SIN_DATO):
     """Crea un lote de puntos con su fecha de caducidad."""
     if puntos <= 0:
         return None
-    cfg = cfg or ConfiguracionPrograma.get()
-    expira = None
-    if cfg.vigencia_puntos_meses:
-        expira = _suma_meses(timezone.localdate(), cfg.vigencia_puntos_meses)
+    if expira is _SIN_DATO:
+        expira = _vencimiento(cfg)
     return MovimientoPuntos.objects.create(
-        cliente=cliente, tipo=MovimientoPuntos.Tipo.GANA, puntos=puntos,
-        saldo_lote=puntos, expira_el=expira, compra=compra,
-        descripcion=descripcion,
+        cliente=cliente, tipo=tipo, puntos=puntos, saldo_lote=puntos,
+        expira_el=expira, compra=compra, descripcion=descripcion,
     )
 
 
 def _consumir_lotes(cliente, puntos, tipo, descripcion="", canje=None):
     """Descuenta puntos de los lotes vivos, empezando por el que caduca antes.
 
-    Devuelve el movimiento negativo que registra el consumo.
+    Devuelve `(movimiento, expira_el)`: el movimiento negativo que registra el
+    consumo y la vigencia más temprana entre los lotes que se gastaron, para
+    poder devolverlos con su fecha original si el canje se cancela.
+
+    Si los lotes no alcanzan es que el saldo del cliente estaba descuadrado, y
+    seguir restaría puntos que no existen; mejor abortar y que se note.
     """
     restante = puntos
-    lotes = (MovimientoPuntos.objects
-             .select_for_update()
-             .filter(cliente=cliente, tipo=MovimientoPuntos.Tipo.GANA,
-                     saldo_lote__gt=0)
-             .order_by(F("expira_el").asc(nulls_last=True), "creado", "id"))
-    for lote in lotes:
+    primera_vigencia = None
+    for lote in lotes_vivos(cliente).select_for_update():
         if restante <= 0:
             break
+        if primera_vigencia is None:
+            primera_vigencia = lote.expira_el
         toma = min(lote.saldo_lote, restante)
         lote.saldo_lote -= toma
         lote.save(update_fields=["saldo_lote"])
         restante -= toma
-    return MovimientoPuntos.objects.create(
+
+    if restante > 0:
+        raise ErrorLealtad(
+            f"El saldo de {cliente.nombre_corto} no cuadra: faltan {restante} "
+            f"puntos por respaldar. Revisa sus movimientos antes de continuar.")
+
+    movimiento = MovimientoPuntos.objects.create(
         cliente=cliente, tipo=tipo, puntos=-puntos, canje=canje,
         descripcion=descripcion,
     )
+    return movimiento, primera_vigencia
 
 
 #: Movimientos que suman a los puntos históricos (los que definen el nivel).
+#: La devolución de un canje queda fuera a propósito: esos puntos ya contaron
+#: cuando se ganaron, y volver a sumarlos regalaría niveles.
 Q_ACUMULA = (Q(tipo=MovimientoPuntos.Tipo.GANA)
              | Q(tipo=MovimientoPuntos.Tipo.AJUSTE, puntos__gt=0))
 
@@ -234,6 +266,7 @@ def registrar_compra_desde_nota(nota, telefono, nombre=""):
 @transaction.atomic
 def ajustar_puntos(cliente, puntos, descripcion, usuario=None):
     """Suma o resta puntos a mano (correcciones, cortesías)."""
+    cliente = Cliente.objects.select_for_update().get(pk=cliente.pk)
     puntos = int(puntos)
     if puntos == 0:
         raise ErrorLealtad("El ajuste no puede ser de cero puntos.")
@@ -242,9 +275,8 @@ def ajustar_puntos(cliente, puntos, descripcion, usuario=None):
             f"{cliente.nombre_corto} solo tiene {cliente.puntos_saldo} puntos.")
 
     if puntos > 0:
-        mov = _otorgar_puntos(cliente, puntos, descripcion=descripcion)
-        mov.tipo = MovimientoPuntos.Tipo.AJUSTE
-        mov.save(update_fields=["tipo"])
+        _otorgar_puntos(cliente, puntos, tipo=MovimientoPuntos.Tipo.AJUSTE,
+                        descripcion=descripcion)
     else:
         _consumir_lotes(cliente, -puntos, MovimientoPuntos.Tipo.AJUSTE,
                         descripcion=descripcion)
@@ -256,9 +288,8 @@ def ajustar_puntos(cliente, puntos, descripcion, usuario=None):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _codigo_canje():
-    alfabeto = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # sin I, O, 0, 1
     while True:
-        codigo = "".join(secrets.choice(alfabeto) for _ in range(6))
+        codigo = "".join(secrets.choice(ALFABETO_CODIGO) for _ in range(6))
         if not Canje.objects.filter(codigo=codigo).exists():
             return codigo
 
@@ -288,9 +319,11 @@ def canjear(cliente, premio, usuario=None, nota=None):
         puntos_usados=premio.puntos_requeridos, codigo=_codigo_canje(),
         vence_el=vence, autorizado_por=usuario, nota=nota,
     )
-    _consumir_lotes(cliente, premio.puntos_requeridos,
-                    MovimientoPuntos.Tipo.CANJE,
-                    descripcion=f"Canje de {premio.nombre}", canje=canje)
+    _, expira_puntos = _consumir_lotes(
+        cliente, premio.puntos_requeridos, MovimientoPuntos.Tipo.CANJE,
+        descripcion=f"Canje de {premio.nombre}", canje=canje)
+    canje.expira_puntos = expira_puntos
+    canje.save(update_fields=["expira_puntos"])
     recalcular(cliente)
     return canje
 
@@ -311,12 +344,20 @@ def entregar_canje(canje, usuario=None, nota=None):
 
 @transaction.atomic
 def cancelar_canje(canje, motivo="Canje cancelado"):
-    """Cancela un canje y le devuelve los puntos al cliente."""
+    """Cancela un canje y le devuelve los puntos al cliente.
+
+    Los puntos vuelven con la vigencia que traían, no con 12 meses nuevos: un
+    canje cancelado no es una forma de revivir puntos a punto de caducar. Y se
+    devuelven como DEVOLUCION, que no cuenta para los puntos de por vida,
+    porque ya contaron cuando se ganaron.
+    """
     if canje.estado not in (Canje.Estado.PENDIENTE, Canje.Estado.EXPIRADO):
         raise ErrorLealtad("Solo se pueden cancelar canjes pendientes.")
     canje.estado = Canje.Estado.CANCELADO
     canje.save(update_fields=["estado"])
     _otorgar_puntos(canje.cliente, canje.puntos_usados,
+                    tipo=MovimientoPuntos.Tipo.DEVOLUCION,
+                    expira=canje.expira_puntos,
                     descripcion=f"{motivo}: {canje.premio.nombre}")
     recalcular(canje.cliente)
     return canje
@@ -330,10 +371,8 @@ def cancelar_canje(canje, motivo="Canje cancelado"):
 def expirar_puntos(hoy=None):
     """Caduca los lotes vencidos. Devuelve cuántos puntos se perdieron."""
     hoy = hoy or timezone.localdate()
-    vencidos = (MovimientoPuntos.objects.select_for_update()
-                .filter(tipo=MovimientoPuntos.Tipo.GANA, saldo_lote__gt=0,
-                        expira_el__lt=hoy)
-                .select_related("cliente"))
+    vencidos = (lotes_vivos().filter(expira_el__lt=hoy)
+                .select_for_update().select_related("cliente"))
     total, tocados = 0, {}
     for lote in vencidos:
         puntos = lote.saldo_lote
@@ -354,7 +393,6 @@ def expirar_puntos(hoy=None):
 def puntos_por_expirar(dias):
     """Lotes que caducan dentro de los próximos `dias` días."""
     hoy = timezone.localdate()
-    return (MovimientoPuntos.objects
-            .filter(tipo=MovimientoPuntos.Tipo.GANA, saldo_lote__gt=0,
-                    expira_el__gte=hoy, expira_el__lte=hoy + timedelta(days=dias))
+    return (lotes_vivos()
+            .filter(expira_el__gte=hoy, expira_el__lte=hoy + timedelta(days=dias))
             .select_related("cliente"))

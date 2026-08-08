@@ -265,10 +265,23 @@ su condición, su horario y su anti-spam. Vienen 9 precargadas y activas:
 Puedes apagarlas, cambiarles el texto, la hora, los días de la semana o crear
 las tuyas sin tocar código.
 
-**El latido del programa** (caducar puntos, evaluar reglas y mandar la bandeja)
-lo corre un solo comando, pensado para cron cada 10 minutos:
+**El latido del programa** lo corre un solo comando cada 10 minutos: caduca los
+puntos vencidos, expira los canjes que nadie recogió, evalúa las reglas
+programadas y despacha la bandeja. Es idempotente, correrlo de más no duplica
+nada. **Se necesita aunque no mandes ni un mensaje**, porque es lo que hace
+caducar los puntos.
 
-    */10 * * * * cd /ruta/al/proyecto && .venv/bin/python manage.py lealtad_run
+En esta Mac ya está instalado como agente de launchd:
+
+    cp deploy/mx.shake.lealtad.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/mx.shake.lealtad.plist
+
+    launchctl list | grep lealtad        # ver que esté vivo
+    tail -f deploy/lealtad_run.log       # ver qué ha hecho
+
+En el servidor va por cron (`deploy/crontab.txt`):
+
+    */10 * * * * cd /srv/habits && .venv/bin/python manage.py lealtad_run
 
 Mientras tanto, el botón "Despachar la bandeja" del panel hace lo mismo a mano.
 
@@ -284,6 +297,7 @@ proveedor en el admin → *Configuración del programa*:
     WHATSAPP_TOKEN=<token permanente de tu app de Meta>
     WHATSAPP_PHONE_NUMBER_ID=<ID del número en WhatsApp Business>
     WHATSAPP_VERIFY_TOKEN=<el que tú inventes para el webhook>
+    WHATSAPP_APP_SECRET=<clave secreta de la app, en Meta → Configuración → Básica>
 
 Pasos del alta en Meta:
 
@@ -292,7 +306,9 @@ Pasos del alta en Meta:
 3. Copia el *Phone Number ID* y genera un token permanente.
 4. Da de alta el webhook apuntando a `https://tu-dominio/api/lealtad/webhooks/whatsapp`
    con tu `WHATSAPP_VERIFY_TOKEN`, y suscríbelo al campo `messages`. Así llegan
-   los estados de entregado/leído y las bajas.
+   los estados de entregado/leído y las bajas. **Sin `WHATSAPP_APP_SECRET` el
+   webhook rechaza todo**: ese endpoint da de baja clientes, así que se verifica
+   la firma HMAC de cada petición y no se deja abierto.
 5. Sube las plantillas a aprobación (el texto de cada una está en
    `/lealtad/mensajes/`) y escribe su nombre aprobado en la plantilla.
 
