@@ -6,8 +6,14 @@ venv/
 __pycache__/
 *.pyc
 
-# La base local y los estáticos generados: se rehacen en el build.
-db.sqlite3
+# Los estáticos se regeneran en el build con collectstatic.
 staticfiles/
+
+# La base local nunca debe viajar: en producción se usa Postgres.
+db.sqlite3
+
+# Secretos locales. Vercel no lee .gitignore, así que sin esta línea el
+# .env.local de la máquina se subiría al bundle.
+.env*
 
 .git/
