@@ -21,9 +21,10 @@ class Command(BaseCommand):
                             help="Evalúa las reglas pero no envía nada.")
         parser.add_argument("--forzar-horario", action="store_true",
                             help="Envía aunque sea fuera del horario permitido.")
-        parser.add_argument("--limite", type=int, default=None,
+        parser.add_argument("--limite", type=int,
+                            default=mensajeria.LIMITE_DESPACHO,
                             help="Cuántos mensajes despachar como máximo "
-                                 "(por omisión, los que trae la bandeja).")
+                                 f"(por omisión, {mensajeria.LIMITE_DESPACHO}).")
 
     def handle(self, *args, **opts):
         hoy = timezone.localdate()
@@ -53,11 +54,8 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("Sin enviar (--solo-encolar)."))
             return
 
-        despacho = {"forzar_horario": opts["forzar_horario"]}
-        if opts["limite"] is not None:
-            despacho["limite"] = opts["limite"]
         enviados, fallidos, pospuestos = mensajeria.despachar_pendientes(
-            **despacho)
+            limite=opts["limite"], forzar_horario=opts["forzar_horario"])
         ligados = mensajeria.atribuir_compras()
 
         resumen = f"✔ {enviados} enviado(s)"

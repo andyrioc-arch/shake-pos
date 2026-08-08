@@ -212,7 +212,11 @@ def enviar(mensaje, cfg=None):
     return mensaje
 
 
-def despachar_pendientes(limite=100, forzar_horario=False):
+# Tope de mensajes por corrida cuando nadie pide otra cosa.
+LIMITE_DESPACHO = 100
+
+
+def despachar_pendientes(limite=LIMITE_DESPACHO, forzar_horario=False):
     """Manda lo que ya toca. Devuelve (enviados, fallidos, pospuestos)."""
     cfg = ConfiguracionPrograma.get()
     if not forzar_horario and not en_horario(cfg):

@@ -21,6 +21,12 @@ def _env_bool(nombre, defecto):
     return os.environ.get(nombre, str(defecto)).lower() in ("1", "true", "yes", "on")
 
 
+def _env_lista(nombre, defecto=""):
+    """Lee una variable separada por comas. Los vacíos se descartan: sin ese
+    filtro, una variable en blanco daría [""] en vez de []."""
+    return [v.strip() for v in os.environ.get(nombre, defecto).split(",") if v.strip()]
+
+
 # ── Configuración sensible (desde variables de entorno en producción) ─────────
 # En desarrollo funciona sin configurar nada; en PRODUCCIÓN define:
 #   DJANGO_DEBUG=0  DJANGO_SECRET_KEY=<clave>  DJANGO_ALLOWED_HOSTS=tu-dominio.com
@@ -31,15 +37,12 @@ SECRET_KEY = os.environ.get(
 # En Vercel siempre es producción, aunque falte la variable: si DEBUG quedara
 # en True durante el build, collectstatic no generaría el manifiesto y en
 # runtime TODAS las páginas darían 500 por "Missing staticfiles manifest entry".
-EN_VERCEL = os.environ.get("VERCEL") == "1"
-DEBUG = False if EN_VERCEL else _env_bool("DJANGO_DEBUG", True)
-ALLOWED_HOSTS = [h.strip() for h in os.environ.get(
-    "DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if h.strip()]
+DEBUG = os.environ.get("VERCEL") != "1" and _env_bool("DJANGO_DEBUG", True)
+ALLOWED_HOSTS = _env_lista("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
 # Dominios desde los que se aceptan formularios (Vercel y/o dominio propio).
 # Se listan explícitos a propósito: un comodín tipo https://*.vercel.app dejaría
 # que cualquier proyecto de Vercel mandara peticiones a este sitio.
-CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.environ.get(
-    "DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()]
+CSRF_TRUSTED_ORIGINS = _env_lista("DJANGO_CSRF_TRUSTED_ORIGINS")
 
 # En producción no se permite arrancar con la clave insegura por defecto.
 if not DEBUG and SECRET_KEY.startswith("django-insecure"):
@@ -120,15 +123,17 @@ DATABASE_URL = os.environ.get('DATABASE_URL', '')
 if DATABASE_URL:
     import dj_database_url
 
-    DATABASES = {
-        'default': dj_database_url.parse(
-            DATABASE_URL, conn_max_age=0, ssl_require=True),
-    }
     # El pooler de Supabase (puerto 6543, modo transaction) reparte cada
     # consulta entre backends distintos: no sobreviven ni los cursores de
-    # servidor ni los prepared statements de psycopg3. Sin estas dos líneas
+    # servidor ni los prepared statements de psycopg3. Sin estos dos ajustes
     # el admin y los listados largos truenan de forma intermitente.
-    DATABASES['default']['DISABLE_SERVER_SIDE_CURSORS'] = True
+    DATABASES = {
+        'default': dj_database_url.parse(
+            DATABASE_URL, conn_max_age=0, ssl_require=True,
+            disable_server_side_cursors=True),
+    }
+    # prepare_threshold no es argumento de parse(): va en las OPTIONS que se
+    # pasan tal cual a psycopg.connect().
     DATABASES['default'].setdefault('OPTIONS', {})['prepare_threshold'] = None
 elif DEBUG:
     DATABASES = {
@@ -206,6 +211,10 @@ WHATSAPP_PHONE_NUMBER_ID = os.environ.get("WHATSAPP_PHONE_NUMBER_ID", "")
 WHATSAPP_API_VERSION = os.environ.get("WHATSAPP_API_VERSION", "v21.0")
 # El que tú inventas y capturas en Meta al dar de alta el webhook.
 WHATSAPP_VERIFY_TOKEN = os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
+
+# Secreto del cron. Vercel lo manda en 'Authorization: Bearer <CRON_SECRET>'.
+# Sin él, el endpoint del latido responde 503 en vez de correr.
+CRON_SECRET = os.environ.get("CRON_SECRET", "")
 
 # Twilio (SMS de respaldo)
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")

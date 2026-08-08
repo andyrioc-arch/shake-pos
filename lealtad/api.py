@@ -11,7 +11,6 @@ import hmac
 import io
 import json
 import logging
-import os
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from functools import wraps
@@ -41,6 +40,12 @@ def _error(mensaje, codigo=400, **extra):
     return JsonResponse({"ok": False, "error": mensaje, **extra}, status=codigo)
 
 
+def _bearer(request):
+    """Devuelve el valor de 'Authorization: Bearer <x>' («» si no viene así)."""
+    cabecera = request.headers.get("Authorization", "")
+    return cabecera[7:] if cabecera.startswith("Bearer ") else ""
+
+
 def requiere_token(vista):
     """Exige el token del programa en el encabezado Authorization."""
     @wraps(vista)
@@ -49,9 +54,7 @@ def requiere_token(vista):
         if not esperado:
             return _error("La API está apagada: configura el token del "
                           "programa en el panel de lealtad.", 503)
-        cabecera = request.headers.get("Authorization", "")
-        recibido = cabecera[7:] if cabecera.startswith("Bearer ") else ""
-        if not hmac.compare_digest(recibido, esperado):
+        if not hmac.compare_digest(_bearer(request), esperado):
             return _error("Token inválido.", 401)
         return vista(request, *args, **kwargs)
     return envoltura
@@ -364,9 +367,10 @@ def _procesa_respuestas(mensajes):
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Cuántos mensajes despacha como máximo cada corrida. El envío al proveedor es
-# sincrónico y con timeout de 20 s por mensaje, así que un lote grande se pasa
-# del tope de duración de la función. Con el cron cada 10 minutos esto da hasta
-# ~2,000 mensajes al día, de sobra para un local.
+# sincrónico y con timeout de 20 s por mensaje, así que el lote está acotado por
+# el tope de duración de la función, no por el volumen del negocio: 15 × 20 s
+# son 300 s en el peor caso. Ojo: el techo diario es este número por el número
+# de corridas que programe vercel.json.
 LIMITE_CRON = 15
 
 
@@ -377,12 +381,10 @@ def requiere_cron_secret(vista):
     """
     @wraps(vista)
     def envoltura(request, *args, **kwargs):
-        esperado = os.environ.get("CRON_SECRET", "")
+        esperado = settings.CRON_SECRET
         if not esperado:
             return _error("El cron está apagado: falta CRON_SECRET.", 503)
-        cabecera = request.headers.get("Authorization", "")
-        recibido = cabecera[7:] if cabecera.startswith("Bearer ") else ""
-        if not hmac.compare_digest(recibido, esperado):
+        if not hmac.compare_digest(_bearer(request), esperado):
             return _error("Secreto inválido.", 401)
         return vista(request, *args, **kwargs)
     return envoltura
@@ -401,7 +403,10 @@ def cron_run(request):
     try:
         call_command("lealtad_run", limite=LIMITE_CRON, stdout=salida)
     except Exception:
-        log.exception("Falló el latido del programa de lealtad.")
+        # La salida parcial dice hasta dónde llegó antes de tronar, y quien
+        # diagnostica mira los logs, no el cuerpo de la respuesta al cron.
+        log.exception("Falló el latido del programa de lealtad. Salida parcial:\n%s",
+                      salida.getvalue())
         return _error("El latido falló; revisa los logs.", 500,
                       salida=salida.getvalue().splitlines())
     return JsonResponse({"ok": True, "salida": salida.getvalue().splitlines()})
