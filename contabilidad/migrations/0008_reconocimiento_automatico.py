@@ -24,8 +24,8 @@ código nuevo necesite ni quita nada que el viejo use—, pero conviene correrla
 junto con el despliegue para que el modelo y la base no queden desfasados.
 
 EL REPORTE DE AGOSTO CAMBIA DE GOLPE con el despliegue: aparecen ingresos y
-costos que nunca habían entrado. Es lo que se pidió, pero hay que avisarle a
-Andy ANTES, no después, y tomar respaldo de Supabase justo antes.
+costos que nunca habían entrado. Es lo que se pidió. Tomar respaldo de Supabase
+justo antes, de todos modos.
 """
 from django.db import migrations, models
 

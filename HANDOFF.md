@@ -85,16 +85,21 @@ ser una molestia y es ahora el bloqueo del Estado de Resultados.**
 - Nunca empujar a `main` sin consultarlo. El repo es de Andy.
 - Después de cada cambio de código: `/code-review`, `/simplify`, `/qa`, y
   `/impeccable audit` solo si hay interfaz.
-- **El orden de publicación depende de la migración**, y las pendientes van en
-  sentidos distintos:
-  - `contabilidad/0007` **quita** cuentas que el código viejo usa →
-    **desplegar primero, migrar después**.
-  - `inventario/0008` y `0009` **agregan** columnas que el código nuevo
-    necesita → **migrar primero, desplegar después**.
-  - `contabilidad/0008` no toca datos → el orden da igual; correrla con el
-    despliegue para no dejar modelo y base desfasados.
-  - `contabilidad/0009` **agrega** la columna `Cuenta.padre` que el reporte
-    nuevo necesita → **migrar primero, desplegar después**. Nace nullable.
+- **Orden de publicación de este bloque: MIGRAR TODO PRIMERO, DESPLEGAR
+  DESPUÉS.** Las reglas generales se contradecían y se resolvió con datos:
+  - Las que **agregan** columnas (`inventario/0008`, `0009`,
+    `contabilidad/0009`) piden migrar primero. Todas nacen nullable.
+  - `contabilidad/0007` **borra** las cuentas de IVA, que por la regla general
+    pediría desplegar primero. **No se puede tener las dos cosas**:
+    `contabilidad/0009` no se puede aplicar sin pasar por la 0007, porque son
+    la misma app y la historia es lineal.
+  - Se resolvió a favor de migrar primero **porque el riesgo de la 0007 es
+    inalcanzable en este sistema**, verificado en el código de `main`: el
+    posteo de IVA vive dentro de `if mov.facturado:` y ese botón no se
+    presionó nunca; y el auto-sembrado de `cuentas_flujo()` solo dispara
+    `crear_catalogo()` cuando NO queda ninguna cuenta de ingreso/gasto/capital,
+    cosa que borrar la 105 y la 201 no provoca.
+  - `contabilidad/0008` no toca datos; va con las demás.
 - Tras cualquier despliegue que toque costeo: `manage.py recostear --todo` y
   luego `--verificar`.
 

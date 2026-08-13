@@ -112,6 +112,23 @@ DATABASE_URL='<session pooler :5432>' python manage.py migrate
   solo congela la columna `facturado` como reliquia. Aun así conviene correrla
   con el despliegue para que el modelo y la base no queden desfasados.
 
+**Cuando las dos reglas se contradicen, gana la que se pueda cumplir.** Las
+migraciones de una app son una historia lineal: no se puede aplicar la 0009 sin
+pasar por la 0007. Si una agrega algo que el código nuevo necesita y otra
+anterior quita algo que el viejo usa, no hay orden que satisfaga a las dos —hay
+que medir el riesgo real de la que se incumple, en el código, no en la regla.
+Fue el caso del bloque de costeo: se migró todo primero porque el posteo de IVA
+del código viejo vive dentro de `if mov.facturado:`, y ese botón no se presionó
+nunca.
+
+**Después de un despliegue que cambie cómo se reconoce, en este orden:**
+
+1. `sincronizar_contabilidad` — crea los movimientos y asientos que faltan. Es
+   lo que le da a cada COMPRA su asiento de entrada a Inventario. Saltárselo
+   deja el activo sin cargos mientras las ventas lo abonan: inventario negativo.
+2. `recostear --todo` — abre las capas huérfanas y cuesta todas las ventas.
+3. `recostear --verificar` — audita. Debe salir sano y con saldo de 115 ≥ 0.
+
 No hay despliegue automático: Vercel no pudo conectar el repo por ser de otra
 cuenta. Cada publicación es manual.
 
