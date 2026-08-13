@@ -16,6 +16,10 @@ quedó archivada y no se vuelve a tocar.
 P0–P6). Producción corre `main` y tiene aplicadas todas las migraciones hasta
 `contabilidad.0009` e `inventario.0009`.
 
+**La alarma de margen está en rama, sin publicar** (`alarma-margen-bajo`).
+Agrega `inventario.0010`, que **crea** la tabla de configuración que el código
+nuevo necesita: por la regla de abajo, **migrar primero y desplegar después**.
+
 | Pieza | Dónde |
 |---|---|
 | App | Vercel, proyecto `shake-pos` (cuenta personal de Rubén, plan Hobby) |
@@ -105,6 +109,19 @@ el valor guardado deja de coincidir. Usar Bash con `printf`, o el dashboard.
 
 **Cron diario por límite del plan Hobby.** `0 15 * * *` = 09:00 CDMX. Con Pro se
 puede devolver a `*/10 * * * *`, que es lo que el módulo de lealtad espera.
+
+**En móvil, `base.html` vuelve toda tabla `display:block` con su propio
+`overflow-x`.** Es la regla que las tres copias de `.scroll-x` del proyecto
+vienen corrigiendo por separado, y tiene un efecto que no se ve venir: mete un
+contenedor de desplazamiento entre la celda y el scroller, y ahí
+`position:sticky` deja de aplicar. Una columna anclada dentro de `.scroll-x`
+necesita devolverle a la tabla su `display:table` y `overflow:visible`. Lo
+mismo hace `border-collapse:collapse`, que desactiva `sticky` en las celdas.
+
+**Los tonos de marca no alcanzan para texto.** El rosa `#fa5598` da 3.08:1
+sobre blanco y el azul `#1e9aff` 2.95:1, contra el 4.5:1 que exige WCAG AA.
+Donde el color carga un dato o un estado se usan `#c81a63` y `#1478cc`, el
+mismo tono más oscuro. Los tonos vivos se quedan en el cromo de marca.
 
 ## Publicar
 
@@ -206,6 +223,34 @@ python manage.py recostear --solo-pendientes
 capas, que ninguna capa deba más de lo que trajo, y que ninguna venta reconocida
 esté sin costo completo. **Correrlo después de cada despliegue que toque
 costeo.**
+
+## Alarma de margen (en rama, sin publicar)
+
+Avisa cuando el margen de un producto **baja**. Solo la caída: mezclar las dos
+direcciones convierte el aviso en ruido que se aprende a ignorar.
+
+- Compara el mes en curso contra el mes calendario anterior; el umbral es una
+  caída relativa, global y configurable en el admin (10% por omisión, en
+  `ConfiguracionAlarmas`).
+- El margen del mes sale de `Venta.ganancia` sumada por producto, con
+  `Venta.objects.comerciales()` —sin cortesías, que no cobran y hundirían el
+  número sin que el precio ni el costo hayan cambiado—.
+- Un producto que no se vendió en alguno de los dos meses **no aparece**: sin
+  base de comparación no se inventa una caída, igual que el costeo no inventa
+  un costo.
+- Si alguna venta de cualquiera de los dos meses no tiene su costo completo, el
+  aviso se marca «· estimado»: ese margen se apoya en el catálogo de HOY, así
+  que corregir un ingrediente lo mueve sin que se haya registrado una venta.
+
+Vive en `inventario/alarmas.py` y se muestra en el panel de inventario, detrás
+de la misma puerta que las columnas de costo (solo superusuario).
+
+**Limitación conocida, decidida a propósito:** compara un mes en curso —que
+puede llevar una sola venta— contra un mes completo, así que a principios de
+mes una venta atípica enciende el aviso igual que una subida real de insumos.
+La columna de unidades (`40 → 1`) es la pista. Con el volumen de hoy cualquier
+piso de unidades dejaría la alarma muda; se revisa cuando haya un mes con
+ventas de verdad.
 
 ## Pendiente
 
