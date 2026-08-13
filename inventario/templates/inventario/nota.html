@@ -108,8 +108,8 @@
       <div class="lealtad-tit">💗 {{ lealtad.cliente.nombre_corto }}, ganaste {{ lealtad.compra.puntos_ganados }} puntos</div>
       <div class="lealtad-saldo">{{ lealtad.cliente.puntos_saldo }} puntos disponibles
         {% if lealtad.cliente.nivel %} · {{ lealtad.cliente.nivel }}{% endif %}</div>
-      {# La redacción vive en la vista, no aquí: el PDF muestra los mismos
-         hitos y dos redacciones se separan sin que nada lo note. #}
+      {% comment %} La redacción vive en la vista, no aquí: el PDF muestra los mismos
+         hitos y dos redacciones se separan sin que nada lo note. {% endcomment %}
       {% for hito in lealtad.hitos %}
         <div class="lealtad-hito">{{ hito.texto }}
           {% if hito.detalle %}

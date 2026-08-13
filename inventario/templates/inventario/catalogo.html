@@ -87,9 +87,9 @@
           <td class="l">{{ p.emoji }} {{ p.nombre }}</td>
           <td>${{ p.precio_venta|floatformat:2|intcomma }}</td>
           <td>${{ p.costo_receta|floatformat:2|intcomma }}</td>
-          {# El costo de catálogo es un aproximado tecleado a mano; este es lo
+          {% comment %} El costo de catálogo es un aproximado tecleado a mano; este es lo
              que costaría a los precios que de verdad se pagaron. Sin él,
-             congelar el catálogo deja a Andy sin saber cuánto se movió. #}
+             congelar el catálogo deja a Andy sin saber cuánto se movió. {% endcomment %}
           <td>{% if p.costo_ultima_compra is not None %}${{ p.costo_ultima_compra|floatformat:2|intcomma }}{% else %}<span class="muted" title="A algún ingrediente le falta su primera compra capturada.">—</span>{% endif %}</td>
           <td>${{ p.ganancia_unitaria|floatformat:2|intcomma }}</td>
           <td><span class="badge {% if p.activa %}on{% else %}off{% endif %}">{% if p.activa %}Sí{% else %}No{% endif %}</span></td>
@@ -134,10 +134,10 @@
 
     <!-- Ingredientes de la receta -->
     <table class="t">
-      {# El costo va consolidado por producto, no por línea: así es como entra
+      {% comment %} El costo va consolidado por producto, no por línea: así es como entra
          a la contabilidad —un solo cargo a Costo de Ventas, nunca uno por
          ingrediente— y así es como se decide un precio. El desglose por
-         ingrediente sigue disponible al abrir el detalle. #}
+         ingrediente sigue disponible al abrir el detalle. {% endcomment %}
       <thead><tr><th class="l">Ingrediente</th><th>Cantidad</th><th class="l">Unidad</th><th>Acción</th></tr></thead>
       <tbody>
         {% for r in receta_lineas %}

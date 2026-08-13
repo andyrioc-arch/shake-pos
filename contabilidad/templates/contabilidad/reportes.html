@@ -166,8 +166,8 @@
           <td class="l"><span class="badge {% if m.tipo == 'venta' %}v{% else %}c{% endif %}">{{ m.get_tipo_display }}</span></td>
           <td class="l">
             {% if m.venta.nota %}
-              {# El libro dice cuánto entró; la nota dice qué se llevó el
-                 cliente. Sin el enlace hay que buscarla a mano por fecha. #}
+              {% comment %} El libro dice cuánto entró; la nota dice qué se llevó el
+                 cliente. Sin el enlace hay que buscarla a mano por fecha. {% endcomment %}
               <a class="ver-nota" href="{{ m.venta.nota.get_absolute_url }}"
                  title="Ver la nota de esta venta">{{ m.descripcion }}</a>
             {% else %}

@@ -518,6 +518,25 @@ class NotaPdfTests(TestCase):
         resp = self.client.get(self.nota.get_absolute_url())
         self.assertContains(resp, "Guardar PDF")
 
+    def test_ninguna_plantilla_le_enseña_comentarios_al_cliente(self):
+        """`{# #}` de Django es de UNA línea: si abarca dos, se imprime tal
+        cual. Pasó en la nota, que es la única página que ve el cliente."""
+        import re
+        from pathlib import Path
+
+        sueltos = []
+        for plantilla in Path(".").rglob("*.html"):
+            if ".venv" in str(plantilla):
+                continue
+            texto = plantilla.read_text()
+            for marca in re.finditer(r"\{#", texto):
+                resto = texto[marca.start():]
+                cierre = resto.find("#}")
+                if cierre == -1 or "\n" in resto[:cierre]:
+                    sueltos.append(str(plantilla))
+
+        self.assertEqual(sueltos, [], "Usa {% comment %} para varias líneas")
+
 
 class CostoUltimaCompraTests(TestCase):
     """Junto al aproximado del catálogo, lo que costaría a precios reales."""
