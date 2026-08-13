@@ -41,6 +41,14 @@
     .lealtad-tit { font-size:16px; font-weight:900; color:var(--pink); }
     .lealtad-saldo { font-size:13px; font-weight:700; margin-top:4px; }
     .lealtad-sig { font-size:12px; color:#555; margin-top:4px; }
+    /* Un hito se gana una vez: se anuncia con caja propia para que no se lea
+       como una línea más del saldo. El texto ya dice qué pasó, así que sigue
+       funcionando impreso en blanco y negro. */
+    .lealtad-hito { font-size:13px; font-weight:800; margin-top:6px;
+                    padding:6px 10px; border-radius:8px;
+                    background:#fff3f8; border:1px solid #f3c6dc; }
+    .lealtad-benef { display:block; font-weight:600; font-size:11px;
+                     color:#555; margin-top:2px; }
     .lealtad-qr { margin-top:10px; }
     .lealtad-qr svg { width:140px; height:140px; background:#fff; border-radius:10px;
                padding:6px; }
@@ -99,11 +107,23 @@
       <div class="lealtad-tit">💗 {{ lealtad.cliente.nombre_corto }}, ganaste {{ lealtad.compra.puntos_ganados }} puntos</div>
       <div class="lealtad-saldo">{{ lealtad.cliente.puntos_saldo }} puntos disponibles
         {% if lealtad.cliente.nivel %} · {{ lealtad.cliente.nivel }}{% endif %}</div>
+      {# Las tres cosas pueden pasar en la misma compra, así que ninguna se come
+         a la otra: se puede subir de nivel, ganar un premio y seguir en camino
+         al siguiente. Antes el premio ganado vivía en un `elif` y solo se
+         anunciaba cuando ya no faltaba nada para el siguiente. #}
+      {% if lealtad.nivel_alcanzado %}
+        <div class="lealtad-hito">⭐ ¡Subiste a {{ lealtad.nivel_alcanzado.nombre }}!
+          {% if lealtad.nivel_alcanzado.beneficios %}
+            <span class="lealtad-benef">{{ lealtad.nivel_alcanzado.beneficios }}</span>
+          {% endif %}
+        </div>
+      {% endif %}
+      {% if lealtad.premio_listo %}
+        <div class="lealtad-hito">🎁 ¡Ya puedes canjear {{ lealtad.premio_listo.nombre }}!</div>
+      {% endif %}
       {% if lealtad.falta %}
         <div class="lealtad-sig">Te faltan {{ lealtad.falta }} puntos
           para {{ lealtad.premio.nombre }}</div>
-      {% elif lealtad.premio_listo %}
-        <div class="lealtad-sig">🎁 ¡Ya puedes canjear {{ lealtad.premio_listo.nombre }}!</div>
       {% endif %}
       <div class="lealtad-qr">{{ lealtad.qr|safe }}</div>
       <p class="lealtad-pie">Escanea para ver tu tarjeta y tus premios</p>

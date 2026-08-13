@@ -968,6 +968,66 @@ class VistasTests(TestCase):
         self.assertFalse(self.premio.activo)
 
 
+class NotaAnunciaHitosTests(TestCase):
+    """La nota es lo único que el cliente ve; ahí se le dice qué ganó."""
+
+    def setUp(self):
+        cache.clear()
+        self.receta = crea_receta()
+        self.oro = Nivel.objects.create(
+            nombre="Oro", puntos_requeridos=10, beneficios="10% en todo")
+        self.premio = Premio.objects.create(
+            nombre="Latte gratis", puntos_requeridos=5, receta=self.receta)
+        self.cliente, _ = servicios.alta_cliente("9991234567", nombre="Ana")
+
+    def _nota(self, total="130"):
+        nota = Nota.objects.create(fecha=date(2026, 8, 5), total=Decimal(total))
+        servicios.registrar_compra(self.cliente, Decimal(total), nota=nota)
+        return nota
+
+    def test_la_nota_anuncia_el_nivel_que_esta_compra_desbloqueo(self):
+        nota = self._nota()      # $130 = 13 puntos, cruza los 10 de Oro
+
+        resp = self.client.get(nota.get_absolute_url())
+
+        self.assertContains(resp, "Subiste a Oro")
+        self.assertContains(resp, "10% en todo")
+
+    def test_la_siguiente_compra_ya_no_lo_vuelve_a_anunciar(self):
+        self._nota()
+        segunda = self._nota()
+
+        self.assertContains(self.client.get(segunda.get_absolute_url()),
+                            "puntos disponibles")
+        self.assertNotContains(self.client.get(segunda.get_absolute_url()),
+                               "Subiste a")
+
+    def test_una_nota_vieja_no_felicita_por_un_nivel_posterior(self):
+        """`puntos_historicos` acumula: sin este cuidado, la primera nota
+        anunciaría el nivel que se alcanzó tres compras más tarde."""
+        primera = self._nota("30")     # 3 puntos, todavía sin nivel
+        self._nota("130")              # aquí sí cruza a Oro
+
+        self.assertNotContains(self.client.get(primera.get_absolute_url()),
+                               "Subiste a")
+
+    def test_anuncia_el_premio_ganado_aunque_falte_para_el_siguiente(self):
+        Premio.objects.create(nombre="Shake gratis", puntos_requeridos=500)
+        nota = self._nota()            # 13 puntos: alcanza el de 5, no el de 500
+
+        resp = self.client.get(nota.get_absolute_url())
+
+        self.assertContains(resp, "Ya puedes canjear Latte gratis")
+        self.assertContains(resp, "Te faltan")
+
+    def test_sin_puntos_no_hay_nada_que_anunciar(self):
+        nota = self._nota("5")         # $5 no llega ni a un punto
+
+        resp = self.client.get(nota.get_absolute_url())
+
+        self.assertNotContains(resp, "Subiste a")
+
+
 class MetricasTests(TestCase):
     def setUp(self):
         self.receta = crea_receta()

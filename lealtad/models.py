@@ -490,6 +490,34 @@ class Compra(models.Model):
     def __str__(self):
         return f"{self.fecha} · {self.cliente.telefono_display} · ${self.monto:,.2f}"
 
+    @property
+    def nivel_alcanzado(self):
+        """El nivel que ESTA compra desbloqueó, o `None` si no subió ninguno.
+
+        Solo se pronuncia sobre la última compra del cliente. `puntos_historicos`
+        es un acumulado: en una nota que se abre un mes después ya incluye todo
+        lo que vino encima, y restarle solo esta compra contestaría otra
+        pregunta. Callar es preferible a felicitar por un nivel que se alcanzó
+        tres compras más tarde.
+        """
+        if not self.puntos_ganados:
+            return None
+        ultima = self.cliente.compras.first()      # ordering: -fecha, -id
+        if not ultima or ultima.pk != self.pk:
+            return None
+
+        ahora = self.cliente.nivel
+        if ahora is None:
+            return None
+        antes = (Nivel.objects
+                 .filter(activo=True,
+                         puntos_requeridos__lte=(self.cliente.puntos_historicos
+                                                 - self.puntos_ganados))
+                 .order_by("-puntos_requeridos").first())
+        if antes and antes.pk == ahora.pk:
+            return None
+        return ahora
+
 
 class MovimientoPuntos(models.Model):
     """Libro mayor de puntos: todo movimiento queda aquí, nada se borra.

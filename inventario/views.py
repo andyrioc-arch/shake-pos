@@ -391,6 +391,7 @@ def _lealtad_de_la_nota(nota, request):
         "falta": (premio.puntos_requeridos - cliente.puntos_saldo) if premio else 0,
         "premio_listo": max(disponibles, key=lambda p: p.puntos_requeridos,
                             default=None),
+        "nivel_alcanzado": compra.nivel_alcanzado,
         "qr": _qr_svg(request.build_absolute_uri(cliente.get_absolute_url())),
     }
 
