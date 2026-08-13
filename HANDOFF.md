@@ -6,9 +6,11 @@ Para retomar en otra conversación.
 migrado con el session pooler y desplegado en https://shake-pos.vercel.app.
 `reglas-negocio-andy` cumplió su función y ya no se usa.
 
-**Lo siguiente ya está hecho y sin publicar: la alarma de margen bajo**, en la
-rama `alarma-margen-bajo`. Es la primera pieza de la lista que Andy pidió y sí
-ve. 253 tests. Ver [Alarma de margen](#alarma-de-margen-hecha-sin-publicar).
+**Ese mismo día se publicó todo lo demás**: la alarma de margen (PR #2), los
+seis pasos del PR #3 —P7, P9, P10, la gráfica de qué se vende más, el enlace
+del libro a la nota, y la nota con hitos y PDF— y **P11 en dos tandas** (PR #4
+y #5). **El plan de costeo está cerrado y de la lista que Andy pidió no queda
+nada.** 294 tests.
 
 Contexto de fondo en [CLAUDE.md](CLAUDE.md), plan completo en
 [DISENO-COSTEO.md](DISENO-COSTEO.md), foto previa en
@@ -142,7 +144,7 @@ se incumple, en el código, no en la regla. Aquí se migró todo primero porque 
 posteo de IVA del código viejo vive dentro de `if mov.facturado:` y ese botón no
 se presionó nunca.
 
-## Alarma de margen (hecha, sin publicar)
+## Alarma de margen (publicada, PR #2)
 
 Rama `alarma-margen-bajo`, seis commits, 253 tests. Avisa cuando el margen de un
 producto **baja** más que el umbral respecto al mes anterior. Solo la caída: que
@@ -186,10 +188,7 @@ Lo que se aprendió peleando con la interfaz, y está en CLAUDE.md:
   el azul, contra el 4.5:1 de WCAG AA. Donde el color carga un dato se usan
   `#c81a63` y `#1478cc`.
 
-## Seis pasos más, hechos el 13 de agosto (rama `pdf-de-la-nota`)
-
-294 tests. Con esto se cierra el plan de costeo salvo P11, y la lista que Andy
-pidió salvo lo que no se ha propuesto.
+## Seis pasos más, publicados el 13 de agosto (PR #3)
 
 | | Qué |
 |---|---|
@@ -200,9 +199,8 @@ pidió salvo lo que no se ha propuesto.
 | Libro → nota | La descripción de una venta con nota es un enlace. |
 | Nota | Anuncia el premio ganado y el cambio de nivel, y se puede guardar en PDF. |
 
-**Para publicarla:** `lealtad.0003` **agrega** dos columnas que el código nuevo
-lee, así que **migrar primero y desplegar después**. No cambia el costeo de
-ninguna venta existente, así que no hace falta `recostear`.
+Se publicaron migrando `lealtad.0003` primero: agrega dos columnas que el
+código nuevo lee.
 
 Cinco cosas que costaron encontrar y no hay que volver a descubrir:
 
@@ -221,72 +219,38 @@ Cinco cosas que costaron encontrar y no hay que volver a descubrir:
   última compra llevó el catálogo de 61 a 251 consultas; resolverlo en la vista
   lo dejó en 7.
 
+## P11, hecho el 13 de agosto (PR #4 y #5)
+
+Se fueron `Movimiento.facturado`, `Movimiento.fecha_factura` y
+`Compra.costo_unitario`, y `monto_total`, `cantidad_receta` y `saldo_receta`
+dejaron de admitir nulos. **Con esto el plan de costeo está cerrado.**
+
+`costo_unitario` es ahora una propiedad derivada, solo para mostrar. Nunca para
+reconstruir el total: 1.5 × 31.55 da 47.325 y lo que se pagó fueron 47.33.
+
+**La lección, que vale para cualquier borrado futuro:** ningún orden de
+despliegue funcionaba. `facturado` era NOT NULL sin default, así que migrar
+primero tumbaba el código viejo y desplegar primero tumbaba el nuevo. Se partió
+en dos tandas —quitarle el NOT NULL, desplegar, borrar— y **cada tanda en su
+propia rama**, porque `manage.py migrate` aplica todo lo pendiente: juntas, la
+línea de siempre las habría corrido de un golpe y la caja se cae igual.
+
 ## Qué sigue
 
-**P11** es lo único que queda del plan, y sigue diferido a propósito hasta un
-ciclo de operación real: borra `Movimiento.facturado`, `Movimiento.fecha_factura`
-y `Compra.costo_unitario`, y mientras existan, todo esto se revierte con un
-despliegue.
+**Del plan no queda nada, y de la lista de Andy tampoco.** Lo que sigue abierto
+es deuda vieja:
 
-De lo que Andy pidió no queda nada sin hacer. Lo que sigue abierto es el
-inventario de deuda: los tres asuntos de la revisión de P3, los 44 hallazgos de
-auditoría —el deadlock entre `canjear()` y `expirar_puntos()` lo agrava P9, que
-mete escrituras de inventario a esa transacción—, el menú móvil, y que Supabase
-tiene RLS apagado en las 47 tablas.
+- Los tres asuntos de la revisión de P3: editar una compra ya consumida no
+  reajusta su capa, el recosteo masivo corre dentro del request, y el residuo
+  de un centavo cuando muchas ventas cruzan las mismas capas.
+- Los 44 hallazgos de la auditoría. **P9 agravó uno**: el posible deadlock
+  entre `canjear()` y `expirar_puntos()`, porque ahora esa transacción también
+  escribe inventario. Es el candidato más justificado.
+- El menú móvil, que se lleva ~780px antes del contenido en 375×812.
+- **Supabase tiene RLS apagado en las 47 tablas**: con la llave `anon`
+  cualquiera las lee. Este sistema no usa la Data API —Django habla Postgres
+  directo por el pooler— así que apagarla en Settings → API cierra la puerta
+  sin tocar una sola tabla ni arriesgar el POS.
 
-## Lo que no depende de código
-
-**Faltan capturar las compras reales de diez insumos.** La lista está en
-BASELINE-COSTEO.md. Ningún cambio de código arregla esto: son capturas que hace
-Andy con los tickets físicos.
-
-Desde P5 **esto bloquea el Estado de Resultados**, no solo el costo: una venta
-sin costo completo no reconoce ingreso. Confirmado en producción — las 8 ventas
-están incompletas. Es a propósito, pero significa que el reporte lo destapan los
-tickets, no un despliegue.
-
-Probado en vivo antes de publicar: capturas la compra que faltaba y la venta
-pasa sola de «Falta costo» a «Reconocido», con su costo en el reporte.
-
-## Decisión abierta
-
-**Los datos de prueba se borraron en LOCAL, no en producción.** Producción
-conserva sus 8 ventas, 10 compras y 2 clientes de prueba, y son justamente los
-que aparecen como incompletos. Si la idea es arrancar limpio y capturar solo
-datos reales, conviene borrarlos también allá; si se borran, el reporte queda
-vacío en vez de mostrar ocho ventas diferidas. No se hizo porque requiere la
-cadena de conexión, que la maneja Rubén.
-
-Al borrar, cuidado con una trampa: `Movimiento.venta` es CASCADE pero
-`Movimiento.asiento_flujo` y `asiento_reconocimiento` son **SET_NULL**. Borrar
-una venta se lleva su movimiento y deja **vivo su asiento contable**, así que
-los reportes seguirían mostrando ingresos e inventario de transacciones que ya
-no existen. Hay que barrer los asientos automáticos que no referencie ningún
-movimiento vivo.
-
-## Anotado y no atendido
-
-De la revisión adversarial de P3, tres asuntos que no corrompen datos:
-
-- Editar una compra ya consumida no reajusta su capa ni recuesta.
-- El recosteo masivo corre dentro del request; con muchas ventas y una factura
-  retroactiva puede tardar.
-- Residuo de un centavo cuando muchas ventas cruzan las mismas capas.
-
-De interfaz en el mostrador quedaban dos. **Las tablas ya se resolvieron**: el
-libro de movimientos y el flujo mensual viven en un contenedor
-`overflow-x:auto` con `min-width:max-content`. El detalle que costó encontrar es
-que envolverlas no basta —con `width:100%` la tabla se encoge al contenedor y su
-contenido se desborda de su propia caja, así que ni desplazándose hasta el final
-se alcanza la última columna—; hace falta el `max-content`, que además no hay
-que recordar subir cada vez que se agregue una columna.
-
-Sigue abierto **el menú, que ocupa casi toda la pantalla del celular**: medido en
-375×812 se lleva ~780px antes de que empiece el contenido. Está en la plantilla
-base y lo comparten todas las pantallas, así que arreglarlo es una decisión de
-diseño, no un ajuste suelto.
-
-**44 hallazgos de una auditoría previa** siguen sin atender. Se cerró el
-desbordamiento de `CharField` en lealtad; siguen abiertos el `select_for_update`
-con join nullable, el posible deadlock entre `canjear()` y `expirar_puntos()`, y
-las consultas N+1 de los paneles.
+Y lo que no es código: **los tickets de las diez compras que faltan**. Son los
+que destapan el Estado de Resultados, y ningún despliegue los sustituye.

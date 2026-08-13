@@ -18,10 +18,10 @@ P0–P6). Producción corre `main` y tiene aplicadas todas las migraciones hasta
 
 **La alarma de margen se publicó el 13 de agosto** (PR #2, `inventario.0010`).
 
-**Seis pasos más esperan en la rama `pdf-de-la-nota`**: P7, P9, P10, la gráfica
-de qué se vende más, el enlace del libro a la nota, y la nota con hitos y PDF.
-Agregan `lealtad.0003`, que **crea** dos columnas que el código nuevo lee: por
-la regla de abajo, **migrar primero y desplegar después**.
+**El 13 de agosto se publicó todo lo demás**: los seis pasos del PR #3 (P7, P9,
+P10, la gráfica de qué se vende más, el enlace del libro a la nota, y la nota
+con hitos y PDF) y **P11 en dos tandas** (PR #4 y #5). Con eso el plan de
+costeo queda cerrado.
 
 | Pieza | Dónde |
 |---|---|
@@ -162,6 +162,16 @@ DATABASE_URL='<session pooler :5432>' python manage.py migrate
 - *No toca datos*: el orden da igual. Es el caso de `contabilidad.0008`, que
   solo congela la columna `facturado` como reliquia. Aun así conviene correrla
   con el despliegue para que el modelo y la base no queden desfasados.
+
+**Cuando ningún orden funciona, hay que partir el cambio.** P11 borraba
+`Movimiento.facturado`, que era NOT NULL y sin default en la base: migrando
+primero, el código viejo la seguía mandando y tronaba con «column does not
+exist»; desplegando primero, el nuevo la omitía y tronaba con «null value
+violates not-null constraint». La caja se caía en los dos órdenes. Se resolvió
+en dos tandas —primero quitarle el NOT NULL, desplegar, y hasta entonces
+borrarla— **y cada tanda en su propia rama**, porque `manage.py migrate` aplica
+todo lo pendiente: si las dos hubieran vivido juntas, la línea de siempre las
+habría corrido de un golpe.
 
 **Cuando las dos reglas se contradicen, gana la que se pueda cumplir.** Las
 migraciones de una app son una historia lineal: no se puede aplicar la 0009 sin
