@@ -451,6 +451,48 @@ class CortesiasEnLosAgregadosTests(TestCase):
         self.assertEqual(RecetaAdmin(Receta, None).vendidos_col(limpia), 0)
 
 
+class CostoUltimaCompraTests(TestCase):
+    """Junto al aproximado del catálogo, lo que costaría a precios reales."""
+
+    def setUp(self):
+        self.leche = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("30.00"))
+        self.cacao = Ingrediente.objects.create(
+            nombre="Cacao", unidad_compra="kg", cantidad_por_unidad=1000,
+            unidad_receta="g", costo_unidad_compra=Decimal("400.00"))
+        self.rec = Receta.objects.create(
+            nombre="Shake", precio_venta=Decimal("100.00"))
+        RecetaIngrediente.objects.create(
+            receta=self.rec, ingrediente=self.leche, cantidad=200)
+        RecetaIngrediente.objects.create(
+            receta=self.rec, ingrediente=self.cacao, cantidad=50)
+
+    def test_usa_el_precio_de_la_compra_mas_reciente(self):
+        Compra.objects.create(fecha=date(2026, 7, 1), ingrediente=self.leche,
+                              cantidad=Decimal("1"), monto_total=Decimal("30"))
+        Compra.objects.create(fecha=date(2026, 8, 1), ingrediente=self.leche,
+                              cantidad=Decimal("1"), monto_total=Decimal("50"))
+        Compra.objects.create(fecha=date(2026, 8, 1), ingrediente=self.cacao,
+                              cantidad=Decimal("1"), monto_total=Decimal("600"))
+
+        # 200 ml × 0.05 + 50 g × 0.60 = 10 + 30
+        self.assertEqual(self.rec.costo_ultima_compra, Decimal("40.00"))
+        # El catálogo sigue diciendo lo suyo: 200×0.03 + 50×0.40 = 26
+        self.assertEqual(self.rec.costo_receta, Decimal("26.00"))
+
+    def test_si_falta_una_compra_no_se_mezcla_con_el_catalogo(self):
+        """Media receta a precios reales y la otra media a catálogo no es
+        ninguna de las dos cosas."""
+        Compra.objects.create(fecha=date(2026, 8, 1), ingrediente=self.leche,
+                              cantidad=Decimal("1"), monto_total=Decimal("50"))
+
+        self.assertIsNone(self.rec.costo_ultima_compra)
+
+    def test_un_ingrediente_sin_compras_no_inventa_precio(self):
+        self.assertIsNone(self.leche.costo_unidad_ultima_compra)
+
+
 class RepartoDeVentasTests(TestCase):
     """La gráfica de qué se vende más reparte lo COBRADO."""
 

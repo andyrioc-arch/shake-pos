@@ -296,6 +296,34 @@ def _saldo(cuenta, debe, haber):
     return (debe - haber) if cuenta.es_deudora else (haber - debe)
 
 
+def salud_del_costeo(anio=None, mes=None):
+    """Tres cifras que deben valer cero. Si alguna no vale cero, dice por qué.
+
+    Son los tres síntomas de que el costeo se rompió, y ninguno se nota
+    mirando los reportes: la balanza cuadra igual con ventas sin costear, y el
+    balance se declara correcto con el inventario en negativo, porque solo
+    verifica que las sumas coincidan y no que los signos tengan sentido.
+    """
+    from inventario.models import Venta
+
+    _, fin = _rango_mes(anio, mes)
+    ventas = Venta.objects.filter(fecha__lte=fin)
+
+    cuenta = Cuenta.objects.filter(codigo=CTA_INVENTARIO).first()
+    debe, haber = _agg(hasta=fin).get(
+        cuenta.id if cuenta else None, (Decimal("0"), Decimal("0")))
+    saldo = debe - haber            # 115 es deudora: negativo = acreedor
+
+    return {
+        "sin_costear": ventas.filter(costo_fifo__isnull=True).count(),
+        "incompletas": ventas.filter(costo_incompleto=True).count(),
+        # Se publica solo lo que sobra del lado acreedor, no el saldo: un
+        # inventario sano da cero aquí, y cualquier otra cosa es el bug.
+        "saldo_acreedor": -saldo if saldo < 0 else Decimal("0"),
+        "saldo_inventario": saldo,
+    }
+
+
 def periodos_disponibles():
     """Lista de (anio, mes) con actividad contable, más reciente primero."""
     vistos = set()

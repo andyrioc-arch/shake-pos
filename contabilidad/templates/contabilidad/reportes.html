@@ -52,6 +52,10 @@
      sobre blanco; el azul de marca se queda en 2.95:1. */
   a.ver-nota { color:#0d6ecd; text-decoration:underline; text-underline-offset:2px; }
   a.ver-nota:hover { color:#000; }
+  /* Los contadores de salud: el color acompaña, la palabra «Debe valer 0»
+     al lado es la que carga el significado. */
+  td.bien { color:#0d6ecd; font-weight:700; }
+  td.mal { color:#c0186a; font-weight:800; }
 </style>
 
 <div class="ct-wrap">
@@ -92,6 +96,47 @@
     <p style="font-size:12px;color:#777;padding:4px 16px 10px;">
       Sueldos, renta, marketing, servicios… Entran al libro y al Estado de
       Resultados como gasto operativo del mes en que se registran.
+    </p>
+  </div>
+
+  <!-- ── SALUD DEL COSTEO ─────────────────────────────────────────────── -->
+  <div class="blk">
+    <h2>
+      🩺 Salud del costeo
+      {% if salud.sin_costear or salud.incompletas or salud.saldo_acreedor %}
+        <span class="cuadra no">Revisar</span>
+      {% else %}
+        <span class="cuadra si">Sano</span>
+      {% endif %}
+    </h2>
+    <table class="t">
+      <thead><tr>
+        <th class="l">Qué se mide</th><th>Valor</th><th class="l">Debe valer</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td class="l">Ventas sin costear</td>
+          <td class="{% if salud.sin_costear %}mal{% else %}bien{% endif %}">{{ salud.sin_costear }}</td>
+          <td class="l">0 — si no, corre <code>recostear --todo</code></td>
+        </tr>
+        <tr>
+          <td class="l">Ventas con costo incompleto</td>
+          <td class="{% if salud.incompletas %}mal{% else %}bien{% endif %}">{{ salud.incompletas }}</td>
+          <td class="l">0 — faltan compras que respalden lo que consumieron</td>
+        </tr>
+        <tr>
+          <td class="l">Saldo acreedor en 115 Inventario</td>
+          <td class="{% if salud.saldo_acreedor %}mal{% else %}bien{% endif %}">${{ salud.saldo_acreedor|floatformat:2|intcomma }}</td>
+          <td class="l">0 — un activo en negativo es inventario que nunca entró</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="font-size:12px;color:#6b6b6b;padding:8px 16px;">
+      Los tres valen cero cuando el costeo está sano, y ninguno se nota mirando
+      los reportes: la balanza cuadra igual con ventas sin costear, y el balance
+      se declara correcto con el inventario en negativo, porque solo verifica
+      que las sumas coincidan y no que los signos tengan sentido.
+      Saldo actual de la 115: ${{ salud.saldo_inventario|floatformat:2|intcomma }}.
     </p>
   </div>
 

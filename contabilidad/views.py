@@ -73,6 +73,7 @@ def reportes(request):
         "resultados": posting.estado_resultados(anio, mes),
         "balance": posting.balance_general(anio, mes),
         "flujo": posting.flujo_efectivo(anio, mes),
+        "salud": posting.salud_del_costeo(anio, mes),
         "categorias_gasto": CategoriaGasto.objects.filter(activo=True),
         "hoy": localdate().isoformat(),
     }

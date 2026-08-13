@@ -61,10 +61,25 @@ class Ingrediente(models.Model):
 
     @property
     def costo_unidad_receta(self):
-        """Costo de UNA unidad de receta (g, ml o pieza)."""
+        """Costo de UNA unidad de receta (g, ml o pieza), según el catálogo.
+
+        Es un aproximado: lo que alguien tecleó como precio de referencia. Lo
+        que de verdad se pagó vive en las compras, y `costo_unidad_ultima_compra`
+        lo dice.
+        """
         if self.cantidad_por_unidad:
             return self.costo_unidad_compra / self.cantidad_por_unidad
         return Decimal("0")
+
+    @property
+    def costo_unidad_ultima_compra(self):
+        """Lo que costó una unidad de receta la última vez que se compró.
+
+        `None` si nunca se ha comprado: no se inventa un precio, igual que el
+        costeo no inventa un costo cuando le faltan capas.
+        """
+        ultima = self.compras.order_by("-fecha", "-id").first()
+        return ultima.costo_unitario_capa if ultima else None
 
     @property
     def total_comprado(self):
@@ -183,6 +198,25 @@ class Receta(models.Model):
         total = Decimal("0")
         for item in items:
             total += item.costo_linea
+        return total
+
+    @property
+    def costo_ultima_compra(self):
+        """Lo que costaría esta receta a los precios realmente pagados.
+
+        `None` si a algún ingrediente le falta su primera compra: media receta
+        valuada con precios reales y la otra media con el catálogo es un número
+        que no es ninguna de las dos cosas.
+        """
+        items = self.ingredientes.all()
+        if "ingredientes" not in getattr(self, "_prefetched_objects_cache", {}):
+            items = items.select_related("ingrediente")
+        total = Decimal("0")
+        for item in items:
+            unitario = item.ingrediente.costo_unidad_ultima_compra
+            if unitario is None:
+                return None
+            total += item.cantidad * unitario
         return total
 
     @property
