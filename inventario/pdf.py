@@ -13,19 +13,29 @@ from reportlab.pdfgen import canvas as rl_canvas
 
 ANCHO = 80 * mm                 # ticket de mostrador
 MARGEN = 7 * mm
-UTIL = ANCHO - 2 * MARGEN
 
 # Alturas de cada bloque. Se suman antes de dibujar porque la hoja se crea con
 # su tamaño final: un PDF de alto fijo deja media página en blanco o corta.
+#
+# Cada constante se arma de los pasos que el dibujo va a dar, no de un número
+# redondo aparte: reserva y dibujo tienen que coincidir, y dos listas de
+# medidas mantenidas a mano divergen a la primera columna nueva.
 ALTO_CABEZA = 26 * mm
 ALTO_META = 9 * mm
 ALTO_LINEA = 6 * mm
 ALTO_DETALLE = 4 * mm
-ALTO_TOTALES = 20 * mm
 ALTO_PAGO = 7 * mm
 ALTO_HITO = 6 * mm
-ALTO_LEALTAD = 16 * mm
-ALTO_QR = 40 * mm
+
+PASO_SUBTOTAL = 5 * mm
+PASO_IVA = 4 * mm
+PASO_TOTAL = 6 * mm
+ALTO_TOTALES = 2 * mm + PASO_SUBTOTAL + PASO_IVA + PASO_TOTAL + 5 * mm
+
+ALTO_LEALTAD = 2 * mm + 5 * mm + 11 * mm
+
+LADO_QR = 32 * mm
+ALTO_QR = LADO_QR + 8 * mm
 ALTO_PIE = 12 * mm
 
 
@@ -112,9 +122,8 @@ def nota_pdf(nota, lineas, url, lealtad=None):
     c.drawString(MARGEN, y, f"Nota {nota.folio}")
     c.setFont("Helvetica", 8)
     c.drawRightString(ANCHO - MARGEN, y, nota.creada.strftime("%d/%m/%Y %H:%M"))
-    y -= 4 * mm
-    c.line(MARGEN, y, ANCHO - MARGEN, y)
-    y -= ALTO_META - 4 * mm
+    c.line(MARGEN, y - 4 * mm, ANCHO - MARGEN, y - 4 * mm)
+    y -= ALTO_META
 
     # ── Productos ─────────────────────────────────────────────────────────
     for linea in lineas:
@@ -133,18 +142,18 @@ def nota_pdf(nota, lineas, url, lealtad=None):
     # ── Totales ───────────────────────────────────────────────────────────
     y -= 2 * mm
     c.line(MARGEN, y, ANCHO - MARGEN, y)
-    y -= 5 * mm
+    y -= PASO_SUBTOTAL
     c.setFont("Helvetica", 8)
     c.drawString(MARGEN, y, "Subtotal")
     c.drawRightString(ANCHO - MARGEN, y, _dinero(nota.subtotal))
-    y -= 4 * mm
+    y -= PASO_IVA
     c.drawString(MARGEN, y, "IVA (16%)")
     c.drawRightString(ANCHO - MARGEN, y, _dinero(nota.iva))
-    y -= 6 * mm
+    y -= PASO_TOTAL
     c.setFont("Helvetica-Bold", 13)
     c.drawString(MARGEN, y, "Total")
     c.drawRightString(ANCHO - MARGEN, y, _dinero(nota.total))
-    y -= ALTO_TOTALES - 15 * mm
+    y -= 5 * mm
 
     if pago:
         c.setFont("Helvetica", 8)
@@ -160,16 +169,15 @@ def nota_pdf(nota, lineas, url, lealtad=None):
         y -= 5 * mm
         c.setFont("Helvetica", 8)
         c.drawCentredString(ANCHO / 2, y, _limpio(lealtad["saldo"]))
-        y -= ALTO_LEALTAD - 5 * mm
+        y -= 11 * mm
         for hito in lealtad.get("hitos", []):
             c.setFont("Helvetica-Bold", 8)
             c.drawCentredString(ANCHO / 2, y, _limpio(hito))
             y -= ALTO_HITO
 
     # ── QR ────────────────────────────────────────────────────────────────
-    lado = 32 * mm
-    _dibuja_qr(c, url, ANCHO / 2, y, lado)
-    y -= lado + 4 * mm
+    _dibuja_qr(c, url, ANCHO / 2, y, LADO_QR)
+    y -= LADO_QR + 4 * mm
     c.setFont("Helvetica", 7)
     c.drawCentredString(ANCHO / 2, y, "Escanea para ver tu nota en linea")
 

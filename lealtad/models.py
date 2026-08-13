@@ -413,8 +413,24 @@ class Premio(models.Model):
         return Decimal("0")
 
     @property
+    def consume_inventario(self):
+        """¿Entregarlo saca algo del almacén?
+
+        Un descuento no: cuesta ingreso no percibido. Un producto o un combo
+        sí, y por eso al entregarse crean una cortesía. La clasificación vive
+        aquí, en una sola línea, porque antes estaba escrita a mano en el
+        servicio y en la vista de premios, y las dos listas ya no coincidían.
+        """
+        return self.tipo in (self.Tipo.PRODUCTO, self.Tipo.COMBO)
+
+    @property
     def costo_estimado(self):
-        """Lo que de verdad te cuesta entregarlo."""
+        """Lo que de verdad te cuesta entregarlo.
+
+        Ojo con unificar esta condición con `consume_inventario`: no son la
+        misma pregunta. Un premio LIBRE no saca nada del almacén, pero aquí
+        cae al ramo de la receta, y cambiarlo movería un número publicado.
+        """
         if self.tipo in (self.Tipo.DESCUENTO_PCT, self.Tipo.DESCUENTO_MONTO):
             # Un descuento no consume insumos extra: cuesta ingreso no percibido.
             return self.valor_percibido
@@ -476,6 +492,11 @@ class Compra(models.Model):
     origen = models.CharField(max_length=10, choices=Origen.choices,
                               default=Origen.CAJA)
     creada = models.DateTimeField(auto_now_add=True)
+    nivel_alcanzado = models.ForeignKey(
+        "Nivel", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="compras_que_lo_desbloquearon",
+        help_text="El nivel que esta compra desbloqueó, si desbloqueó alguno. "
+                  "Se escribe al registrarla, cuando el dato se conoce.")
 
     class Meta:
         verbose_name = "Compra del programa"
@@ -489,34 +510,6 @@ class Compra(models.Model):
 
     def __str__(self):
         return f"{self.fecha} · {self.cliente.telefono_display} · ${self.monto:,.2f}"
-
-    @property
-    def nivel_alcanzado(self):
-        """El nivel que ESTA compra desbloqueó, o `None` si no subió ninguno.
-
-        Solo se pronuncia sobre la última compra del cliente. `puntos_historicos`
-        es un acumulado: en una nota que se abre un mes después ya incluye todo
-        lo que vino encima, y restarle solo esta compra contestaría otra
-        pregunta. Callar es preferible a felicitar por un nivel que se alcanzó
-        tres compras más tarde.
-        """
-        if not self.puntos_ganados:
-            return None
-        ultima = self.cliente.compras.first()      # ordering: -fecha, -id
-        if not ultima or ultima.pk != self.pk:
-            return None
-
-        ahora = self.cliente.nivel
-        if ahora is None:
-            return None
-        antes = (Nivel.objects
-                 .filter(activo=True,
-                         puntos_requeridos__lte=(self.cliente.puntos_historicos
-                                                 - self.puntos_ganados))
-                 .order_by("-puntos_requeridos").first())
-        if antes and antes.pk == ahora.pk:
-            return None
-        return ahora
 
 
 class MovimientoPuntos(models.Model):
@@ -605,11 +598,6 @@ class Canje(models.Model):
         related_name="canje",
         help_text="La cortesía que sacó el premio del inventario. Solo para "
                   "premios de producto o combo.")
-    costo_real = models.DecimalField(
-        "Costo real ($)", max_digits=12, decimal_places=2,
-        null=True, blank=True,
-        help_text="Lo que costó entregarlo, por FIFO. Vacío = no se ha "
-                  "entregado, o el premio no consume inventario.")
 
     class Meta:
         verbose_name = "Canje de premio"
@@ -625,13 +613,20 @@ class Canje(models.Model):
 
     @property
     def costo(self):
-        """Lo que costó entregarlo: el real si se sabe, el estimado si no.
+        """Lo que costó entregarlo.
 
-        Un descuento nunca tiene costo real —no consume insumos, cuesta
-        ingreso no percibido— así que ahí el estimado no es un respaldo, es
-        la respuesta.
+        Se lee de la cortesía, no se copia: `costo_fifo` no es un valor
+        congelado —el costeo lo rehace cada vez que se captura una compra
+        vieja— así que una copia aquí se quedaría con el número de la primera
+        vez y nadie la repararía. `Venta.costo_de_ventas` ya decide entre el
+        real y el estimado con la misma regla que usan los paneles.
+
+        Un descuento no tiene cortesía: no consume insumos, cuesta ingreso no
+        percibido, y ahí el estimado no es un respaldo sino la respuesta.
         """
-        return self.costo_real if self.costo_real is not None else self.costo_estimado
+        if self.venta_id:
+            return self.venta.costo_de_ventas
+        return self.costo_estimado
 
 
 # ══════════════════════════════════════════════════════════════════════════════

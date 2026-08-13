@@ -440,15 +440,23 @@ class CortesiasEnLosAgregadosTests(TestCase):
         self.assertIn("Regalados", html)
 
     def test_el_admin_desglosa_la_cortesia(self):
-        from inventario.admin import RecetaAdmin
-        col = RecetaAdmin(Receta, None).vendidos_col(self.rec)
-        self.assertEqual(col, "3 (1 de cortesía)")
+        from django.contrib.auth.models import User
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+        resp = self.client.get("/admin/inventario/receta/")
+
+        self.assertContains(resp, "3 (1 de cortesía)")
 
     def test_sin_cortesias_el_admin_no_agrega_ruido(self):
-        from inventario.admin import RecetaAdmin
-        limpia = Receta.objects.create(
-            nombre="Otro", precio_venta=Decimal("90.00"))
-        self.assertEqual(RecetaAdmin(Receta, None).vendidos_col(limpia), 0)
+        from django.contrib.auth.models import User
+        Receta.objects.create(nombre="Otro", precio_venta=Decimal("90.00"))
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+        resp = self.client.get("/admin/inventario/receta/")
+
+        self.assertNotContains(resp, "0 (0 de cortesía)")
 
 
 class NotaPdfTests(TestCase):
@@ -537,7 +545,7 @@ class CostoUltimaCompraTests(TestCase):
                               cantidad=Decimal("1"), monto_total=Decimal("600"))
 
         # 200 ml × 0.05 + 50 g × 0.60 = 10 + 30
-        self.assertEqual(self.rec.costo_ultima_compra, Decimal("40.00"))
+        self.assertEqual(self.rec.costo_ultima_compra(), Decimal("40.00"))
         # El catálogo sigue diciendo lo suyo: 200×0.03 + 50×0.40 = 26
         self.assertEqual(self.rec.costo_receta, Decimal("26.00"))
 
@@ -547,7 +555,7 @@ class CostoUltimaCompraTests(TestCase):
         Compra.objects.create(fecha=date(2026, 8, 1), ingrediente=self.leche,
                               cantidad=Decimal("1"), monto_total=Decimal("50"))
 
-        self.assertIsNone(self.rec.costo_ultima_compra)
+        self.assertIsNone(self.rec.costo_ultima_compra())
 
     def test_un_ingrediente_sin_compras_no_inventa_precio(self):
         self.assertIsNone(self.leche.costo_unidad_ultima_compra)

@@ -297,28 +297,42 @@ def _saldo(cuenta, debe, haber):
 
 
 def salud_del_costeo(anio=None, mes=None):
-    """Tres cifras que deben valer cero. Si alguna no vale cero, dice por qué.
+    """Los síntomas de que el costeo se rompió, más el saldo de la 115.
 
-    Son los tres síntomas de que el costeo se rompió, y ninguno se nota
-    mirando los reportes: la balanza cuadra igual con ventas sin costear, y el
-    balance se declara correcto con el inventario en negativo, porque solo
-    verifica que las sumas coincidan y no que los signos tengan sentido.
+    Quien sabe medir el costeo es el costeo: `inventario.costeo.diagnostico()`
+    ya cuenta estas cifras y su docstring dice que la usan el comando y el
+    panel. Reimplementarlas aquí dejaría dos definiciones de «sano» que hay
+    que mantener iguales a mano, y la pantalla acabaría diciendo verde
+    mientras `recostear --verificar` dice otra cosa.
+
+    Ninguno de estos números se nota mirando los reportes: la balanza cuadra
+    igual con ventas sin costear, y el balance se declara correcto con el
+    inventario en negativo, porque solo verifica que las sumas coincidan y no
+    que los signos tengan sentido.
     """
-    from inventario.models import Venta
+    from inventario import costeo
 
     _, fin = _rango_mes(anio, mes)
-    ventas = Venta.objects.filter(fecha__lte=fin)
+    diag = costeo.diagnostico()
 
-    cuenta = Cuenta.objects.filter(codigo=CTA_INVENTARIO).first()
-    debe, haber = _agg(hasta=fin).get(
-        cuenta.id if cuenta else None, (Decimal("0"), Decimal("0")))
-    saldo = debe - haber            # 115 es deudora: negativo = acreedor
+    # El saldo de la 115 sí es cosa de contabilidad, y se pide directo en vez
+    # de agrupar toda la tabla de movimientos para leer una sola cuenta.
+    agg = (MovimientoContable.objects
+           .filter(cuenta__codigo=CTA_INVENTARIO, asiento__fecha__lte=fin)
+           .aggregate(d=Sum("debe"), h=Sum("haber")))
+    saldo = (agg["d"] or Decimal("0")) - (agg["h"] or Decimal("0"))
 
     return {
-        "sin_costear": ventas.filter(costo_fifo__isnull=True).count(),
-        "incompletas": ventas.filter(costo_incompleto=True).count(),
-        # Se publica solo lo que sobra del lado acreedor, no el saldo: un
-        # inventario sano da cero aquí, y cualquier otra cosa es el bug.
+        "sin_costear": diag["sin_costear"],
+        "incompletas": diag["incompletas"],
+        # Capas que nacieron sin saldo: el FIFO no las ve y quedarían
+        # invisibles para siempre si nadie las reabre.
+        "capas_sin_abrir": diag["capas_sin_abrir"],
+        # Consumo que ninguna compra respaldó. Es la medida de cuánto del
+        # costo se está dejando de reconocer.
+        "faltante_sin_capa": diag["faltante_sin_capa"],
+        # Se publica lo que sobra del lado acreedor, no el saldo: un inventario
+        # sano da cero aquí, y cualquier otra cosa es el bug.
         "saldo_acreedor": -saldo if saldo < 0 else Decimal("0"),
         "saldo_inventario": saldo,
     }

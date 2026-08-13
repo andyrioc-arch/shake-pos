@@ -1029,7 +1029,7 @@ class CanjeConsumeInventarioTests(TestCase):
 
         self.assertIsNotNone(canje.venta)
         self.assertTrue(canje.venta.es_cortesia)
-        self.assertEqual(canje.costo_real, Decimal("6.00"))    # 200 ml × 0.03
+        self.assertEqual(canje.costo, Decimal("6.00"))    # 200 ml × 0.03
         self.assertEqual(self.ing.stock_disponible, antes - 200)
 
     def test_el_costo_del_premio_entra_a_mercadotecnia_y_no_a_costo_de_ventas(self):
@@ -1069,7 +1069,6 @@ class CanjeConsumeInventarioTests(TestCase):
         canje = servicios.entregar_canje(self._canjear(premio))
 
         self.assertIsNone(canje.venta)
-        self.assertIsNone(canje.costo_real)
         self.assertEqual(self.ing.stock_disponible, antes)
         # Su costo sigue siendo ingreso no percibido, no insumo.
         self.assertEqual(canje.costo, premio.costo_estimado)
@@ -1094,9 +1093,9 @@ class CanjeConsumeInventarioTests(TestCase):
 
         canje = servicios.entregar_canje(self._canjear(premio))
 
+        # `costo_de_ventas` de la cortesía cae al estimado del catálogo cuando
+        # el costo no está completo: 50 g × 0.40. Nunca al cero del FIFO.
         self.assertTrue(canje.venta.costo_incompleto)
-        self.assertIsNone(canje.costo_real)
-        self.assertEqual(canje.costo, premio.costo_estimado)   # 50 g × 0.40
         self.assertEqual(canje.costo, Decimal("20.00"))
 
     def test_las_metricas_leen_el_costo_real_cuando_existe(self):
@@ -1106,9 +1105,9 @@ class CanjeConsumeInventarioTests(TestCase):
         servicios.entregar_canje(self._canjear(premio))
 
         canje = Canje.objects.get()
-        # El catálogo dice 6.00 y el FIFO también aquí, pero la propiedad que
-        # leen las métricas ya es la del dato guardado, no la del estimado.
-        self.assertEqual(canje.costo, canje.costo_real)
+        # Se lee de la cortesía, no de una copia: cuando el costeo rehaga el
+        # FIFO —al capturar una compra vieja— este número se mueve con él.
+        self.assertEqual(canje.costo, canje.venta.costo_de_ventas)
 
 
 class NotaAnunciaHitosTests(TestCase):
@@ -1146,12 +1145,37 @@ class NotaAnunciaHitosTests(TestCase):
                                "Subiste a")
 
     def test_una_nota_vieja_no_felicita_por_un_nivel_posterior(self):
-        """`puntos_historicos` acumula: sin este cuidado, la primera nota
-        anunciaría el nivel que se alcanzó tres compras más tarde."""
+        """El hito se guarda al registrar la compra, así que cada nota dice lo
+        que pasó en ELLA. La primera no cruzó a Oro; la segunda sí."""
         primera = self._nota("30")     # 3 puntos, todavía sin nivel
-        self._nota("130")              # aquí sí cruza a Oro
+        segunda = self._nota("130")    # aquí sí cruza a Oro
 
         self.assertNotContains(self.client.get(primera.get_absolute_url()),
+                               "Subiste a")
+        self.assertContains(self.client.get(segunda.get_absolute_url()),
+                            "Subiste a Oro")
+
+    def test_el_hito_sigue_ahi_cuando_el_cliente_vuelve_a_comprar(self):
+        """La nota es un documento: lo que anunció el día que se entregó no
+        puede desaparecer después, y menos ahora que el cliente se la guarda
+        en PDF."""
+        nota = self._nota()            # cruza a Oro
+        self._nota()
+        self._nota()
+
+        self.assertContains(self.client.get(nota.get_absolute_url()),
+                            "Subiste a Oro")
+
+    def test_un_ajuste_de_puntos_no_se_le_acredita_a_una_compra(self):
+        """`puntos_historicos` también sube con `ajustar_puntos`, que no crea
+        una compra. Deducir el nivel restando los puntos de la compra le
+        colgaba a esa nota un ascenso que desbloqueó el ajuste."""
+        nota = self._nota("30")        # 3 puntos: no alcanza los 10 de Oro
+        servicios.ajustar_puntos(self.cliente, 8, "Cortesía del mostrador")
+        self.cliente.refresh_from_db()
+
+        self.assertEqual(self.cliente.nivel, self.oro)
+        self.assertNotContains(self.client.get(nota.get_absolute_url()),
                                "Subiste a")
 
     def test_anuncia_el_premio_ganado_aunque_falte_para_el_siguiente(self):

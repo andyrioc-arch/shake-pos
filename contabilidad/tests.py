@@ -363,13 +363,9 @@ class ReportesViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
 
 
-class SaludDelCosteoTests(TestCase):
-    """Tres cifras que valen cero cuando el costeo está sano.
-
-    Ninguna se nota mirando los reportes: la balanza cuadra igual con ventas
-    sin costear, y el balance se declara correcto con el inventario en
-    negativo, porque solo verifica que las sumas coincidan.
-    """
+class _PanelBase(TestCase):
+    """Un shake de 200 ml a $100, con Andy dentro. Lo comparten las pruebas
+    que miran la pantalla de contabilidad."""
 
     def setUp(self):
         from django.contrib.auth.models import User
@@ -384,6 +380,15 @@ class SaludDelCosteoTests(TestCase):
             nombre="Shake", precio_venta=Decimal("100.00"))
         RecetaIngrediente.objects.create(
             receta=self.rec, ingrediente=self.ing, cantidad=200)
+
+
+class SaludDelCosteoTests(_PanelBase):
+    """Tres cifras que valen cero cuando el costeo está sano.
+
+    Ninguna se nota mirando los reportes: la balanza cuadra igual con ventas
+    sin costear, y el balance se declara correcto con el inventario en
+    negativo, porque solo verifica que las sumas coincidan.
+    """
 
     def test_un_ciclo_normal_sale_en_cero(self):
         from inventario.models import Compra, Venta
@@ -428,22 +433,8 @@ class SaludDelCosteoTests(TestCase):
             self.client.get("/contabilidad/?anio=2026&mes=8"), "Sano")
 
 
-class LibroEnlazaALaNotaTests(TestCase):
+class LibroEnlazaALaNotaTests(_PanelBase):
     """El libro dice cuánto entró; la nota dice qué se llevó el cliente."""
-
-    def setUp(self):
-        from django.contrib.auth.models import User
-        from inventario.models import Ingrediente, Receta, RecetaIngrediente
-        posting.crear_catalogo()
-        User.objects.create_superuser("andy", "a@a.com", "pass")
-        self.client.login(username="andy", password="pass")
-        self.ing = Ingrediente.objects.create(
-            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
-            unidad_receta="ml", costo_unidad_compra=Decimal("30.00"))
-        self.rec = Receta.objects.create(
-            nombre="Shake", precio_venta=Decimal("100.00"))
-        RecetaIngrediente.objects.create(
-            receta=self.rec, ingrediente=self.ing, cantidad=200)
 
     def test_la_venta_con_nota_enlaza_a_su_nota(self):
         from inventario.models import Nota, Venta

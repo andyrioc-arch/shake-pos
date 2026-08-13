@@ -384,10 +384,9 @@ def premio_guardar(request):
     premio.activo = bool(request.POST.get("activo"))
 
     # Un premio de producto sin receta no se puede entregar: no hay de dónde
-    # descontar el inventario. Se atrapa aquí y no solo en `Premio.clean()`,
-    # que no corre al guardar desde este formulario, para que el problema
-    # aparezca al configurarlo y no en el mostrador con el cliente enfrente.
-    if premio.tipo in servicios.TIPOS_QUE_CONSUMEN and not premio.receta_id:
+    # descontar el inventario. Se atrapa al configurarlo y no en el mostrador
+    # con el cliente enfrente.
+    if premio.consume_inventario and not premio.receta_id:
         messages.error(
             request,
             f"«{premio.nombre}» entrega un producto, así que necesita una "

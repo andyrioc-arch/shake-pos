@@ -242,6 +242,16 @@ def registrar_compra(cliente, monto, *, nota=None, ticket="", fecha=None,
     _otorgar_puntos(cliente, puntos, compra=compra, descripcion=detalle, cfg=cfg)
     recalcular(cliente)
 
+    # El nivel que desbloqueó esta compra se guarda aquí, que es el único
+    # momento en que se sabe sin deducirlo: después, `puntos_historicos` ya
+    # acumuló ajustes y compras posteriores. La nota lo lee tal cual, y no
+    # cambia si el cliente vuelve mañana —importa porque ahora esa nota
+    # también es un PDF que el cliente se guardó—.
+    nivel_ahora = cliente.nivel
+    if nivel_ahora and (not nivel_antes or nivel_antes.pk != nivel_ahora.pk):
+        compra.nivel_alcanzado = nivel_ahora
+        compra.save(update_fields=["nivel_alcanzado"])
+
     from . import automatizaciones
     transaction.on_commit(lambda: automatizaciones.tras_compra(
         cliente, compra, era_primera=era_primera, nivel_antes=nivel_antes))
@@ -332,11 +342,6 @@ def canjear(cliente, premio, usuario=None, nota=None):
     return canje
 
 
-#: Premios que salen del inventario al entregarse. Un descuento no: cuesta
-#: ingreso no percibido, no insumo.
-TIPOS_QUE_CONSUMEN = (Premio.Tipo.PRODUCTO, Premio.Tipo.COMBO)
-
-
 @transaction.atomic
 def entregar_canje(canje, usuario=None, nota=None):
     """Entrega el premio. Si es de producto, aquí sale del inventario.
@@ -350,7 +355,7 @@ def entregar_canje(canje, usuario=None, nota=None):
         raise ErrorLealtad(f"Ese canje ya está {canje.get_estado_display().lower()}.")
 
     venta = None
-    if canje.premio.tipo in TIPOS_QUE_CONSUMEN:
+    if canje.premio.consume_inventario:
         if not canje.premio.receta_id:
             # Mensaje y no IntegrityError: `Venta.receta` es obligatoria, y la
             # vista que llama aquí solo atrapa ErrorLealtad. Cualquier otra
@@ -366,9 +371,6 @@ def entregar_canje(canje, usuario=None, nota=None):
             cantidad=canje.premio.cantidad,
             es_cortesia=True,
         )
-        # El costeo corre por señal al crear la venta; se relee para guardar lo
-        # que de verdad costó, que es el dato que P9 viene a producir.
-        venta.refresh_from_db()
 
     canje.estado = Canje.Estado.ENTREGADO
     canje.entregado_en = timezone.now()
@@ -378,14 +380,8 @@ def entregar_canje(canje, usuario=None, nota=None):
         canje.nota = nota
     if venta:
         canje.venta = venta
-        # Solo si el costeo quedó completo. Con capas faltantes el FIFO deja
-        # `costo_fifo = 0.00`, y copiarlo aquí publicaría que regalar shakes
-        # sale gratis justo cuando menos se sabe. Cero no es un valor, es una
-        # ausencia: se deja en NULL y `Canje.costo` cae al estimado.
-        if venta.costo_esta_completo:
-            canje.costo_real = venta.costo_fifo
     canje.save(update_fields=["estado", "entregado_en", "autorizado_por",
-                              "nota", "venta", "costo_real"])
+                              "nota", "venta"])
     return canje
 
 

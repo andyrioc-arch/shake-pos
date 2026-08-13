@@ -108,24 +108,15 @@
       <div class="lealtad-tit">💗 {{ lealtad.cliente.nombre_corto }}, ganaste {{ lealtad.compra.puntos_ganados }} puntos</div>
       <div class="lealtad-saldo">{{ lealtad.cliente.puntos_saldo }} puntos disponibles
         {% if lealtad.cliente.nivel %} · {{ lealtad.cliente.nivel }}{% endif %}</div>
-      {# Las tres cosas pueden pasar en la misma compra, así que ninguna se come
-         a la otra: se puede subir de nivel, ganar un premio y seguir en camino
-         al siguiente. Antes el premio ganado vivía en un `elif` y solo se
-         anunciaba cuando ya no faltaba nada para el siguiente. #}
-      {% if lealtad.nivel_alcanzado %}
-        <div class="lealtad-hito">⭐ ¡Subiste a {{ lealtad.nivel_alcanzado.nombre }}!
-          {% if lealtad.nivel_alcanzado.beneficios %}
-            <span class="lealtad-benef">{{ lealtad.nivel_alcanzado.beneficios }}</span>
+      {# La redacción vive en la vista, no aquí: el PDF muestra los mismos
+         hitos y dos redacciones se separan sin que nada lo note. #}
+      {% for hito in lealtad.hitos %}
+        <div class="lealtad-hito">{{ hito.texto }}
+          {% if hito.detalle %}
+            <span class="lealtad-benef">{{ hito.detalle }}</span>
           {% endif %}
         </div>
-      {% endif %}
-      {% if lealtad.premio_listo %}
-        <div class="lealtad-hito">🎁 ¡Ya puedes canjear {{ lealtad.premio_listo.nombre }}!</div>
-      {% endif %}
-      {% if lealtad.falta %}
-        <div class="lealtad-sig">Te faltan {{ lealtad.falta }} puntos
-          para {{ lealtad.premio.nombre }}</div>
-      {% endif %}
+      {% endfor %}
       <div class="lealtad-qr">{{ lealtad.qr|safe }}</div>
       <p class="lealtad-pie">Escanea para ver tu tarjeta y tus premios</p>
     </div>

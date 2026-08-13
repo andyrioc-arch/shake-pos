@@ -153,12 +153,17 @@ def panel_inventario(request):
     # Se reparte sobre lo COBRADO, no sobre todo lo que salió: un producto no
     # se vende más porque se haya regalado más. Los que no se vendieron no
     # aparecen; una barra en cero no dice nada y empuja al resto hacia abajo.
-    cobradas_total = total_unidades - total_regaladas
-    reparto = sorted(
-        (r for r in recetas if r["cobradas"]),
-        key=lambda r: r["cobradas"], reverse=True)
-    for r in reparto:
-        r["porcentaje"] = Decimal(r["cobradas"]) * 100 / cobradas_total
+    #
+    # Filas propias y no referencias a `recetas`: inyectarles el porcentaje
+    # dejaría la tabla del catálogo con una clave que unas filas tienen y
+    # otras no, según se hayan vendido.
+    total_cobradas = total_unidades - total_regaladas
+    reparto = [
+        {"nombre": r["nombre"], "cobradas": r["cobradas"],
+         "porcentaje": Decimal(r["cobradas"]) * 100 / total_cobradas}
+        for r in sorted(recetas, key=lambda r: r["cobradas"], reverse=True)
+        if r["cobradas"]
+    ]
 
     ctx = {
         "title": "Panel de inventario",
@@ -172,7 +177,7 @@ def panel_inventario(request):
         "num_faltantes": faltantes,
         "recetas": recetas,
         "total_unidades": total_unidades,
-        "total_cobradas": total_unidades - total_regaladas,
+        "total_cobradas": total_cobradas,
         "total_regaladas": total_regaladas,
         "total_ingreso": total_ingreso,
         # Para el formulario de registro (carrito de productos)
@@ -393,19 +398,11 @@ def nota_pdf(request, token):
     lealtad = _lealtad_de_la_nota(nota, request, con_qr=False)
     datos = None
     if lealtad:
-        hitos = []
-        if lealtad["nivel_alcanzado"]:
-            hitos.append(f"Subiste a {lealtad['nivel_alcanzado'].nombre}")
-        if lealtad["premio_listo"]:
-            hitos.append(f"Ya puedes canjear {lealtad['premio_listo'].nombre}")
-        if lealtad["falta"]:
-            hitos.append(f"Te faltan {lealtad['falta']} puntos "
-                         f"para {lealtad['premio'].nombre}")
         datos = {
             "titulo": (f"{lealtad['cliente'].nombre_corto}, ganaste "
                        f"{lealtad['compra'].puntos_ganados} puntos"),
             "saldo": f"{lealtad['cliente'].puntos_saldo} puntos disponibles",
-            "hitos": hitos,
+            "hitos": [h["texto"] for h in lealtad["hitos"]],
         }
 
     pdf = construir_pdf(nota, _lineas_de_la_nota(nota), url, datos)
@@ -427,15 +424,30 @@ def _lealtad_de_la_nota(nota, request, con_qr=True):
         return None
     cliente = compra.cliente
     premio = cliente.siguiente_premio
-    disponibles = cliente.premios_disponibles()
+    falta = (premio.puntos_requeridos - cliente.puntos_saldo) if premio else 0
+    premio_listo = max(cliente.premios_disponibles(),
+                       key=lambda p: p.puntos_requeridos, default=None)
+
+    # Los hitos se redactan UNA vez, aquí. Escritos en la plantilla y otra vez
+    # en Python para el PDF, cambiar una frase deja al PDF diciendo otra cosa
+    # y ningún test lo nota, porque cada uno prueba su propio renderizador.
+    # Las tres cosas pueden pasar en la misma compra, así que ninguna se come
+    # a la otra: se puede subir de nivel, ganar un premio y seguir en camino.
+    hitos = []
+    if compra.nivel_alcanzado:
+        hitos.append({"texto": f"¡Subiste a {compra.nivel_alcanzado.nombre}!",
+                      "detalle": compra.nivel_alcanzado.beneficios})
+    if premio_listo:
+        hitos.append({"texto": f"¡Ya puedes canjear {premio_listo.nombre}!",
+                      "detalle": ""})
+    if falta:
+        hitos.append({"texto": f"Te faltan {falta} puntos para {premio.nombre}",
+                      "detalle": ""})
+
     return {
         "compra": compra,
         "cliente": cliente,
-        "premio": premio,
-        "falta": (premio.puntos_requeridos - cliente.puntos_saldo) if premio else 0,
-        "premio_listo": max(disponibles, key=lambda p: p.puntos_requeridos,
-                            default=None),
-        "nivel_alcanzado": compra.nivel_alcanzado,
+        "hitos": hitos,
         "qr": _qr_svg(request.build_absolute_uri(
             cliente.get_absolute_url())) if con_qr else None,
     }
@@ -533,6 +545,24 @@ def compra_agregar(request):
 solo_super = user_passes_test(lambda u: u.is_superuser, login_url='/')
 
 
+def _costos_de_la_ultima_compra():
+    """{ingrediente_id: costo por unidad de receta} según su compra más nueva.
+
+    Una sola consulta para todo el catálogo. Se recorren las compras ordenadas
+    y se toma la primera de cada ingrediente, en vez de preguntar por
+    ingrediente: eso último cuesta una consulta por ingrediente por receta, y
+    el catálogo tiene treinta ingredientes repartidos en diecinueve recetas.
+
+    El precio unitario se deriva de `costo_unitario_capa` y no se recalcula
+    aquí, para que la regla de qué costó una compra siga viviendo en un solo
+    lugar.
+    """
+    ultimas = {}
+    for compra in Compra.objects.order_by("ingrediente_id", "-fecha", "-id"):
+        ultimas.setdefault(compra.ingrediente_id, compra.costo_unitario_capa)
+    return ultimas
+
+
 def _volver_catalogo(producto_pk=None):
     url = reverse("panel_catalogo")
     if producto_pk:
@@ -545,7 +575,17 @@ def _volver_catalogo(producto_pk=None):
 def panel_catalogo(request):
     """Gestión del catálogo: ingredientes, productos y sus recetas."""
     ingredientes = Ingrediente.objects.all()
-    productos = Receta.objects.all()
+    unitarios = _costos_de_la_ultima_compra()
+    productos = []
+    for r in Receta.objects.prefetch_related("ingredientes__ingrediente"):
+        productos.append({
+            "pk": r.pk, "emoji": r.emoji, "nombre": r.nombre,
+            "precio_venta": r.precio_venta, "activa": r.activa,
+            "costo_receta": r.costo_receta,
+            "ganancia_unitaria": r.ganancia_unitaria,
+            "costo_ultima_compra": r.costo_ultima_compra(unitarios),
+            "num_ingredientes": len(r.ingredientes.all()),
+        })
 
     # Producto seleccionado para editar su receta (?producto=<pk>).
     producto_sel = None
@@ -574,6 +614,8 @@ def panel_catalogo(request):
         "categorias_ing": Ingrediente.Categoria.choices,
         "productos": productos,
         "producto_sel": producto_sel,
+        "costo_sel_ultima_compra": (producto_sel.costo_ultima_compra(unitarios)
+                                    if producto_sel else None),
         "receta_lineas": receta_lineas,
         "ingredientes_libres": ingredientes_libres,
     }

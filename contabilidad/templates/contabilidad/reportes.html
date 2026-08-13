@@ -103,7 +103,7 @@
   <div class="blk">
     <h2>
       🩺 Salud del costeo
-      {% if salud.sin_costear or salud.incompletas or salud.saldo_acreedor %}
+      {% if salud.sin_costear or salud.incompletas or salud.saldo_acreedor or salud.capas_sin_abrir or salud.faltante_sin_capa %}
         <span class="cuadra no">Revisar</span>
       {% else %}
         <span class="cuadra si">Sano</span>
@@ -123,6 +123,16 @@
           <td class="l">Ventas con costo incompleto</td>
           <td class="{% if salud.incompletas %}mal{% else %}bien{% endif %}">{{ salud.incompletas }}</td>
           <td class="l">0 — faltan compras que respalden lo que consumieron</td>
+        </tr>
+        <tr>
+          <td class="l">Capas de compra sin abrir</td>
+          <td class="{% if salud.capas_sin_abrir %}mal{% else %}bien{% endif %}">{{ salud.capas_sin_abrir }}</td>
+          <td class="l">0 — el FIFO no las ve y no se gastarán nunca</td>
+        </tr>
+        <tr>
+          <td class="l">Consumo sin capa que lo respalde</td>
+          <td class="{% if salud.faltante_sin_capa %}mal{% else %}bien{% endif %}">{{ salud.faltante_sin_capa|floatformat:2|intcomma }}</td>
+          <td class="l">0 — es cuánto costo se está dejando de reconocer</td>
         </tr>
         <tr>
           <td class="l">Saldo acreedor en 115 Inventario</td>

@@ -93,7 +93,7 @@
           <td>{% if p.costo_ultima_compra is not None %}${{ p.costo_ultima_compra|floatformat:2|intcomma }}{% else %}<span class="muted" title="A algún ingrediente le falta su primera compra capturada.">—</span>{% endif %}</td>
           <td>${{ p.ganancia_unitaria|floatformat:2|intcomma }}</td>
           <td><span class="badge {% if p.activa %}on{% else %}off{% endif %}">{% if p.activa %}Sí{% else %}No{% endif %}</span></td>
-          <td><a class="btn mini gold" href="?producto={{ p.pk }}">Editar receta ({{ p.ingredientes.count }})</a></td>
+          <td><a class="btn mini gold" href="?producto={{ p.pk }}">Editar receta ({{ p.num_ingredientes }})</a></td>
           <td style="text-align:center;">
             <form method="post" action="{% url 'producto_eliminar' p.pk %}" style="display:inline"
                   onsubmit="return confirm('¿Eliminar producto?');">{% csrf_token %}
@@ -160,8 +160,8 @@
         <tr class="tot">
           <td class="l" colspan="2">A precios de la última compra</td>
           <td colspan="2">
-            {% if producto_sel.costo_ultima_compra is not None %}
-              ${{ producto_sel.costo_ultima_compra|floatformat:2|intcomma }}
+            {% if costo_sel_ultima_compra is not None %}
+              ${{ costo_sel_ultima_compra|floatformat:2|intcomma }}
             {% else %}
               <span class="muted">— falta capturar alguna compra</span>
             {% endif %}

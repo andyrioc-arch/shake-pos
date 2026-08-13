@@ -190,30 +190,37 @@ class Receta(models.Model):
         seis llamadores, y olvidarla en uno no rompe ningún número: solo lo
         vuelve lento, que es lo que nadie nota.
         """
-        items = self.ingredientes.all()
-        precargado = "ingredientes" in getattr(
-            self, "_prefetched_objects_cache", {})
-        if not precargado:
-            items = items.select_related("ingrediente")
-        total = Decimal("0")
-        for item in items:
-            total += item.costo_linea
-        return total
+        return sum((item.costo_linea for item in self._items()), Decimal("0"))
 
-    @property
-    def costo_ultima_compra(self):
+    def _items(self):
+        """Las líneas de la receta, respetando el caché de prefetch si lo hay.
+
+        Vive aparte porque la decisión que explica `costo_receta` la necesitan
+        todos los que recorren ingredientes, y copiarla es cómo se pierde.
+        """
+        items = self.ingredientes.all()
+        if "ingredientes" not in getattr(self, "_prefetched_objects_cache", {}):
+            items = items.select_related("ingrediente")
+        return items
+
+    def costo_ultima_compra(self, unitarios=None):
         """Lo que costaría esta receta a los precios realmente pagados.
 
         `None` si a algún ingrediente le falta su primera compra: media receta
         valuada con precios reales y la otra media con el catálogo es un número
         que no es ninguna de las dos cosas.
+
+        `unitarios` es `{ingrediente_id: costo por unidad de receta}` ya
+        resuelto para todo el catálogo. Es un parámetro y no un detalle interno
+        porque preguntarle a cada ingrediente por su última compra cuesta una
+        consulta por ingrediente por receta, y el catálogo tiene diecinueve.
         """
-        items = self.ingredientes.all()
-        if "ingredientes" not in getattr(self, "_prefetched_objects_cache", {}):
-            items = items.select_related("ingrediente")
         total = Decimal("0")
-        for item in items:
-            unitario = item.ingrediente.costo_unidad_ultima_compra
+        for item in self._items():
+            if unitarios is not None:
+                unitario = unitarios.get(item.ingrediente_id)
+            else:
+                unitario = item.ingrediente.costo_unidad_ultima_compra
             if unitario is None:
                 return None
             total += item.cantidad * unitario
