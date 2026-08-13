@@ -861,10 +861,30 @@ class VistasTests(TestCase):
     def test_guardar_un_premio_desde_el_panel(self):
         self.client.post(reverse("lealtad_premio_guardar"), {
             "nombre": "Bites gratis", "puntos_requeridos": "80",
-            "tipo": Premio.Tipo.PRODUCTO, "cantidad": "1", "valor": "0",
+            "tipo": Premio.Tipo.PRODUCTO, "receta": self.receta.pk,
+            "cantidad": "1", "valor": "0",
             "vigencia_dias": "30", "activo": "1"})
         premio = Premio.objects.get(nombre="Bites gratis")
         self.assertEqual(premio.puntos_requeridos, 80)
+
+    def test_un_premio_de_producto_sin_receta_no_se_guarda(self):
+        """Se atrapa al configurarlo, no en el mostrador con el cliente
+        enfrente: sin receta no hay de dónde descontar el inventario."""
+        resp = self.client.post(reverse("lealtad_premio_guardar"), {
+            "nombre": "Sin receta", "puntos_requeridos": "80",
+            "tipo": Premio.Tipo.PRODUCTO, "cantidad": "1", "valor": "0",
+            "vigencia_dias": "30", "activo": "1"}, follow=True)
+
+        self.assertFalse(Premio.objects.filter(nombre="Sin receta").exists())
+        self.assertContains(resp, "necesita una receta ligada")
+
+    def test_un_descuento_no_necesita_receta(self):
+        self.client.post(reverse("lealtad_premio_guardar"), {
+            "nombre": "10% off", "puntos_requeridos": "50",
+            "tipo": Premio.Tipo.DESCUENTO_PCT, "cantidad": "1", "valor": "10",
+            "vigencia_dias": "30", "activo": "1"})
+
+        self.assertTrue(Premio.objects.filter(nombre="10% off").exists())
 
     def test_guardar_un_premio_ligando_el_producto(self):
         self.client.post(reverse("lealtad_premio_guardar"), {
@@ -966,6 +986,213 @@ class VistasTests(TestCase):
         self.client.post(reverse("lealtad_premio_eliminar", args=[self.premio.pk]))
         self.premio.refresh_from_db()
         self.assertFalse(self.premio.activo)
+
+
+class CanjeConsumeInventarioTests(TestCase):
+    """Entregar un shake gratis gasta la misma leche que venderlo.
+
+    Antes el canje solo movía puntos: el insumo desaparecía del almacén sin
+    que ningún número lo registrara, el inventario contaba de más y el costo
+    de la promoción no aparecía en ninguna parte.
+    """
+
+    def setUp(self):
+        cache.clear()
+        # Ojo: `Compra` a secas es la del programa de lealtad. La de insumos
+        # es otra cosa y vive en inventario.
+        from contabilidad import posting
+        from inventario.models import Compra as CompraDeInsumo
+        posting.crear_catalogo()
+        self.ing = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("30.00"))
+        self.receta = Receta.objects.create(
+            nombre="Latte", precio_venta=Decimal("100.00"))
+        RecetaIngrediente.objects.create(
+            receta=self.receta, ingrediente=self.ing, cantidad=200)
+        CompraDeInsumo.objects.create(
+            fecha=date(2026, 8, 1), ingrediente=self.ing,
+            cantidad=Decimal("1"), monto_total=Decimal("30"))
+        self.cliente, _ = servicios.alta_cliente("9991234567", nombre="Ana")
+        servicios.ajustar_puntos(self.cliente, 500, "Semilla")
+
+    def _canjear(self, premio):
+        return servicios.canjear(self.cliente, premio)
+
+    def test_entregar_un_producto_descuenta_inventario_y_guarda_su_costo(self):
+        premio = Premio.objects.create(
+            nombre="Latte gratis", puntos_requeridos=100,
+            tipo=Premio.Tipo.PRODUCTO, receta=self.receta, cantidad=1)
+        antes = self.ing.stock_disponible
+
+        canje = servicios.entregar_canje(self._canjear(premio))
+
+        self.assertIsNotNone(canje.venta)
+        self.assertTrue(canje.venta.es_cortesia)
+        self.assertEqual(canje.costo, Decimal("6.00"))    # 200 ml × 0.03
+        self.assertEqual(self.ing.stock_disponible, antes - 200)
+
+    def test_el_costo_del_premio_entra_a_mercadotecnia_y_no_a_costo_de_ventas(self):
+        from contabilidad import posting
+        premio = Premio.objects.create(
+            nombre="Latte gratis", puntos_requeridos=100,
+            tipo=Premio.Tipo.PRODUCTO, receta=self.receta, cantidad=1)
+
+        servicios.entregar_canje(self._canjear(premio))
+
+        hoy = timezone.localdate()
+        er = posting.estado_resultados(hoy.year, hoy.month)
+        self.assertEqual(er["total_costo_ventas"], Decimal("0"))
+        self.assertTrue(posting.balanza_comprobacion(hoy.year, hoy.month)["cuadra"])
+
+    def test_un_premio_sin_receta_avisa_en_vez_de_reventar(self):
+        """`Venta.receta` es obligatoria: sin este mensaje el cajero vería un
+        500 en la cara del cliente."""
+        premio = Premio.objects.create(
+            nombre="Algo gratis", puntos_requeridos=100,
+            tipo=Premio.Tipo.PRODUCTO, receta=None, cantidad=1)
+        canje = self._canjear(premio)
+
+        with self.assertRaises(servicios.ErrorLealtad) as ctx:
+            servicios.entregar_canje(canje)
+
+        self.assertIn("no tiene producto ligado", str(ctx.exception))
+        canje.refresh_from_db()
+        self.assertEqual(canje.estado, Canje.Estado.PENDIENTE)
+
+    def test_un_descuento_no_toca_el_inventario(self):
+        premio = Premio.objects.create(
+            nombre="10% off", puntos_requeridos=100,
+            tipo=Premio.Tipo.DESCUENTO_PCT, valor=Decimal("10"))
+        antes = self.ing.stock_disponible
+
+        canje = servicios.entregar_canje(self._canjear(premio))
+
+        self.assertIsNone(canje.venta)
+        self.assertEqual(self.ing.stock_disponible, antes)
+        # Su costo sigue siendo ingreso no percibido, no insumo.
+        self.assertEqual(canje.costo, premio.costo_estimado)
+
+    def test_sin_compras_capturadas_no_se_publica_que_el_premio_salio_gratis(self):
+        """Cero no es un valor, es una ausencia.
+
+        Con capas faltantes el FIFO deja `costo_fifo = 0.00`. Guardarlo como
+        costo real diría que regalar shakes no cuesta nada, justo cuando menos
+        se sabe. Se deja en NULL y el estimado del catálogo responde.
+        """
+        otro = Ingrediente.objects.create(
+            nombre="Cacao", unidad_compra="kg", cantidad_por_unidad=1000,
+            unidad_receta="g", costo_unidad_compra=Decimal("400.00"))
+        receta = Receta.objects.create(
+            nombre="Sin respaldo", precio_venta=Decimal("100.00"))
+        RecetaIngrediente.objects.create(
+            receta=receta, ingrediente=otro, cantidad=50)     # nunca comprado
+        premio = Premio.objects.create(
+            nombre="Cacao gratis", puntos_requeridos=100,
+            tipo=Premio.Tipo.PRODUCTO, receta=receta, cantidad=1)
+
+        canje = servicios.entregar_canje(self._canjear(premio))
+
+        # `costo_de_ventas` de la cortesía cae al estimado del catálogo cuando
+        # el costo no está completo: 50 g × 0.40. Nunca al cero del FIFO.
+        self.assertTrue(canje.venta.costo_incompleto)
+        self.assertEqual(canje.costo, Decimal("20.00"))
+
+    def test_las_metricas_leen_el_costo_real_cuando_existe(self):
+        premio = Premio.objects.create(
+            nombre="Latte gratis", puntos_requeridos=100,
+            tipo=Premio.Tipo.PRODUCTO, receta=self.receta, cantidad=1)
+        servicios.entregar_canje(self._canjear(premio))
+
+        canje = Canje.objects.get()
+        # Se lee de la cortesía, no de una copia: cuando el costeo rehaga el
+        # FIFO —al capturar una compra vieja— este número se mueve con él.
+        self.assertEqual(canje.costo, canje.venta.costo_de_ventas)
+
+
+class NotaAnunciaHitosTests(TestCase):
+    """La nota es lo único que el cliente ve; ahí se le dice qué ganó."""
+
+    def setUp(self):
+        cache.clear()
+        self.receta = crea_receta()
+        self.oro = Nivel.objects.create(
+            nombre="Oro", puntos_requeridos=10, beneficios="10% en todo")
+        self.premio = Premio.objects.create(
+            nombre="Latte gratis", puntos_requeridos=5, receta=self.receta)
+        self.cliente, _ = servicios.alta_cliente("9991234567", nombre="Ana")
+
+    def _nota(self, total="130"):
+        nota = Nota.objects.create(fecha=date(2026, 8, 5), total=Decimal(total))
+        servicios.registrar_compra(self.cliente, Decimal(total), nota=nota)
+        return nota
+
+    def test_la_nota_anuncia_el_nivel_que_esta_compra_desbloqueo(self):
+        nota = self._nota()      # $130 = 13 puntos, cruza los 10 de Oro
+
+        resp = self.client.get(nota.get_absolute_url())
+
+        self.assertContains(resp, "Subiste a Oro")
+        self.assertContains(resp, "10% en todo")
+
+    def test_la_siguiente_compra_ya_no_lo_vuelve_a_anunciar(self):
+        self._nota()
+        segunda = self._nota()
+
+        self.assertContains(self.client.get(segunda.get_absolute_url()),
+                            "puntos disponibles")
+        self.assertNotContains(self.client.get(segunda.get_absolute_url()),
+                               "Subiste a")
+
+    def test_una_nota_vieja_no_felicita_por_un_nivel_posterior(self):
+        """El hito se guarda al registrar la compra, así que cada nota dice lo
+        que pasó en ELLA. La primera no cruzó a Oro; la segunda sí."""
+        primera = self._nota("30")     # 3 puntos, todavía sin nivel
+        segunda = self._nota("130")    # aquí sí cruza a Oro
+
+        self.assertNotContains(self.client.get(primera.get_absolute_url()),
+                               "Subiste a")
+        self.assertContains(self.client.get(segunda.get_absolute_url()),
+                            "Subiste a Oro")
+
+    def test_el_hito_sigue_ahi_cuando_el_cliente_vuelve_a_comprar(self):
+        """La nota es un documento: lo que anunció el día que se entregó no
+        puede desaparecer después, y menos ahora que el cliente se la guarda
+        en PDF."""
+        nota = self._nota()            # cruza a Oro
+        self._nota()
+        self._nota()
+
+        self.assertContains(self.client.get(nota.get_absolute_url()),
+                            "Subiste a Oro")
+
+    def test_un_ajuste_de_puntos_no_se_le_acredita_a_una_compra(self):
+        """`puntos_historicos` también sube con `ajustar_puntos`, que no crea
+        una compra. Deducir el nivel restando los puntos de la compra le
+        colgaba a esa nota un ascenso que desbloqueó el ajuste."""
+        nota = self._nota("30")        # 3 puntos: no alcanza los 10 de Oro
+        servicios.ajustar_puntos(self.cliente, 8, "Cortesía del mostrador")
+        self.cliente.refresh_from_db()
+
+        self.assertEqual(self.cliente.nivel, self.oro)
+        self.assertNotContains(self.client.get(nota.get_absolute_url()),
+                               "Subiste a")
+
+    def test_anuncia_el_premio_ganado_aunque_falte_para_el_siguiente(self):
+        Premio.objects.create(nombre="Shake gratis", puntos_requeridos=500)
+        nota = self._nota()            # 13 puntos: alcanza el de 5, no el de 500
+
+        resp = self.client.get(nota.get_absolute_url())
+
+        self.assertContains(resp, "Ya puedes canjear Latte gratis")
+        self.assertContains(resp, "Te faltan")
+
+    def test_sin_puntos_no_hay_nada_que_anunciar(self):
+        nota = self._nota("5")         # $5 no llega ni a un punto
+
+        resp = self.client.get(nota.get_absolute_url())
+
+        self.assertNotContains(resp, "Subiste a")
 
 
 class MetricasTests(TestCase):

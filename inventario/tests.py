@@ -3,8 +3,8 @@ from datetime import date
 from django.test import TestCase
 from inventario.alarmas import alarmas_margen
 from inventario.models import (
-    ConfiguracionAlarmas, Ingrediente, Receta, RecetaIngrediente, Compra, Venta,
-    Extra, VentaSustitucion, VentaExtra,
+    ConfiguracionAlarmas, Ingrediente, Nota, Receta, RecetaIngrediente, Compra,
+    Venta, Extra, VentaSustitucion, VentaExtra,
 )
 
 
@@ -379,6 +379,260 @@ class CicloCompletoCajaTests(TestCase):
         venta.refresh_from_db()
         self.assertTrue(venta.costo_incompleto)
         self.assertContains(self._reportes(), "Falta costo")
+
+
+class CortesiasEnLosAgregadosTests(TestCase):
+    """Una cortesía se produjo, pero no se cobró. Cada número decide cuál
+    de las dos cosas le importa, y ninguno puede quedarse con las dos."""
+
+    def setUp(self):
+        self.ing = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("30.00"))
+        self.rec = Receta.objects.create(
+            nombre="Shake", precio_venta=Decimal("100.00"))
+        RecetaIngrediente.objects.create(
+            receta=self.rec, ingrediente=self.ing, cantidad=200)
+        Compra.objects.create(
+            fecha=date(2026, 8, 1), ingrediente=self.ing,
+            cantidad=Decimal("1"), monto_total=Decimal("30.00"))
+        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec, cantidad=2)
+        Venta.objects.create(fecha=date(2026, 8, 6), receta=self.rec,
+                             cantidad=1, es_cortesia=True)
+
+    def test_las_unidades_cuentan_lo_regalado_y_el_margen_no(self):
+        from finanzas.calculos import margen_contribucion_promedio
+
+        # Salieron tres shakes: los tres consumieron leche.
+        self.assertEqual(self.rec.unidades_vendidas, 3)
+        self.assertEqual(self.rec.unidades_regaladas, 1)
+        self.assertEqual(self.rec.unidades_cobradas, 2)
+
+        # El margen solo mira los dos que se cobraron. Si contara el regalado
+        # —ingreso cero, costo real— el promedio se hundiría sin que el precio
+        # ni el costo del producto se hubieran movido.
+        _, unidades = margen_contribucion_promedio()
+        self.assertEqual(unidades, 2)
+
+    def test_el_costo_del_regalo_no_es_costo_variable_de_ventas(self):
+        """Sale por mercadotecnia, en su propia columna, no del margen."""
+        from finanzas.calculos import flujo_mensual
+
+        fila = flujo_mensual()["filas"][0]
+
+        self.assertEqual(fila["cortesias"], Decimal("6.00"))    # 200 ml × 0.03
+        self.assertEqual(fila["costo_variable"], Decimal("12.00"))
+        # Pero se sigue restando: el insumo se gastó.
+        self.assertEqual(
+            fila["ganancia_operativa"],
+            fila["ingresos"] - fila["costo_variable"] - fila["cortesias"]
+            - fila["costos_fijos"])
+
+    def test_el_panel_separa_lo_cobrado_de_lo_regalado(self):
+        from django.contrib.auth.models import User
+        from django.urls import reverse
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+        html = self.client.get(reverse("panel_inventario")).content.decode()
+
+        self.assertIn("Cobrados", html)
+        self.assertIn("Regalados", html)
+
+    def test_el_admin_desglosa_la_cortesia(self):
+        from django.contrib.auth.models import User
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+        resp = self.client.get("/admin/inventario/receta/")
+
+        self.assertContains(resp, "3 (1 de cortesía)")
+
+    def test_sin_cortesias_el_admin_no_agrega_ruido(self):
+        from django.contrib.auth.models import User
+        Receta.objects.create(nombre="Otro", precio_venta=Decimal("90.00"))
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+        resp = self.client.get("/admin/inventario/receta/")
+
+        self.assertNotContains(resp, "0 (0 de cortesía)")
+
+
+class NotaPdfTests(TestCase):
+    """La nota en PDF: pública como la nota, y sin depender de la de pantalla."""
+
+    def setUp(self):
+        self.ing = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("30.00"))
+        self.rec = Receta.objects.create(
+            nombre="Shake", emoji="🍫", precio_venta=Decimal("100.00"))
+        RecetaIngrediente.objects.create(
+            receta=self.rec, ingrediente=self.ing, cantidad=200)
+        self.nota = Nota.objects.create(
+            fecha=date(2026, 8, 5), total=Decimal("200.00"),
+            pago_con=Decimal("500.00"), cambio=Decimal("300.00"))
+        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec,
+                             cantidad=2, nota=self.nota)
+
+    def _pdf(self):
+        from django.urls import reverse
+        return self.client.get(reverse("nota_pdf", args=[self.nota.token]))
+
+    def test_devuelve_un_pdf_de_verdad(self):
+        resp = self._pdf()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "application/pdf")
+        self.assertTrue(resp.content.startswith(b"%PDF-"))
+        self.assertIn(self.nota.folio, resp["Content-Disposition"])
+
+    def test_no_pide_sesion(self):
+        """Quien tiene el token ya puede ver la nota; pedir contraseña aquí
+        solo impediría que el cliente se lleve su comprobante."""
+        self.client.logout()
+        self.assertEqual(self._pdf().status_code, 200)
+
+    def test_una_nota_que_no_existe_da_404(self):
+        import uuid
+        from django.urls import reverse
+        resp = self.client.get(reverse("nota_pdf", args=[uuid.uuid4()]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_el_emoji_del_producto_no_rompe_el_dibujo(self):
+        """Las fuentes base del PDF no tienen emoji: se quitan en vez de
+        salir como cuadros negros."""
+        from inventario.pdf import _limpio
+        self.assertEqual(_limpio("🍫 Afterparty Shake"), "Afterparty Shake")
+        self.assertTrue(self._pdf().content.startswith(b"%PDF-"))
+
+    def test_los_simbolos_con_significado_se_traducen_en_vez_de_perderse(self):
+        """Una sustitución sin su flecha queda como «Plátano  Fresa», que ya
+        no dice cuál entró y cuál salió."""
+        from inventario.pdf import _limpio
+        self.assertEqual(_limpio("Plátano → Fresa"), "Plátano -> Fresa")
+        self.assertEqual(_limpio("2× Creatina"), "2x Creatina")
+
+    def test_la_nota_de_pantalla_ofrece_el_pdf(self):
+        resp = self.client.get(self.nota.get_absolute_url())
+        self.assertContains(resp, "Guardar PDF")
+
+    def test_ninguna_plantilla_le_enseña_comentarios_al_cliente(self):
+        """`{# #}` de Django es de UNA línea: si abarca dos, se imprime tal
+        cual. Pasó en la nota, que es la única página que ve el cliente."""
+        import re
+        from pathlib import Path
+
+        sueltos = []
+        for plantilla in Path(".").rglob("*.html"):
+            if ".venv" in str(plantilla):
+                continue
+            texto = plantilla.read_text()
+            for marca in re.finditer(r"\{#", texto):
+                resto = texto[marca.start():]
+                cierre = resto.find("#}")
+                if cierre == -1 or "\n" in resto[:cierre]:
+                    sueltos.append(str(plantilla))
+
+        self.assertEqual(sueltos, [], "Usa {% comment %} para varias líneas")
+
+
+class CostoUltimaCompraTests(TestCase):
+    """Junto al aproximado del catálogo, lo que costaría a precios reales."""
+
+    def setUp(self):
+        self.leche = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("30.00"))
+        self.cacao = Ingrediente.objects.create(
+            nombre="Cacao", unidad_compra="kg", cantidad_por_unidad=1000,
+            unidad_receta="g", costo_unidad_compra=Decimal("400.00"))
+        self.rec = Receta.objects.create(
+            nombre="Shake", precio_venta=Decimal("100.00"))
+        RecetaIngrediente.objects.create(
+            receta=self.rec, ingrediente=self.leche, cantidad=200)
+        RecetaIngrediente.objects.create(
+            receta=self.rec, ingrediente=self.cacao, cantidad=50)
+
+    def test_usa_el_precio_de_la_compra_mas_reciente(self):
+        Compra.objects.create(fecha=date(2026, 7, 1), ingrediente=self.leche,
+                              cantidad=Decimal("1"), monto_total=Decimal("30"))
+        Compra.objects.create(fecha=date(2026, 8, 1), ingrediente=self.leche,
+                              cantidad=Decimal("1"), monto_total=Decimal("50"))
+        Compra.objects.create(fecha=date(2026, 8, 1), ingrediente=self.cacao,
+                              cantidad=Decimal("1"), monto_total=Decimal("600"))
+
+        # 200 ml × 0.05 + 50 g × 0.60 = 10 + 30
+        self.assertEqual(self.rec.costo_ultima_compra(), Decimal("40.00"))
+        # El catálogo sigue diciendo lo suyo: 200×0.03 + 50×0.40 = 26
+        self.assertEqual(self.rec.costo_receta, Decimal("26.00"))
+
+    def test_si_falta_una_compra_no_se_mezcla_con_el_catalogo(self):
+        """Media receta a precios reales y la otra media a catálogo no es
+        ninguna de las dos cosas."""
+        Compra.objects.create(fecha=date(2026, 8, 1), ingrediente=self.leche,
+                              cantidad=Decimal("1"), monto_total=Decimal("50"))
+
+        self.assertIsNone(self.rec.costo_ultima_compra())
+
+    def test_un_ingrediente_sin_compras_no_inventa_precio(self):
+        self.assertIsNone(self.leche.costo_unidad_ultima_compra)
+
+
+class RepartoDeVentasTests(TestCase):
+    """La gráfica de qué se vende más reparte lo COBRADO."""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        self.rec_a = Receta.objects.create(
+            nombre="Uno", precio_venta=Decimal("100.00"))
+        self.rec_b = Receta.objects.create(
+            nombre="Dos", precio_venta=Decimal("100.00"))
+        Receta.objects.create(nombre="Nunca", precio_venta=Decimal("100.00"))
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+    def _panel(self):
+        from django.urls import reverse
+        return self.client.get(reverse("panel_inventario"))
+
+    def test_reparte_lo_cobrado_de_mayor_a_menor(self):
+        Venta.objects.create(fecha=date(2026, 8, 1), receta=self.rec_a, cantidad=3)
+        Venta.objects.create(fecha=date(2026, 8, 1), receta=self.rec_b, cantidad=1)
+
+        reparto = self._panel().context["reparto"]
+
+        self.assertEqual([r["nombre"] for r in reparto], ["Uno", "Dos"])
+        self.assertEqual(reparto[0]["porcentaje"], Decimal("75"))
+        self.assertEqual(reparto[1]["porcentaje"], Decimal("25"))
+
+    def test_lo_regalado_no_hace_que_un_producto_se_venda_mas(self):
+        Venta.objects.create(fecha=date(2026, 8, 1), receta=self.rec_a, cantidad=1)
+        Venta.objects.create(fecha=date(2026, 8, 1), receta=self.rec_b, cantidad=1)
+        Venta.objects.create(fecha=date(2026, 8, 2), receta=self.rec_b,
+                             cantidad=8, es_cortesia=True)
+
+        reparto = self._panel().context["reparto"]
+
+        self.assertEqual(reparto[0]["porcentaje"], Decimal("50"))
+        self.assertEqual(reparto[1]["porcentaje"], Decimal("50"))
+
+    def test_un_producto_sin_ventas_no_aparece(self):
+        Venta.objects.create(fecha=date(2026, 8, 1), receta=self.rec_a, cantidad=1)
+
+        nombres = [r["nombre"] for r in self._panel().context["reparto"]]
+
+        self.assertEqual(nombres, ["Uno"])
+
+    def test_sin_ventas_cobradas_no_se_divide_entre_cero(self):
+        Venta.objects.create(fecha=date(2026, 8, 1), receta=self.rec_a,
+                             cantidad=2, es_cortesia=True)
+
+        resp = self._panel()
+
+        self.assertEqual(resp.context["reparto"], [])
+        self.assertContains(resp, "Todavía no hay ventas cobradas que repartir")
 
 
 class AlarmaMargenTests(TestCase):

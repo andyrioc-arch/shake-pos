@@ -12,10 +12,12 @@ from django.db import transaction
 from django.db.models import Count, F, Max, Q, Sum
 from django.utils import timezone
 
+from inventario.models import Venta
+
 from .models import (
     ALFABETO_CODIGO, Canje, Cliente, Compra, ConfiguracionPrograma,
-    MovimientoPuntos, PromocionPuntos, TelefonoInvalido, normaliza_nombre,
-    normaliza_telefono,
+    MovimientoPuntos, Premio, PromocionPuntos, TelefonoInvalido,
+    normaliza_nombre, normaliza_telefono,
 )
 
 
@@ -240,6 +242,16 @@ def registrar_compra(cliente, monto, *, nota=None, ticket="", fecha=None,
     _otorgar_puntos(cliente, puntos, compra=compra, descripcion=detalle, cfg=cfg)
     recalcular(cliente)
 
+    # El nivel que desbloqueó esta compra se guarda aquí, que es el único
+    # momento en que se sabe sin deducirlo: después, `puntos_historicos` ya
+    # acumuló ajustes y compras posteriores. La nota lo lee tal cual, y no
+    # cambia si el cliente vuelve mañana —importa porque ahora esa nota
+    # también es un PDF que el cliente se guardó—.
+    nivel_ahora = cliente.nivel
+    if nivel_ahora and (not nivel_antes or nivel_antes.pk != nivel_ahora.pk):
+        compra.nivel_alcanzado = nivel_ahora
+        compra.save(update_fields=["nivel_alcanzado"])
+
     from . import automatizaciones
     transaction.on_commit(lambda: automatizaciones.tras_compra(
         cliente, compra, era_primera=era_primera, nivel_antes=nivel_antes))
@@ -332,15 +344,44 @@ def canjear(cliente, premio, usuario=None, nota=None):
 
 @transaction.atomic
 def entregar_canje(canje, usuario=None, nota=None):
+    """Entrega el premio. Si es de producto, aquí sale del inventario.
+
+    Entregar un shake gratis gasta la misma leche que venderlo. Hasta ahora el
+    canje solo movía puntos, así que ese insumo desaparecía del almacén sin
+    que ningún número lo registrara: el inventario contaba de más y el costo
+    de la promoción no aparecía en ninguna parte.
+    """
     if canje.estado != Canje.Estado.PENDIENTE:
         raise ErrorLealtad(f"Ese canje ya está {canje.get_estado_display().lower()}.")
+
+    venta = None
+    if canje.premio.consume_inventario:
+        if not canje.premio.receta_id:
+            # Mensaje y no IntegrityError: `Venta.receta` es obligatoria, y la
+            # vista que llama aquí solo atrapa ErrorLealtad. Cualquier otra
+            # excepción le sale al cajero como un 500.
+            raise ErrorLealtad(
+                f"El premio «{canje.premio.nombre}» no tiene producto ligado; "
+                "no se puede entregar hasta configurarlo.")
+        # Sin `nota`: el canje no es un ticket de venta. El rastro de por qué
+        # salió este shake es `Canje.venta`, que apunta de vuelta.
+        venta = Venta.objects.create(
+            fecha=timezone.localdate(),
+            receta=canje.premio.receta,
+            cantidad=canje.premio.cantidad,
+            es_cortesia=True,
+        )
+
     canje.estado = Canje.Estado.ENTREGADO
     canje.entregado_en = timezone.now()
     if usuario:
         canje.autorizado_por = usuario
     if nota:
         canje.nota = nota
-    canje.save(update_fields=["estado", "entregado_en", "autorizado_por", "nota"])
+    if venta:
+        canje.venta = venta
+    canje.save(update_fields=["estado", "entregado_en", "autorizado_por",
+                              "nota", "venta"])
     return canje
 
 

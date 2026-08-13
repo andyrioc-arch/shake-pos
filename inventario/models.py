@@ -61,10 +61,25 @@ class Ingrediente(models.Model):
 
     @property
     def costo_unidad_receta(self):
-        """Costo de UNA unidad de receta (g, ml o pieza)."""
+        """Costo de UNA unidad de receta (g, ml o pieza), según el catálogo.
+
+        Es un aproximado: lo que alguien tecleó como precio de referencia. Lo
+        que de verdad se pagó vive en las compras, y `costo_unidad_ultima_compra`
+        lo dice.
+        """
         if self.cantidad_por_unidad:
             return self.costo_unidad_compra / self.cantidad_por_unidad
         return Decimal("0")
+
+    @property
+    def costo_unidad_ultima_compra(self):
+        """Lo que costó una unidad de receta la última vez que se compró.
+
+        `None` si nunca se ha comprado: no se inventa un precio, igual que el
+        costeo no inventa un costo cuando le faltan capas.
+        """
+        ultima = self.compras.order_by("-fecha", "-id").first()
+        return ultima.costo_unitario_capa if ultima else None
 
     @property
     def total_comprado(self):
@@ -175,14 +190,40 @@ class Receta(models.Model):
         seis llamadores, y olvidarla en uno no rompe ningún número: solo lo
         vuelve lento, que es lo que nadie nota.
         """
+        return sum((item.costo_linea for item in self._items()), Decimal("0"))
+
+    def _items(self):
+        """Las líneas de la receta, respetando el caché de prefetch si lo hay.
+
+        Vive aparte porque la decisión que explica `costo_receta` la necesitan
+        todos los que recorren ingredientes, y copiarla es cómo se pierde.
+        """
         items = self.ingredientes.all()
-        precargado = "ingredientes" in getattr(
-            self, "_prefetched_objects_cache", {})
-        if not precargado:
+        if "ingredientes" not in getattr(self, "_prefetched_objects_cache", {}):
             items = items.select_related("ingrediente")
+        return items
+
+    def costo_ultima_compra(self, unitarios=None):
+        """Lo que costaría esta receta a los precios realmente pagados.
+
+        `None` si a algún ingrediente le falta su primera compra: media receta
+        valuada con precios reales y la otra media con el catálogo es un número
+        que no es ninguna de las dos cosas.
+
+        `unitarios` es `{ingrediente_id: costo por unidad de receta}` ya
+        resuelto para todo el catálogo. Es un parámetro y no un detalle interno
+        porque preguntarle a cada ingrediente por su última compra cuesta una
+        consulta por ingrediente por receta, y el catálogo tiene diecinueve.
+        """
         total = Decimal("0")
-        for item in items:
-            total += item.costo_linea
+        for item in self._items():
+            if unitarios is not None:
+                unitario = unitarios.get(item.ingrediente_id)
+            else:
+                unitario = item.ingrediente.costo_unidad_ultima_compra
+            if unitario is None:
+                return None
+            total += item.cantidad * unitario
         return total
 
     @property
@@ -197,8 +238,24 @@ class Receta(models.Model):
 
     @property
     def unidades_vendidas(self):
+        """Todo lo que salió del mostrador, cobrado o regalado.
+
+        Las cortesías cuentan aquí a propósito: se produjeron y consumieron
+        insumo igual que las demás. Quien quiera solo lo que entró a caja
+        tiene `unidades_cobradas`; el margen ya las excluye por su lado.
+        """
         agg = self.ventas.aggregate(total=models.Sum("cantidad"))
         return agg["total"] or 0
+
+    @property
+    def unidades_regaladas(self):
+        agg = self.ventas.filter(es_cortesia=True).aggregate(
+            total=models.Sum("cantidad"))
+        return agg["total"] or 0
+
+    @property
+    def unidades_cobradas(self):
+        return self.unidades_vendidas - self.unidades_regaladas
 
 
 class RecetaIngrediente(models.Model):

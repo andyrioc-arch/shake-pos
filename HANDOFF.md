@@ -186,28 +186,53 @@ Lo que se aprendió peleando con la interfaz, y está en CLAUDE.md:
   el azul, contra el 4.5:1 de WCAG AA. Donde el color carga un dato se usan
   `#c81a63` y `#1478cc`.
 
+## Seis pasos más, hechos el 13 de agosto (rama `pdf-de-la-nota`)
+
+294 tests. Con esto se cierra el plan de costeo salvo P11, y la lista que Andy
+pidió salvo lo que no se ha propuesto.
+
+| | Qué |
+|---|---|
+| **P7** | «Salieron / Cobrados / Regalados». `unidades_vendidas` sigue contando todo: lo regalado se produjo y consumió insumo. |
+| **P9** | Entregar un premio de producto crea una cortesía que descuenta inventario y postea a la 506, bajo Mercadotecnia. |
+| **P10** | Costo consolidado por producto, con lo que costaría a precios de la última compra, y panel de salud del costeo. |
+| Gráfica | «Qué se vende más», repartiendo lo COBRADO. Sin librería ni JavaScript. |
+| Libro → nota | La descripción de una venta con nota es un enlace. |
+| Nota | Anuncia el premio ganado y el cambio de nivel, y se puede guardar en PDF. |
+
+**Para publicarla:** `lealtad.0003` **agrega** dos columnas que el código nuevo
+lee, así que **migrar primero y desplegar después**. No cambia el costeo de
+ninguna venta existente, así que no hace falta `recostear`.
+
+Cinco cosas que costaron encontrar y no hay que volver a descubrir:
+
+- **`{# #}` de Django es de UNA línea.** Con dos, se imprime tal cual — y se
+  imprimió en la nota, que es la única página que ve el cliente. Para varias
+  líneas, `{% comment %}`. Hay un test que recorre las plantillas.
+- **Un costo copiado se queda viejo.** `Canje` guardaba el FIFO del premio en
+  su propia columna; el costeo lo rehace cada vez que se captura una compra
+  atrasada, y la copia no se enteraba. Se deriva de la cortesía.
+- **Un hito deducido de un acumulado se equivoca.** El nivel que desbloqueó una
+  compra se guarda al registrarla, donde ya se sabe: `puntos_historicos`
+  también sube con `ajustar_puntos`, que no crea compra.
+- **`costeo.diagnostico()` ya medía la salud del costeo.** El panel la
+  reimplementaba y se tragaba dos síntomas.
+- **Una propiedad en un bucle de plantilla se evalúa cada vez.** El costo de la
+  última compra llevó el catálogo de 61 a 251 consultas; resolverlo en la vista
+  lo dejó en 7.
+
 ## Qué sigue
 
-**Recomendación: seguir con lo que Andy ve.** Queda casi toda su lista. Lo que
-resta del plan de costeo es chico salvo P9.
+**P11** es lo único que queda del plan, y sigue diferido a propósito hasta un
+ciclo de operación real: borra `Movimiento.facturado`, `Movimiento.fecha_factura`
+y `Compra.costo_unitario`, y mientras existan, todo esto se revierte con un
+despliegue.
 
-**Del plan (3 pasos, 1 con peso real):**
-
-- **P7** — la parte del margen ya quedó con P4 y tiene tests. Falta solo separar
-  «vendidas» de «regaladas» en el catálogo, sin cambiar `unidades_vendidas`.
-- **P9** — que canjear un premio descuente inventario y vaya a gasto de
-  mercadotecnia. Hoy `lealtad` no importa `contabilidad` en ningún lado. Regla
-  explícita de Andy. Ya tiene lista su cuenta destino: P6 dejó la 506 agrupada.
-- **P10** — costo consolidado por producto (no por ingrediente) y panel de salud
-  del costeo.
-- **P11** — diferido a propósito hasta un ciclo de operación real. Borra
-  `Movimiento.facturado`, `Movimiento.fecha_factura` y `Compra.costo_unitario`;
-  mientras existan, todo esto se revierte con un despliegue.
-
-**Lo que Andy ve y no existe:** enlace del libro de movimientos a la nota,
-gráfica de % de ventas por producto, PDF de la nota al escanearla, y que la nota
-anuncie el premio alcanzado y el cambio de nivel. El desglose de cuentas lo
-cerró P6, y la alarma de margen está hecha y esperando publicación.
+De lo que Andy pidió no queda nada sin hacer. Lo que sigue abierto es el
+inventario de deuda: los tres asuntos de la revisión de P3, los 44 hallazgos de
+auditoría —el deadlock entre `canjear()` y `expirar_puntos()` lo agrava P9, que
+mete escrituras de inventario a esa transacción—, el menú móvil, y que Supabase
+tiene RLS apagado en las 47 tablas.
 
 ## Lo que no depende de código
 

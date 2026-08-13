@@ -101,7 +101,10 @@ def resumen_puntos():
 
     pasivo = (Cliente.objects.aggregate(s=Sum("puntos_saldo"))["s"] or 0)
     canjes = Canje.objects.exclude(estado=Canje.Estado.CANCELADO)
-    costo_entregado = sum((c.costo_estimado for c in
+    # `costo` y no `costo_estimado`: desde P9 un premio de producto guarda lo
+    # que de verdad costó entregarlo. El estimado se queda para los descuentos,
+    # que no consumen insumo y cuestan ingreso no percibido.
+    costo_entregado = sum((c.costo for c in
                            canjes.select_related("premio", "premio__receta")), CERO)
 
     return {
@@ -163,7 +166,7 @@ def resumen_retorno(desde=None):
     canjes = Canje.objects.exclude(estado=Canje.Estado.CANCELADO)
     if desde:
         canjes = canjes.filter(creado__date__gte=desde)
-    costo = sum((c.costo_estimado for c in
+    costo = sum((c.costo for c in
                  canjes.select_related("premio", "premio__receta")), CERO)
 
     compras = Compra.objects.all()

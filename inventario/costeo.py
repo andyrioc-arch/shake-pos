@@ -225,17 +225,31 @@ def recostear_pendientes():
 
 
 def diagnostico():
-    """Qué tan sano está el costeo. Lo usa el comando y el panel."""
-    from django.db.models import Sum
-    return {
-        "ventas": Venta.objects.count(),
-        "sin_costear": Venta.objects.filter(costo_fifo__isnull=True).count(),
-        "incompletas": Venta.objects.filter(costo_incompleto=True).count(),
-        "capas_con_saldo": Compra.objects.filter(saldo_receta__gt=0).count(),
+    """Qué tan sano está el costeo. Lo usa el comando y el panel.
+
+    Tres consultas y no seis: cada cifra por separado eran seis viajes al
+    pooler cada vez que el dueño abre el panel de contabilidad, y todas las
+    de una tabla caben en un agregado.
+    """
+    from django.db.models import Count, Q, Sum
+
+    ventas = Venta.objects.aggregate(
+        total=Count("pk"),
+        sin_costear=Count("pk", filter=Q(costo_fifo__isnull=True)),
+        incompletas=Count("pk", filter=Q(costo_incompleto=True)))
+    capas = Compra.objects.aggregate(
+        con_saldo=Count("pk", filter=Q(saldo_receta__gt=0)),
         # Capas que el FIFO no puede ver: nacieron sin saldo y quedarían
         # invisibles para siempre si nadie las reabre.
-        "capas_sin_abrir": Compra.objects.filter(saldo_receta__isnull=True).count(),
-        "faltante_sin_capa": (
-            ConsumoCapa.objects.filter(compra__isnull=True)
-            .aggregate(t=Sum("cantidad_receta"))["t"] or CERO),
+        sin_abrir=Count("pk", filter=Q(saldo_receta__isnull=True)))
+    faltante = (ConsumoCapa.objects.filter(compra__isnull=True)
+                .aggregate(t=Sum("cantidad_receta"))["t"] or CERO)
+
+    return {
+        "ventas": ventas["total"],
+        "sin_costear": ventas["sin_costear"],
+        "incompletas": ventas["incompletas"],
+        "capas_con_saldo": capas["con_saldo"],
+        "capas_sin_abrir": capas["sin_abrir"],
+        "faltante_sin_capa": faltante,
     }

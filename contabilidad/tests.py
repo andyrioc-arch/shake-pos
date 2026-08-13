@@ -363,6 +363,107 @@ class ReportesViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
 
 
+class _PanelBase(TestCase):
+    """Un shake de 200 ml a $100, con Andy dentro. Lo comparten las pruebas
+    que miran la pantalla de contabilidad."""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        from inventario.models import Ingrediente, Receta, RecetaIngrediente
+        posting.crear_catalogo()
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+        self.ing = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("30.00"))
+        self.rec = Receta.objects.create(
+            nombre="Shake", precio_venta=Decimal("100.00"))
+        RecetaIngrediente.objects.create(
+            receta=self.rec, ingrediente=self.ing, cantidad=200)
+
+
+class SaludDelCosteoTests(_PanelBase):
+    """Tres cifras que valen cero cuando el costeo está sano.
+
+    Ninguna se nota mirando los reportes: la balanza cuadra igual con ventas
+    sin costear, y el balance se declara correcto con el inventario en
+    negativo, porque solo verifica que las sumas coincidan.
+    """
+
+    def test_un_ciclo_normal_sale_en_cero(self):
+        from inventario.models import Compra, Venta
+        Compra.objects.create(fecha=date(2026, 8, 1), ingrediente=self.ing,
+                              cantidad=Decimal("1"), monto_total=Decimal("30"))
+        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec, cantidad=2)
+
+        salud = posting.salud_del_costeo(2026, 8)
+
+        self.assertEqual(salud["sin_costear"], 0)
+        self.assertEqual(salud["incompletas"], 0)
+        self.assertEqual(salud["saldo_acreedor"], Decimal("0"))
+        self.assertGreater(salud["saldo_inventario"], 0)
+
+    def test_una_venta_sin_su_compra_sale_como_incompleta(self):
+        from inventario.models import Venta
+        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec, cantidad=2)
+
+        salud = posting.salud_del_costeo(2026, 8)
+
+        self.assertEqual(salud["incompletas"], 1)
+        # Y sin embargo el balance se declara correcto: por eso hace falta
+        # este panel y no basta con mirar los reportes.
+        self.assertTrue(posting.balance_general(2026, 8)["cuadra"])
+
+    def test_el_panel_lo_publica(self):
+        from inventario.models import Venta
+        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec, cantidad=2)
+
+        resp = self.client.get("/contabilidad/?anio=2026&mes=8")
+
+        self.assertContains(resp, "Salud del costeo")
+        self.assertContains(resp, "Revisar")
+
+    def test_sin_movimientos_no_truena_ni_inventa_problemas(self):
+        salud = posting.salud_del_costeo(2026, 8)
+
+        self.assertEqual(salud["sin_costear"], 0)
+        self.assertEqual(salud["incompletas"], 0)
+        self.assertEqual(salud["saldo_acreedor"], Decimal("0"))
+        self.assertContains(
+            self.client.get("/contabilidad/?anio=2026&mes=8"), "Sano")
+
+
+class LibroEnlazaALaNotaTests(_PanelBase):
+    """El libro dice cuánto entró; la nota dice qué se llevó el cliente."""
+
+    def test_la_venta_con_nota_enlaza_a_su_nota(self):
+        from inventario.models import Nota, Venta
+        nota = Nota.objects.create(fecha=date(2026, 8, 5), total=Decimal("100"))
+        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec,
+                             cantidad=1, nota=nota)
+
+        resp = self.client.get("/contabilidad/?anio=2026&mes=8")
+
+        self.assertContains(resp, nota.get_absolute_url())
+
+    def test_un_gasto_no_inventa_un_enlace(self):
+        posting.registrar_gasto(date(2026, 8, 3), "renta", Decimal("4500"))
+
+        resp = self.client.get("/contabilidad/?anio=2026&mes=8")
+
+        self.assertNotContains(resp, 'class="ver-nota"')
+
+    def test_una_venta_sin_nota_no_rompe_la_fila(self):
+        from inventario.models import Venta
+        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec,
+                             cantidad=1)
+
+        resp = self.client.get("/contabilidad/?anio=2026&mes=8")
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, 'class="ver-nota"')
+
+
 class _ReconocimientoBase(TestCase):
     """Fixture compartido: un shake de 200 ml de leche, a $100.
 

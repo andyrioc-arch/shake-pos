@@ -80,16 +80,20 @@
   <div class="blk">
     <h2>🥤 Productos</h2>
     <table class="t">
-      <thead><tr><th class="l">Producto</th><th>Precio</th><th>Costo receta</th><th>Ganancia/u.</th><th>Activo</th><th>Receta</th><th>Acción</th></tr></thead>
+      <thead><tr><th class="l">Producto</th><th>Precio</th><th>Costo receta</th><th>Última compra</th><th>Ganancia/u.</th><th>Activo</th><th>Receta</th><th>Acción</th></tr></thead>
       <tbody>
         {% for p in productos %}
         <tr {% if producto_sel and p.pk == producto_sel.pk %}class="sel-row"{% endif %}>
           <td class="l">{{ p.emoji }} {{ p.nombre }}</td>
           <td>${{ p.precio_venta|floatformat:2|intcomma }}</td>
           <td>${{ p.costo_receta|floatformat:2|intcomma }}</td>
+          {% comment %} El costo de catálogo es un aproximado tecleado a mano; este es lo
+             que costaría a los precios que de verdad se pagaron. Sin él,
+             congelar el catálogo deja a Andy sin saber cuánto se movió. {% endcomment %}
+          <td>{% if p.costo_ultima_compra is not None %}${{ p.costo_ultima_compra|floatformat:2|intcomma }}{% else %}<span class="muted" title="A algún ingrediente le falta su primera compra capturada.">—</span>{% endif %}</td>
           <td>${{ p.ganancia_unitaria|floatformat:2|intcomma }}</td>
           <td><span class="badge {% if p.activa %}on{% else %}off{% endif %}">{% if p.activa %}Sí{% else %}No{% endif %}</span></td>
-          <td><a class="btn mini gold" href="?producto={{ p.pk }}">Editar receta ({{ p.ingredientes.count }})</a></td>
+          <td><a class="btn mini gold" href="?producto={{ p.pk }}">Editar receta ({{ p.num_ingredientes }})</a></td>
           <td style="text-align:center;">
             <form method="post" action="{% url 'producto_eliminar' p.pk %}" style="display:inline"
                   onsubmit="return confirm('¿Eliminar producto?');">{% csrf_token %}
@@ -130,25 +134,55 @@
 
     <!-- Ingredientes de la receta -->
     <table class="t">
-      <thead><tr><th class="l">Ingrediente</th><th>Cantidad</th><th class="l">Unidad</th><th>Costo línea</th><th>Acción</th></tr></thead>
+      {% comment %} El costo va consolidado por producto, no por línea: así es como entra
+         a la contabilidad —un solo cargo a Costo de Ventas, nunca uno por
+         ingrediente— y así es como se decide un precio. El desglose por
+         ingrediente sigue disponible al abrir el detalle. {% endcomment %}
+      <thead><tr><th class="l">Ingrediente</th><th>Cantidad</th><th class="l">Unidad</th><th>Acción</th></tr></thead>
       <tbody>
         {% for r in receta_lineas %}
         <tr>
           <td class="l">{{ r.nombre }}</td>
           <td>{{ r.cantidad|floatformat:2 }}</td>
           <td class="l">{{ r.unidad }}</td>
-          <td>${{ r.costo_linea|floatformat:2|intcomma }}</td>
           <td style="text-align:center;">
             <form method="post" action="{% url 'receta_linea_eliminar' r.id %}" style="display:inline">{% csrf_token %}
               <button class="btn del" type="submit">Quitar</button></form>
           </td>
         </tr>
         {% empty %}
-        <tr><td colspan="5" class="l" style="color:#999;text-align:center;">Esta receta aún no tiene ingredientes.</td></tr>
+        <tr><td colspan="4" class="l" style="color:#999;text-align:center;">Esta receta aún no tiene ingredientes.</td></tr>
         {% endfor %}
-        <tr class="tot"><td class="l" colspan="3">Costo total de la receta</td><td>${{ producto_sel.costo_receta|floatformat:2|intcomma }}</td><td></td></tr>
+        <tr class="tot">
+          <td class="l" colspan="2">Costo de la receta (catálogo)</td>
+          <td colspan="2">${{ producto_sel.costo_receta|floatformat:2|intcomma }}</td>
+        </tr>
+        <tr class="tot">
+          <td class="l" colspan="2">A precios de la última compra</td>
+          <td colspan="2">
+            {% if costo_sel_ultima_compra is not None %}
+              ${{ costo_sel_ultima_compra|floatformat:2|intcomma }}
+            {% else %}
+              <span class="muted">— falta capturar alguna compra</span>
+            {% endif %}
+          </td>
+        </tr>
       </tbody>
     </table>
+
+    {% if receta_lineas %}
+    <details style="padding:0 16px 12px;">
+      <summary style="cursor:pointer;font-size:12px;font-weight:700;">Ver el costo ingrediente por ingrediente</summary>
+      <table class="t" style="margin-top:8px;">
+        <thead><tr><th class="l">Ingrediente</th><th>Costo línea</th></tr></thead>
+        <tbody>
+          {% for r in receta_lineas %}
+          <tr><td class="l">{{ r.nombre }}</td><td>${{ r.costo_linea|floatformat:2|intcomma }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
 
     <!-- Agregar ingrediente a la receta -->
     <form class="frm" method="post" action="{% url 'receta_linea_agregar' producto_sel.pk %}">

@@ -50,9 +50,11 @@ def reportes(request):
     prev_a, prev_m = _shift(anio, mes, -1)
     next_a, next_m = _shift(anio, mes, +1)
 
+    # `venta__nota` viene en el mismo golpe: cada fila de venta enlaza a su
+    # nota, y pedirla por fila cuesta dos consultas por movimiento.
     movimientos = (Movimiento.objects
                    .filter(fecha__year=anio, fecha__month=mes)
-                   .select_related("cuenta")
+                   .select_related("cuenta", "venta__nota")
                    .order_by("fecha", "id"))
 
     ctx = {
@@ -71,6 +73,7 @@ def reportes(request):
         "resultados": posting.estado_resultados(anio, mes),
         "balance": posting.balance_general(anio, mes),
         "flujo": posting.flujo_efectivo(anio, mes),
+        "salud": posting.salud_del_costeo(anio, mes),
         "categorias_gasto": CategoriaGasto.objects.filter(activo=True),
         "hoy": localdate().isoformat(),
     }
