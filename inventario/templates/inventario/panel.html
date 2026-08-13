@@ -7,27 +7,53 @@
          box-shadow:0 1px 4px rgba(0,0,0,.08); overflow:hidden; }
   .blk h2 { background:#000000; color:#fff; margin:0; padding:12px 18px; font-size:16px;
             display:flex; justify-content:space-between; align-items:center; }
-  .blk h2 .pill { background:#fa5598; font-size:12px; padding:2px 10px; border-radius:10px; }
-  .blk h2 .pill.ok { background:#1e9aff; }
+  /* Los tonos de marca (#fa5598 rosa, #1e9aff azul) dan 3.08:1 y 2.95:1 sobre
+     blanco: por debajo del 4.5:1 que exige WCAG AA para texto normal. Donde
+     el color CARGA un dato o un estado —cifras, badges, notas— se usa la
+     versión oscura del mismo tono. El cromo de marca se queda como está. */
+  .blk h2 .pill { background:#c81a63; font-size:12px; padding:2px 10px; border-radius:10px; }
+  .blk h2 .pill.ok { background:#1478cc; }
   table.iv { width:100%; border-collapse:collapse; }
   table.iv th, table.iv td { padding:9px 16px; font-size:13px;
             border-bottom:1px solid #ececec; text-align:right; }
   table.iv th { background:#f5f5f5; text-align:right; }
+  /* La celda que nombra la fila es un `th` para que el lector de pantalla
+     ate cada cifra a su producto; visualmente sigue siendo una celda. */
+  table.iv th[scope="row"] { background:transparent; font-weight:600; }
   table.iv th:first-child, table.iv td:first-child { text-align:left; }
   table.iv th:nth-child(2), table.iv td:nth-child(2) { text-align:left; }
   .tot td { font-weight:700; background:#f2f2f2; border-top:2px solid #000000; }
-  .good { color:#1e9aff; font-weight:600; }
-  .bad  { color:#fa5598; font-weight:600; }
-  .muted { color:#888; }
-  .tagfalta { color:#fff; background:#fa5598; padding:2px 8px; border-radius:4px; font-weight:600; }
-  .tagok { color:#fff; background:#1e9aff; padding:2px 8px; border-radius:4px; font-weight:600; }
-  .note { color:#777; font-size:12px; padding:6px 18px 14px; }
+  .good { color:#1478cc; font-weight:600; }
+  .bad  { color:#c81a63; font-weight:600; }
+  .muted { color:#6b6b6b; }
+  .tagfalta { color:#fff; background:#c81a63; padding:2px 8px; border-radius:4px; font-weight:600; }
+  .tagok { color:#fff; background:#1478cc; padding:2px 8px; border-radius:4px; font-weight:600; }
+  .note { color:#6b6b6b; font-size:12px; padding:6px 18px 14px; }
   /* Mismo arreglo que los reportes contables: en el celular las columnas de
      la derecha se salen de la caja. `max-content` y no `width:100%`, porque
      con este último la tabla se encoge al contenedor y su contenido se
      desborda igual, sin poder alcanzarlo ni al final del desplazamiento. */
   .scroll-x { overflow-x:auto; -webkit-overflow-scrolling:touch; }
   .scroll-x > table.iv { min-width:max-content; }
+  /* La columna que nombra la fila se queda fija al desplazar: sin esto, al
+     llegar a la última columna el producto ya salió por la izquierda y las
+     cifras quedan sin sujeto. Fondo opaco, o el contenido pasa por debajo.
+     `border-collapse:collapse` desactiva `position:sticky` en las celdas, así
+     que esta tabla separa los bordes; el borde inferior de cada celda se
+     dibuja igual.
+     En móvil `base.html` vuelve toda tabla `display:block` con su propio
+     `overflow-x`; eso mete un contenedor de desplazamiento entre la celda y
+     el scroller, y ahí `sticky` deja de aplicar. Dentro de `.scroll-x` la
+     tabla vuelve a ser tabla: el desplazamiento ya lo hace el envoltorio. */
+  .scroll-x > table.iv {
+    display:table; overflow:visible;
+    border-collapse:separate; border-spacing:0;
+  }
+  .scroll-x > table.iv th:first-child { position:sticky; left:0; z-index:1; }
+  .scroll-x > table.iv th[scope="row"] { background:#fff; }
+  /* El borde marca dónde termina la columna fija; sin él, las cifras parecen
+     haberse despegado del nombre en vez de deslizarse bajo él. */
+  .scroll-x > table.iv th:first-child { border-right:1px solid #ececec; }
 
   .forms { display:flex; gap:18px; flex-wrap:wrap; margin:18px 0; }
   .card-form { flex:1 1 340px; background:#fff; border:2px solid #000; border-radius:12px;
@@ -323,30 +349,34 @@
     {% if alarma_margen.avisos %}
     <div class="scroll-x">
     <table class="iv">
+      <thead>
       <tr>
-        <th>Producto</th>
+        <th scope="col">Producto</th>
         <!-- Las unidades van antes que los números: una caída medida sobre una
              sola venta se lee igual que una real, y en el celular la última
              columna hay que ir a buscarla. -->
-        <th>Unidades</th>
-        <th>{{ alarma_margen.mes_anterior|date:"F" }}</th>
-        <th>{{ alarma_margen.mes_actual|date:"F" }}</th>
-        <th>Caída</th>
+        <th scope="col">Unidades</th>
+        <th scope="col">{{ alarma_margen.mes_anterior|date:"F" }}</th>
+        <th scope="col">{{ alarma_margen.mes_actual|date:"F" }}</th>
+        <th scope="col">Caída</th>
       </tr>
+      </thead>
+      <tbody>
       {% for a in alarma_margen.avisos %}
       <tr>
-        <td>
+        <th scope="row">
           {{ a.nombre }}
           {% if a.estimado %}
-            <span class="muted" title="Alguna venta no tiene capturada su compra, así que el margen se apoya en el costo del catálogo. Ese costo es el de hoy: si se corrige un ingrediente, este porcentaje se mueve solo.">· estimado</span>
+            <span class="muted">· estimado</span>
           {% endif %}
-        </td>
+        </th>
         <td class="muted">{{ a.unidades_anterior }} → {{ a.unidades_actual }}</td>
         <td>{{ a.margen_anterior|floatformat:1 }}%</td>
         <td class="bad">{{ a.margen_actual|floatformat:1 }}%</td>
         <td class="bad">−{{ a.caida|floatformat:1 }}%</td>
       </tr>
       {% endfor %}
+      </tbody>
     </table>
     </div>
     {% endif %}
@@ -355,6 +385,12 @@
       o más respecto al mes anterior. Un producto que no se vendió en alguno de
       los dos meses no aparece: sin comparación no se inventa una caída.
       Las cortesías no cuentan.
+      {% if alarma_margen.hay_estimados %}
+      <br><strong>· estimado</strong> significa que a alguna de esas ventas le
+      falta capturar su compra, así que el margen se apoya en el costo del
+      catálogo. Ese costo es el de hoy: si se corrige un ingrediente, el
+      porcentaje se mueve solo.
+      {% endif %}
     </div>
   </div>
   {% endif %}

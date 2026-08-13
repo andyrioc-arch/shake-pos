@@ -101,6 +101,10 @@ def alarmas_margen(hoy=None):
     avisos.sort(key=lambda x: x["caida"], reverse=True)
     return {
         "avisos": avisos,
+        # La explicación de «estimado» se muestra solo cuando hay alguno: una
+        # advertencia permanente sobre algo que no está pasando se aprende a
+        # saltar, y entonces tampoco se lee el día que sí aplica.
+        "hay_estimados": any(a["estimado"] for a in avisos),
         "umbral": umbral,
         "mes_actual": mes_actual,
         "mes_anterior": mes_anterior,
