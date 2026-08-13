@@ -600,6 +600,16 @@ class Canje(models.Model):
     nota = models.ForeignKey(
         "inventario.Nota", on_delete=models.SET_NULL, null=True, blank=True,
         related_name="canjes")
+    venta = models.OneToOneField(
+        "inventario.Venta", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="canje",
+        help_text="La cortesía que sacó el premio del inventario. Solo para "
+                  "premios de producto o combo.")
+    costo_real = models.DecimalField(
+        "Costo real ($)", max_digits=12, decimal_places=2,
+        null=True, blank=True,
+        help_text="Lo que costó entregarlo, por FIFO. Vacío = no se ha "
+                  "entregado, o el premio no consume inventario.")
 
     class Meta:
         verbose_name = "Canje de premio"
@@ -612,6 +622,16 @@ class Canje(models.Model):
     @property
     def costo_estimado(self):
         return self.premio.costo_estimado
+
+    @property
+    def costo(self):
+        """Lo que costó entregarlo: el real si se sabe, el estimado si no.
+
+        Un descuento nunca tiene costo real —no consume insumos, cuesta
+        ingreso no percibido— así que ahí el estimado no es un respaldo, es
+        la respuesta.
+        """
+        return self.costo_real if self.costo_real is not None else self.costo_estimado
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -12,10 +12,12 @@ from django.db import transaction
 from django.db.models import Count, F, Max, Q, Sum
 from django.utils import timezone
 
+from inventario.models import Venta
+
 from .models import (
     ALFABETO_CODIGO, Canje, Cliente, Compra, ConfiguracionPrograma,
-    MovimientoPuntos, PromocionPuntos, TelefonoInvalido, normaliza_nombre,
-    normaliza_telefono,
+    MovimientoPuntos, Premio, PromocionPuntos, TelefonoInvalido,
+    normaliza_nombre, normaliza_telefono,
 )
 
 
@@ -330,17 +332,55 @@ def canjear(cliente, premio, usuario=None, nota=None):
     return canje
 
 
+#: Premios que salen del inventario al entregarse. Un descuento no: cuesta
+#: ingreso no percibido, no insumo.
+TIPOS_QUE_CONSUMEN = (Premio.Tipo.PRODUCTO, Premio.Tipo.COMBO)
+
+
 @transaction.atomic
 def entregar_canje(canje, usuario=None, nota=None):
+    """Entrega el premio. Si es de producto, aquí sale del inventario.
+
+    Entregar un shake gratis gasta la misma leche que venderlo. Hasta ahora el
+    canje solo movía puntos, así que ese insumo desaparecía del almacén sin
+    que ningún número lo registrara: el inventario contaba de más y el costo
+    de la promoción no aparecía en ninguna parte.
+    """
     if canje.estado != Canje.Estado.PENDIENTE:
         raise ErrorLealtad(f"Ese canje ya está {canje.get_estado_display().lower()}.")
+
+    venta = None
+    if canje.premio.tipo in TIPOS_QUE_CONSUMEN:
+        if not canje.premio.receta_id:
+            # Mensaje y no IntegrityError: `Venta.receta` es obligatoria, y la
+            # vista que llama aquí solo atrapa ErrorLealtad. Cualquier otra
+            # excepción le sale al cajero como un 500.
+            raise ErrorLealtad(
+                f"El premio «{canje.premio.nombre}» no tiene producto ligado; "
+                "no se puede entregar hasta configurarlo.")
+        # Sin `nota`: el canje no es un ticket de venta. El rastro de por qué
+        # salió este shake es `Canje.venta`, que apunta de vuelta.
+        venta = Venta.objects.create(
+            fecha=timezone.localdate(),
+            receta=canje.premio.receta,
+            cantidad=canje.premio.cantidad,
+            es_cortesia=True,
+        )
+        # El costeo corre por señal al crear la venta; se relee para guardar lo
+        # que de verdad costó, que es el dato que P9 viene a producir.
+        venta.refresh_from_db()
+
     canje.estado = Canje.Estado.ENTREGADO
     canje.entregado_en = timezone.now()
     if usuario:
         canje.autorizado_por = usuario
     if nota:
         canje.nota = nota
-    canje.save(update_fields=["estado", "entregado_en", "autorizado_por", "nota"])
+    if venta:
+        canje.venta = venta
+        canje.costo_real = venta.costo_fifo
+    canje.save(update_fields=["estado", "entregado_en", "autorizado_por",
+                              "nota", "venta", "costo_real"])
     return canje
 
 

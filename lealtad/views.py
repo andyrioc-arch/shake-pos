@@ -382,6 +382,18 @@ def premio_guardar(request):
         request.POST.get("limite_por_cliente"), minimo=0)
     premio.vigencia_dias = _entero(request.POST.get("vigencia_dias"), 30, minimo=0)
     premio.activo = bool(request.POST.get("activo"))
+
+    # Un premio de producto sin receta no se puede entregar: no hay de dónde
+    # descontar el inventario. Se atrapa aquí y no solo en `Premio.clean()`,
+    # que no corre al guardar desde este formulario, para que el problema
+    # aparezca al configurarlo y no en el mostrador con el cliente enfrente.
+    if premio.tipo in servicios.TIPOS_QUE_CONSUMEN and not premio.receta_id:
+        messages.error(
+            request,
+            f"«{premio.nombre}» entrega un producto, así que necesita una "
+            "receta ligada; si no, no se puede descontar del inventario.")
+        return redirect("lealtad_premios")
+
     try:
         premio.save()
     except IntegrityError:
