@@ -390,7 +390,7 @@ def nota_pdf(request, token):
 
     nota = get_object_or_404(Nota, token=token)
     url = request.build_absolute_uri(nota.get_absolute_url())
-    lealtad = _lealtad_de_la_nota(nota, request)
+    lealtad = _lealtad_de_la_nota(nota, request, con_qr=False)
     datos = None
     if lealtad:
         hitos = []
@@ -416,8 +416,12 @@ def nota_pdf(request, token):
     return resp
 
 
-def _lealtad_de_la_nota(nota, request):
-    """Datos del programa de lealtad para mostrarlos en el comprobante."""
+def _lealtad_de_la_nota(nota, request, con_qr=True):
+    """Datos del programa de lealtad para mostrarlos en el comprobante.
+
+    `con_qr=False` para el PDF, que dibuja su propio código desde la matriz:
+    armar el SVG de la tarjeta y tirarlo es un QR completo por descarga.
+    """
     compra = getattr(nota, "compra_lealtad", None)
     if compra is None:
         return None
@@ -432,7 +436,8 @@ def _lealtad_de_la_nota(nota, request):
         "premio_listo": max(disponibles, key=lambda p: p.puntos_requeridos,
                             default=None),
         "nivel_alcanzado": compra.nivel_alcanzado,
-        "qr": _qr_svg(request.build_absolute_uri(cliente.get_absolute_url())),
+        "qr": _qr_svg(request.build_absolute_uri(
+            cliente.get_absolute_url())) if con_qr else None,
     }
 
 

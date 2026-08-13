@@ -1074,6 +1074,31 @@ class CanjeConsumeInventarioTests(TestCase):
         # Su costo sigue siendo ingreso no percibido, no insumo.
         self.assertEqual(canje.costo, premio.costo_estimado)
 
+    def test_sin_compras_capturadas_no_se_publica_que_el_premio_salio_gratis(self):
+        """Cero no es un valor, es una ausencia.
+
+        Con capas faltantes el FIFO deja `costo_fifo = 0.00`. Guardarlo como
+        costo real diría que regalar shakes no cuesta nada, justo cuando menos
+        se sabe. Se deja en NULL y el estimado del catálogo responde.
+        """
+        otro = Ingrediente.objects.create(
+            nombre="Cacao", unidad_compra="kg", cantidad_por_unidad=1000,
+            unidad_receta="g", costo_unidad_compra=Decimal("400.00"))
+        receta = Receta.objects.create(
+            nombre="Sin respaldo", precio_venta=Decimal("100.00"))
+        RecetaIngrediente.objects.create(
+            receta=receta, ingrediente=otro, cantidad=50)     # nunca comprado
+        premio = Premio.objects.create(
+            nombre="Cacao gratis", puntos_requeridos=100,
+            tipo=Premio.Tipo.PRODUCTO, receta=receta, cantidad=1)
+
+        canje = servicios.entregar_canje(self._canjear(premio))
+
+        self.assertTrue(canje.venta.costo_incompleto)
+        self.assertIsNone(canje.costo_real)
+        self.assertEqual(canje.costo, premio.costo_estimado)   # 50 g × 0.40
+        self.assertEqual(canje.costo, Decimal("20.00"))
+
     def test_las_metricas_leen_el_costo_real_cuando_existe(self):
         premio = Premio.objects.create(
             nombre="Latte gratis", puntos_requeridos=100,

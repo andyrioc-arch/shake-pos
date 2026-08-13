@@ -378,7 +378,12 @@ def entregar_canje(canje, usuario=None, nota=None):
         canje.nota = nota
     if venta:
         canje.venta = venta
-        canje.costo_real = venta.costo_fifo
+        # Solo si el costeo quedó completo. Con capas faltantes el FIFO deja
+        # `costo_fifo = 0.00`, y copiarlo aquí publicaría que regalar shakes
+        # sale gratis justo cuando menos se sabe. Cero no es un valor, es una
+        # ausencia: se deja en NULL y `Canje.costo` cae al estimado.
+        if venta.costo_esta_completo:
+            canje.costo_real = venta.costo_fifo
     canje.save(update_fields=["estado", "entregado_en", "autorizado_por",
                               "nota", "venta", "costo_real"])
     return canje
