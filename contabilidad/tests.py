@@ -25,7 +25,7 @@ class FifoCogsTests(TestCase):
     def _compra(self, dia, costo):
         from inventario.models import Compra
         c = Compra.objects.create(fecha=date(2026, 7, dia), ingrediente=self.i,
-                                  cantidad=Decimal("1"), costo_unitario=Decimal(costo))
+                                  cantidad=Decimal("1"), monto_total=Decimal(costo))
         return c
 
     def _venta(self, dia, cant):
@@ -154,7 +154,7 @@ class CortesiaTests(TestCase):
         r = Receta.objects.create(nombre="Shake", precio_venta=Decimal("100"))
         RecetaIngrediente.objects.create(receta=r, ingrediente=i, cantidad=Decimal("200"))
         c = Compra.objects.create(fecha=date(2026, 8, 1), ingrediente=i,
-                                  cantidad=Decimal("1"), costo_unitario=Decimal("20"))
+                                  cantidad=Decimal("1"), monto_total=Decimal("20.00"))
 
         v = Venta.objects.create(fecha=date(2026, 8, 5), receta=r,
                                  cantidad=2, es_cortesia=True)

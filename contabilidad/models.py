@@ -220,7 +220,13 @@ class Movimiento(models.Model):
     # el despliegue devuelve el Estado de Resultados que estaba publicado.
     # `editable=False` las saca del admin para que nadie las capture creyendo
     # que todavía mueven el reconocimiento de mes.
-    facturado = models.BooleanField("Facturado", default=False, editable=False)
+    # `null=True` es el primer paso de P11, y solo eso: la columna es NOT NULL
+    # sin default en la base, así que borrarla de un golpe tumba la caja en
+    # cualquiera de los dos órdenes de despliegue. Nullable primero abre la
+    # ventana donde el código viejo la sigue llenando y el nuevo puede
+    # omitirla; la tanda 2 la borra, ya con el código nuevo arriba.
+    facturado = models.BooleanField("Facturado", default=False, editable=False,
+                                    null=True)
     fecha_factura = models.DateField("Fecha de factura", null=True, blank=True,
                                      editable=False)
 
