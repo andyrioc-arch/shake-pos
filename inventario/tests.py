@@ -504,3 +504,45 @@ class AlarmaMargenTests(TestCase):
         User.objects.create_user("cajero", "c@c.com", "pass")
         self.client.login(username="cajero", password="pass")
         self.assertNotContains(self.client.get(url), "Alarma de margen")
+
+    def test_el_panel_publica_los_porcentajes_de_la_alarma(self):
+        """Lo que se verificó a mano, fijado: el recorrido completo hasta la
+        pantalla, en porcentaje y con las unidades de la muestra a la vista."""
+        from django.contrib.auth.models import User
+        from django.urls import reverse
+        self._dos_meses(Decimal("4.00"), Decimal("20.00"))
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+        html = self.client.get(reverse("panel_inventario")).content.decode()
+
+        self.assertIn("96.0%", html)      # julio
+        self.assertIn("80.0%", html)      # agosto
+        self.assertIn("−16.7%", html)     # la caída
+        self.assertIn("1 → 1", html)      # sobre cuántas ventas se midió
+        self.assertIn("1 con caída", html)
+        self.assertNotIn("· estimado", html)   # ambas ventas están costeadas
+
+    def test_el_panel_marca_el_aviso_apoyado_en_el_catalogo(self):
+        from django.contrib.auth.models import User
+        from django.urls import reverse
+        self._capa(date(2026, 7, 1), Decimal("4.00"))
+        Venta.objects.create(fecha=date(2026, 7, 15), receta=self.rec, cantidad=1)
+        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec, cantidad=1)
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+        self.assertContains(
+            self.client.get(reverse("panel_inventario")), "· estimado")
+
+    def test_el_panel_dice_cuando_no_hay_caidas(self):
+        from django.contrib.auth.models import User
+        from django.urls import reverse
+        self._dos_meses(Decimal("4.00"), Decimal("4.00"))
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+        resp = self.client.get(reverse("panel_inventario"))
+
+        self.assertContains(resp, "Sin caídas")
+        self.assertNotContains(resp, "con caída")
