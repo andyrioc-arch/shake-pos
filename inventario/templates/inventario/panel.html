@@ -325,23 +325,26 @@
     <table class="iv">
       <tr>
         <th>Producto</th>
+        <!-- Las unidades van antes que los números: una caída medida sobre una
+             sola venta se lee igual que una real, y en el celular la última
+             columna hay que ir a buscarla. -->
+        <th>Unidades</th>
         <th>{{ alarma_margen.mes_anterior|date:"F" }}</th>
         <th>{{ alarma_margen.mes_actual|date:"F" }}</th>
         <th>Caída</th>
-        <th>Unidades</th>
       </tr>
       {% for a in alarma_margen.avisos %}
       <tr>
         <td>
           {{ a.nombre }}
           {% if a.estimado %}
-            <span class="muted" title="Alguna venta no tiene su costo completo: el margen se apoya en el estimado del catálogo.">· estimado</span>
+            <span class="muted" title="Alguna venta no tiene capturada su compra, así que el margen se apoya en el costo del catálogo. Ese costo es el de hoy: si se corrige un ingrediente, este porcentaje se mueve solo.">· estimado</span>
           {% endif %}
         </td>
+        <td class="muted">{{ a.unidades_anterior }} → {{ a.unidades_actual }}</td>
         <td>{% widthratio a.margen_anterior 1 100 %}%</td>
         <td class="bad">{% widthratio a.margen_actual 1 100 %}%</td>
         <td class="bad">−{% widthratio a.caida 1 100 %}%</td>
-        <td class="muted">{{ a.unidades_anterior }} → {{ a.unidades_actual }}</td>
       </tr>
       {% endfor %}
     </table>
