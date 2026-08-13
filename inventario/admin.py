@@ -4,7 +4,7 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from reversion.admin import VersionAdmin
 from .models import (
-    Ingrediente, Receta, RecetaIngrediente, Compra, Venta,
+    ConfiguracionCosteo, Ingrediente, Receta, RecetaIngrediente, Compra, Venta,
     Extra, VentaSustitucion, VentaExtra, Nota,
 )
 
@@ -256,3 +256,15 @@ class ExtraAdmin(admin.ModelAdmin):
     @admin.display(description="Costo insumo")
     def costo_col(self, obj):
         return money(obj.costo)
+
+
+@admin.register(ConfiguracionCosteo)
+class ConfiguracionCosteoAdmin(admin.ModelAdmin):
+    list_display = ("__str__",)
+
+    def has_add_permission(self, request):
+        # Es un singleton: se edita el registro que ya existe.
+        return not ConfiguracionCosteo.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False

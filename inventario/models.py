@@ -697,3 +697,29 @@ class ConsumoCapa(models.Model):
     def __str__(self):
         origen = self.compra_id or "sin capa"
         return f"venta {self.venta_id} ← compra {origen}: {self.cantidad_receta}"
+
+
+class ConfiguracionCosteo(models.Model):
+    """Ajustes del costeo. Solo existe un registro (id=1)."""
+
+    umbral_caida_margen = models.PositiveSmallIntegerField(
+        "Avisar si el margen baja (%)", default=10,
+        validators=[MinValueValidator(1)],
+        help_text="Caída respecto al mes anterior a partir de la cual se "
+                  "enciende la alarma. 10 = de 60% a 54% ya avisa.")
+
+    class Meta:
+        verbose_name = "Configuración del costeo"
+        verbose_name_plural = "Configuración del costeo"
+
+    def __str__(self):
+        return f"Alarma de margen: baja de {self.umbral_caida_margen}%"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get(cls):
+        cfg, _ = cls.objects.get_or_create(pk=1)
+        return cfg

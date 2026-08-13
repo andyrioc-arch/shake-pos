@@ -303,6 +303,51 @@
     </table>
   </div>
 
+  {% if alarma_margen %}
+  <!-- ── Alarma de margen (solo dueño: expone costo) ───────────────── -->
+  <div class="blk">
+    <h2>
+      📉 Alarma de margen
+      {% if alarma_margen.avisos %}
+        <span class="pill">{{ alarma_margen.avisos|length }} con caída</span>
+      {% else %}
+        <span class="pill ok">Sin caídas</span>
+      {% endif %}
+    </h2>
+    {% if alarma_margen.avisos %}
+    <table class="iv">
+      <tr>
+        <th>Producto</th>
+        <th>{{ alarma_margen.mes_anterior|date:"F" }}</th>
+        <th>{{ alarma_margen.mes_actual|date:"F" }}</th>
+        <th>Caída</th>
+        <th>Unidades</th>
+      </tr>
+      {% for a in alarma_margen.avisos %}
+      <tr>
+        <td>
+          {{ a.nombre }}
+          {% if a.estimado %}
+            <span class="muted" title="Alguna venta no tiene su costo completo: el margen se apoya en el estimado del catálogo.">· estimado</span>
+          {% endif %}
+        </td>
+        <td>{{ a.margen_anterior|floatformat:3 }}</td>
+        <td class="bad">{{ a.margen_actual|floatformat:3 }}</td>
+        <td class="bad">−{{ a.caida|floatformat:3 }}</td>
+        <td class="muted">{{ a.unidades_anterior }} → {{ a.unidades_actual }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+    <div class="note">
+      Avisa cuando el margen de un producto cae {{ alarma_margen.umbral|floatformat:2 }}
+      o más respecto al mes anterior. Un producto que no se vendió en alguno de
+      los dos meses no aparece: sin comparación no se inventa una caída.
+      Las cortesías no cuentan.
+    </div>
+  </div>
+  {% endif %}
+
   <!-- ── Catálogo de recetas ───────────────────────────────────────── -->
   <div class="blk">
     <h2>🥤 Catálogo de productos</h2>
