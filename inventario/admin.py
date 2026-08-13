@@ -160,8 +160,11 @@ class RecetaAdmin(admin.ModelAdmin):
 class CompraAdmin(admin.ModelAdmin):
     list_display = (
         "fecha", "ingrediente", "cantidad", "unidad_col",
-        "costo_unitario", "total_col", "proveedor",
+        "total_col", "proveedor",
     )
+    # El unitario ya no se captura: se paga un monto por una cantidad.
+    fields = ("fecha", "ingrediente", "cantidad", "monto_total",
+              "proveedor", "notas")
     list_filter = ("fecha", "proveedor", "ingrediente__categoria")
     search_fields = ("ingrediente__nombre", "proveedor")
     autocomplete_fields = ("ingrediente",)

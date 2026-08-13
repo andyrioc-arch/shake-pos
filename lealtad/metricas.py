@@ -101,7 +101,7 @@ def resumen_puntos():
 
     pasivo = (Cliente.objects.aggregate(s=Sum("puntos_saldo"))["s"] or 0)
     canjes = Canje.objects.exclude(estado=Canje.Estado.CANCELADO)
-    costo_entregado = sum((c.premio.costo_estimado for c in
+    costo_entregado = sum((c.costo_estimado for c in
                            canjes.select_related("premio", "premio__receta")), CERO)
 
     return {
@@ -140,19 +140,20 @@ def costo_pasivo(pasivo=None):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def margen_de_miembros(desde=None):
-    """Margen bruto real de las ventas hechas por clientes del programa."""
+    """Margen bruto real de las ventas hechas por clientes del programa.
+
+    Con el costo FIFO de cada venta, no con el estimado del catálogo. Las
+    cortesías quedan fuera: son costo de mercadotecnia, no venta con margen.
+    """
     compras = Compra.objects.filter(nota__isnull=False)
     if desde:
         compras = compras.filter(fecha__gte=desde)
     notas = list(compras.values_list("nota_id", flat=True))
     if not notas:
         return CERO
-    lineas = (Venta.objects.filter(nota_id__in=notas)
-              .select_related("receta")
-              .prefetch_related("receta__ingredientes__ingrediente",
-                                "extras__extra__ingrediente",
-                                "sustituciones__ingrediente_original",
-                                "sustituciones__ingrediente_nuevo"))
+    lineas = (Venta.objects
+              .filter(nota_id__in=notas, es_cortesia=False)
+              .con_costeo())
     return sum((v.ganancia for v in lineas), CERO)
 
 
@@ -162,7 +163,7 @@ def resumen_retorno(desde=None):
     canjes = Canje.objects.exclude(estado=Canje.Estado.CANCELADO)
     if desde:
         canjes = canjes.filter(creado__date__gte=desde)
-    costo = sum((c.premio.costo_estimado for c in
+    costo = sum((c.costo_estimado for c in
                  canjes.select_related("premio", "premio__receta")), CERO)
 
     compras = Compra.objects.all()

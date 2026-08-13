@@ -159,9 +159,29 @@ class Receta(models.Model):
 
     @property
     def costo_receta(self):
-        """Costo total de los ingredientes de la receta."""
+        """Costo total de los ingredientes de la receta.
+
+        Sirve a dos clases de llamador y no puede castigar a ninguno:
+
+        - Si quien llama YA precargó `ingredientes__ingrediente` (los paneles,
+          vía `Venta.objects.con_costeo()`), hay que usar ese caché. Un
+          `.select_related()` aquí abriría un queryset NUEVO, tiraría el caché
+          y volvería a consultar una vez por receta.
+        - Si NO precargó (el catálogo, el admin, los premios), `.all()` a secas
+          deja una consulta por ingrediente al leer `costo_linea`.
+
+        Por eso se mira el caché de prefetch antes de decidir. La alternativa
+        —obligar a precargar en cada sitio— reparte la misma decisión entre
+        seis llamadores, y olvidarla en uno no rompe ningún número: solo lo
+        vuelve lento, que es lo que nadie nota.
+        """
+        items = self.ingredientes.all()
+        precargado = "ingredientes" in getattr(
+            self, "_prefetched_objects_cache", {})
+        if not precargado:
+            items = items.select_related("ingrediente")
         total = Decimal("0")
-        for item in self.ingredientes.select_related("ingrediente"):
+        for item in items:
             total += item.costo_linea
         return total
 
@@ -221,9 +241,29 @@ class Compra(models.Model):
         max_digits=12, decimal_places=2,
         validators=[MinValueValidator(Decimal("0"))],
     )
+    monto_total = models.DecimalField(
+        "Monto total pagado ($)", max_digits=12, decimal_places=2,
+        null=True, blank=True,
+        validators=[MinValueValidator(Decimal("0"))],
+        help_text="Lo que de verdad se pagó por esta compra.",
+    )
+    cantidad_receta = models.DecimalField(
+        "Unidades de receta compradas", max_digits=14, decimal_places=4,
+        null=True, blank=True, editable=False,
+        help_text="Cuántas unidades de receta trajo esta compra, congeladas al "
+                  "momento de comprarla.",
+    )
+    saldo_receta = models.DecimalField(
+        "Saldo de la capa", max_digits=14, decimal_places=4,
+        null=True, blank=True, editable=False,
+        help_text="Unidades de receta que le quedan sin consumir a esta compra. "
+                  "Lo lleva el costeo FIFO.",
+    )
     costo_unitario = models.DecimalField(
         "Costo unitario ($)", max_digits=12, decimal_places=2,
+        null=True, blank=True,
         validators=[MinValueValidator(Decimal("0"))],
+        help_text="Derivado del monto total. Se conserva por compatibilidad.",
     )
     proveedor = models.CharField(max_length=120, blank=True)
     notas = models.CharField(max_length=200, blank=True)
@@ -237,9 +277,43 @@ class Compra(models.Model):
     def __str__(self):
         return f"{self.fecha} · {self.ingrediente} x{self.cantidad}"
 
+    def save(self, *args, **kwargs):
+        # Una compra nueva es una capa llena. Se hace aquí y no en la vista para
+        # que valga por todos los caminos: caja, admin, seed, API y pruebas.
+        #
+        # El tamaño de la capa se congela: si mañana alguien corrige la
+        # presentación del ingrediente (que un costal traía 5 kg y no 1), esta
+        # compra tiene que seguir valiendo lo que costó.
+        nuevos = []
+        if self.cantidad_receta is None and self.cantidad is not None:
+            self.cantidad_receta = (
+                self.cantidad * self.ingrediente.cantidad_por_unidad)
+            nuevos.append("cantidad_receta")
+        if self.saldo_receta is None and self.cantidad_receta is not None:
+            self.saldo_receta = self.cantidad_receta
+            nuevos.append("saldo_receta")
+        if nuevos and kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = [*kwargs["update_fields"], *nuevos]
+        super().save(*args, **kwargs)
+
+    @property
+    def costo_unitario_capa(self):
+        """Lo que costó una unidad de receta en ESTA compra."""
+        if self.cantidad_receta:
+            return self.total / self.cantidad_receta
+        return Decimal("0")
+
     @property
     def total(self):
-        return self.cantidad * self.costo_unitario
+        """Lo que se pagó por la compra.
+
+        La fuente de verdad es `monto_total`. Se cae a `cantidad × unitario`
+        solo para filas viejas que aún no tengan el monto: la división para
+        derivar el unitario pierde centavos, la multiplicación no los recupera.
+        """
+        if self.monto_total is not None:
+            return self.monto_total
+        return self.cantidad * (self.costo_unitario or Decimal("0"))
 
 
 class Nota(models.Model):
@@ -294,8 +368,33 @@ class Nota(models.Model):
         return reverse("nota_ver", args=[self.token])
 
 
+class VentaQuerySet(models.QuerySet):
+    """Formas de traer ventas que el costeo obliga a repetir siempre igual."""
+
+    def con_costeo(self):
+        """Precarga TODO lo que recorre `costo_de_ventas` en su respaldo.
+
+        Son las mismas cuatro vías que enumera `consumo_ingredientes()`. Van
+        juntas y en un solo lugar porque olvidar una no rompe ningún número:
+        solo agrega una consulta por venta, que es la clase de regresión que
+        nadie nota hasta que el panel tarda en producción.
+        """
+        return (self.select_related("receta")
+                .prefetch_related("receta__ingredientes__ingrediente",
+                                  "extras__extra__ingrediente",
+                                  "sustituciones__ingrediente_original",
+                                  "sustituciones__ingrediente_nuevo"))
+
+    def sin_costo_completo(self):
+        """Ventas que no se pueden reconocer: sin costear o costeadas a medias."""
+        return self.filter(models.Q(costo_fifo__isnull=True) |
+                           models.Q(costo_incompleto=True))
+
+
 class Venta(models.Model):
     """Registro de una venta de shakes."""
+
+    objects = VentaQuerySet.as_manager()
 
     class MetodoPago(models.TextChoices):
         EFECTIVO = "efectivo", "Efectivo"
@@ -325,6 +424,20 @@ class Venta(models.Model):
         "Cortesía", default=False,
         help_text="Producto regalado (activación): sin ingreso, pero consume inventario.",
     )
+
+    # ── Costeo real (FIFO). Lo escribe inventario.costeo, nadie más. ──────────
+    costo_fifo = models.DecimalField(
+        "Costo real (FIFO)", max_digits=12, decimal_places=2,
+        null=True, blank=True, editable=False,
+        help_text="Costo de las capas de compra que surtieron esta venta. "
+                  "Vacío significa «sin costear», nunca cero.",
+    )
+    costo_incompleto = models.BooleanField(
+        "Costo incompleto", default=False, db_default=False, editable=False,
+        help_text="Faltaron compras para surtir parte del consumo: el costo "
+                  "solo cubre lo que sí tenía capa.",
+    )
+    costeada_en = models.DateTimeField(null=True, blank=True, editable=False)
 
     class Meta:
         verbose_name = "Venta"
@@ -408,8 +521,31 @@ class Venta(models.Model):
         return dict(cons)
 
     @property
+    def costo_esta_completo(self):
+        """¿El costo guardado cubre todo lo que la venta consumió?
+
+        Es el invariante I2 en una sola línea: sin esto, ni se reconoce el
+        asiento ni el panel puede confiar en el número. `costo_fifo = 0.00` con
+        `costo_incompleto` no es «salió gratis», es «no se sabe».
+        """
+        return self.costo_fifo is not None and not self.costo_incompleto
+
+    @property
+    def costo_de_ventas(self):
+        """Costo de esta venta para paneles comerciales.
+
+        El costo real (`costo_fifo`) si está completo; si no, el estimado del
+        catálogo, que sirve para no dejar el panel en blanco. Publicar un costo
+        a medias infla el margen justo donde menos se sabe.
+
+        Los ASIENTOS NO usan esta propiedad: la contabilidad lee `costo_fifo` y
+        nada más, porque un estimado en el libro mayor es un costo inventado.
+        """
+        return self.costo_fifo if self.costo_esta_completo else self.costo_total
+
+    @property
     def ganancia(self):
-        return self.ingreso - self.costo_total
+        return self.ingreso - self.costo_de_ventas
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -474,11 +610,17 @@ class VentaSustitucion(models.Model):
 
     @property
     def cantidad_receta(self):
-        """Cantidad que la receta usa del ingrediente original (la que se sustituye)."""
-        item = self.venta.receta.ingredientes.filter(
-            ingrediente=self.ingrediente_original
-        ).first()
-        return item.cantidad if item else Decimal("0")
+        """Cantidad que la receta usa del ingrediente original (la que se sustituye).
+
+        Se busca en `.all()` y se filtra en Python: un `.filter()` abriría un
+        queryset nuevo y consultaría una vez por sustitución, aunque quien nos
+        llame ya haya precargado la receta con `con_costeo()`. Una receta trae
+        un puñado de ingredientes, así que recorrerlos no cuesta nada.
+        """
+        for item in self.venta.receta.ingredientes.all():
+            if item.ingrediente_id == self.ingrediente_original_id:
+                return item.cantidad
+        return Decimal("0")
 
     @property
     def delta_costo(self):
@@ -514,3 +656,44 @@ class VentaExtra(models.Model):
     @property
     def costo_total(self):
         return self.cantidad * self.extra.costo
+
+
+class ConsumoCapa(models.Model):
+    """Qué capa de compra surtió a qué venta, y por cuánto.
+
+    Es el rastro que hace auditable el costo de una venta y, sobre todo, lo que
+    permite deshacerlo: para recostear hay que devolverle a cada compra las
+    unidades que esta venta le tomó, y sin este registro no hay forma de saber
+    cuáles fueron.
+
+    `compra` en blanco significa que faltaban capas para esa parte del consumo:
+    se deja constancia con importe cero en vez de inventar el costo con el
+    precio del catálogo, que abonaría inventario que nunca entró.
+    """
+
+    venta = models.ForeignKey(
+        "Venta", on_delete=models.CASCADE, related_name="consumos")
+    compra = models.ForeignKey(
+        "Compra", on_delete=models.CASCADE, null=True, blank=True,
+        related_name="consumos")
+    ingrediente = models.ForeignKey(Ingrediente, on_delete=models.PROTECT)
+    # Los decimales de más son a propósito: el redondeo a centavos ocurre una
+    # sola vez, al escribir Venta.costo_fifo. Redondear por capa dejaría un
+    # residuo atrapado en Inventario que crece con el número de capas.
+    cantidad_receta = models.DecimalField(max_digits=14, decimal_places=4)
+    costo_unitario = models.DecimalField(max_digits=14, decimal_places=6,
+                                         default=Decimal("0"))
+    importe = models.DecimalField(max_digits=14, decimal_places=4,
+                                  default=Decimal("0"))
+
+    class Meta:
+        verbose_name = "Consumo de capa"
+        verbose_name_plural = "Consumos de capas"
+        indexes = [
+            models.Index(fields=["ingrediente", "venta"]),
+            models.Index(fields=["compra"]),
+        ]
+
+    def __str__(self):
+        origen = self.compra_id or "sin capa"
+        return f"venta {self.venta_id} ← compra {origen}: {self.cantidad_receta}"

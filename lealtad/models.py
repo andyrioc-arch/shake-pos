@@ -47,6 +47,7 @@ def resuelve_id(modelo, valor):
 # ══════════════════════════════════════════════════════════════════════════════
 
 LADA_PAIS = "52"          # México
+LARGO_NOMBRE = 80         # fuente de verdad: Cliente.nombre lo declara con esto
 
 
 class TelefonoInvalido(ValueError):
@@ -73,6 +74,24 @@ def normaliza_telefono(valor):
         raise TelefonoInvalido(
             f"'{valor}' no parece un celular de 10 dígitos.")
     return "+" + digitos
+
+
+def normaliza_texto(valor, largo):
+    """Deja un texto capturado a mano listo para guardar: sin espacios de sobra
+    y sin pasarse del largo de su columna.
+
+    Postgres rechaza un valor más largo que la columna; SQLite lo acepta, así
+    que sin este tope el problema solo aparecería en producción. Se trunca en
+    vez de rechazar: un nombre largo no debe costarle los puntos al cliente.
+
+    El `rstrip` final es por el corte: `split()` ya quitó el espacio de la
+    izquierda, pero truncar puede dejar uno a la derecha.
+    """
+    return " ".join((valor or "").split())[:largo].rstrip()
+
+
+def normaliza_nombre(valor):
+    return normaliza_texto(valor, LARGO_NOMBRE)
 
 
 def telefono_bonito(e164):
@@ -215,7 +234,7 @@ class Cliente(models.Model):
     telefono = models.CharField(
         "Celular", max_length=20, unique=True,
         help_text="Se guarda en formato internacional (+52...).")
-    nombre = models.CharField("Nombre", max_length=80, blank=True)
+    nombre = models.CharField("Nombre", max_length=LARGO_NOMBRE, blank=True)
     cumpleanos = models.DateField("Cumpleaños", null=True, blank=True)
 
     token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
@@ -256,6 +275,11 @@ class Cliente(models.Model):
     def save(self, *args, **kwargs):
         if self.telefono:
             self.telefono = normaliza_telefono(self.telefono)
+        # Igual que el teléfono: se normaliza aquí y no en cada vista, para que
+        # ningún camino de escritura pueda desbordar la columna en Postgres.
+        for campo in ("nombre", "notas"):
+            largo = self._meta.get_field(campo).max_length
+            setattr(self, campo, normaliza_texto(getattr(self, campo), largo))
         if not self.codigo:
             self.codigo = genera_codigo_cliente()
             if kwargs.get("update_fields") is not None:

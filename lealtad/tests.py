@@ -15,16 +15,17 @@ from io import StringIO
 from django.contrib.auth.models import User
 from django.core.cache import cache
 from django.core.management import call_command
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from inventario.models import Ingrediente, Nota, Receta, RecetaIngrediente, Venta
 from lealtad import automatizaciones, mensajeria, metricas, servicios, views
 from lealtad.models import (
-    Automatizacion, Campana, Canje, Cliente, Compra, ConfiguracionPrograma,
-    Mensaje, MovimientoPuntos, Nivel, Plantilla, Premio, PromocionPuntos,
-    TelefonoInvalido, normaliza_telefono, telefono_bonito,
+    LARGO_NOMBRE, Automatizacion, Campana, Canje, Cliente, Compra,
+    ConfiguracionPrograma, Mensaje, MovimientoPuntos, Nivel, Plantilla, Premio,
+    PromocionPuntos, TelefonoInvalido, normaliza_nombre, normaliza_telefono,
+    telefono_bonito,
 )
 
 
@@ -61,6 +62,24 @@ class TelefonoTests(TestCase):
         self.assertFalse(creado)
         self.assertEqual(Cliente.objects.count(), 1)
         self.assertEqual(cliente.nombre, "Ana")
+
+
+class NormalizaNombreTests(SimpleTestCase):
+    """Postgres rechaza lo que no cabe en la columna; SQLite lo acepta callado,
+    así que sin este tope el error solo aparecería en producción."""
+
+    def test_recorta_al_largo_de_la_columna(self):
+        self.assertEqual(len(normaliza_nombre("A" * 200)), LARGO_NOMBRE)
+
+    def test_al_truncar_no_deja_un_espacio_al_final(self):
+        cortado = normaliza_nombre("A" * (LARGO_NOMBRE - 1) + " Beltrán")
+        self.assertEqual(cortado, cortado.rstrip())
+
+    def test_colapsa_los_espacios_de_sobra(self):
+        self.assertEqual(normaliza_nombre("  Ana   María  "), "Ana María")
+
+    def test_un_nombre_ausente_queda_vacio(self):
+        self.assertEqual(normaliza_nombre(None), "")
 
 
 class PuntosTests(TestCase):
@@ -480,13 +499,14 @@ class VentaConLealtadTests(TestCase):
         self.client.force_login(self.user)
         self.receta = crea_receta()
 
-    def _vender(self, telefono="", cortesia=False):
+    def _vender(self, telefono="", cortesia=False, nombre=""):
         datos = {
             "productos_json": json.dumps([{"receta": self.receta.pk, "cantidad": 2}]),
             "metodo_pago": "efectivo",
             "pago_con": "300",
             "fecha": timezone.localdate().isoformat(),
             "telefono_lealtad": telefono,
+            "nombre_lealtad": nombre,
         }
         if cortesia:
             datos.update(cortesia="1", motivo_cortesia="Activación", pago_con="")
@@ -498,6 +518,20 @@ class VentaConLealtadTests(TestCase):
         self.assertEqual(cliente.puntos_saldo, 26)     # $260 → 26 puntos
         self.assertEqual(cliente.visitas, 1)
         self.assertEqual(Compra.objects.get().nota, Nota.objects.get())
+
+    def test_el_nombre_capturado_en_caja_se_guarda(self):
+        self._vender("9991234567", nombre="Andrea")
+        self.assertEqual(Cliente.objects.get().nombre, "Andrea")
+
+    def test_el_nombre_completa_a_un_cliente_que_no_lo_tenia(self):
+        servicios.alta_cliente("9991234567")
+        self._vender("9991234567", nombre="Andrea")
+        self.assertEqual(Cliente.objects.get().nombre, "Andrea")
+
+    def test_el_nombre_en_caja_no_pisa_el_que_ya_tenia(self):
+        servicios.alta_cliente("9991234567", nombre="Andrea")
+        self._vender("9991234567", nombre="Equivocado")
+        self.assertEqual(Cliente.objects.get().nombre, "Andrea")
 
     def test_una_venta_sin_telefono_no_crea_clientes(self):
         self._vender()
@@ -788,6 +822,34 @@ class VistasTests(TestCase):
                                 {"q": self.cliente.codigo}).json()
         self.assertTrue(datos["encontrado"])
 
+    def test_buscar_dice_si_hay_que_pedir_el_nombre(self):
+        # Es el servidor quien decide, no la caja: la regla de "a quién le
+        # falta nombre" vive junto a la que lo escribe.
+        con_nombre = self.client.get(reverse("lealtad_buscar"),
+                                     {"q": "999 123 4567"}).json()
+        self.assertFalse(con_nombre["necesita_nombre"])
+
+        servicios.alta_cliente("9998887766")
+        sin_nombre = self.client.get(reverse("lealtad_buscar"),
+                                     {"q": "999 888 7766"}).json()
+        self.assertTrue(sin_nombre["necesita_nombre"])
+
+        nuevo = self.client.get(reverse("lealtad_buscar"),
+                                {"q": "999 000 0000"}).json()
+        self.assertFalse(nuevo["encontrado"])
+        self.assertTrue(nuevo["necesita_nombre"])
+
+    def test_editar_un_cliente_no_desborda_las_columnas(self):
+        # El panel de edición escribe nombre y notas directo, sin pasar por
+        # alta_cliente. En Postgres un valor más largo que la columna es un 500;
+        # por eso el recorte vive en Cliente.save() y no en cada vista.
+        self.client.post(reverse("lealtad_cliente_editar", args=[self.cliente.pk]),
+                         {"nombre": "N" * 200, "notas": "X" * 500,
+                          "acepta_mensajes": "1"})
+        self.cliente.refresh_from_db()
+        self.assertEqual(len(self.cliente.nombre), LARGO_NOMBRE)
+        self.assertEqual(len(self.cliente.notas), 200)
+
     def test_canjear_desde_el_panel(self):
         servicios.registrar_compra(self.cliente, Decimal("1300"))
         self.client.post(reverse("lealtad_cliente_canjear", args=[self.cliente.pk]),
@@ -938,6 +1000,38 @@ class MetricasTests(TestCase):
         # El latte cuesta $80 y vale 100 puntos → $0.80 por punto.
         self.assertEqual(metricas.costo_por_punto_promedio(), Decimal("0.8"))
         self.assertEqual(metricas.costo_pasivo(), Decimal("80.0"))
+
+    def test_baseline_del_indicador_del_5_por_ciento(self):
+        """Congela el número que Andy mira: cuánto del margen se come el programa.
+
+        Hoy `margen_de_miembros` usa la ganancia con el costo ESTIMADO del
+        catálogo. Cuando el costo pase a ser el FIFO real, este número se mueve
+        —y debe moverse a propósito, no por accidente—: el test obliga a que
+        quien lo cambie actualice el valor a mano.
+        """
+        cliente, _ = servicios.alta_cliente("9991234567")
+        nota = Nota.objects.create(fecha=timezone.localdate(),
+                                   metodo_pago="efectivo", total=Decimal("130"))
+        Venta.objects.create(fecha=timezone.localdate(), receta=self.receta,
+                             cantidad=1, nota=nota)
+        servicios.registrar_compra(cliente, Decimal("130"), nota=nota)
+
+        # Precio 130 − costo de catálogo 80 = 50 de margen.
+        self.assertEqual(metricas.margen_de_miembros(), Decimal("50"))
+
+        r = metricas.resumen_retorno()
+        self.assertEqual(r["margen_miembros"], Decimal("50"))
+        self.assertEqual(r["costo_premios"], Decimal("0"))   # sin canjes aún
+        self.assertEqual(r["pct_margen"], 0)
+        self.assertTrue(r["dentro_objetivo"])
+
+        servicios.registrar_compra(cliente, Decimal("1000"), ticket="x")
+        servicios.canjear(cliente, self.premio)
+        r = metricas.resumen_retorno()
+        # El latte cuesta 80 contra 50 de margen: 160%, muy fuera del 5%.
+        self.assertEqual(r["costo_premios"], Decimal("80"))
+        self.assertEqual(r["pct_margen"], 160)
+        self.assertFalse(r["dentro_objetivo"])
 
     def test_el_resumen_de_clientes_separa_activos_de_inactivos(self):
         activo, _ = servicios.alta_cliente("9991111111")

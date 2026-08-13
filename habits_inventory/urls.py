@@ -43,7 +43,6 @@ urlpatterns = [
     path("contabilidad/", reportes_contables, name="reportes_contables"),
     path("contabilidad/exportar/<str:reporte>/", contabilidad_views.exportar, name="exportar_estado"),
     path("contabilidad/gasto/registrar/", contabilidad_views.gasto_registrar, name="gasto_registrar"),
-    path("contabilidad/movimiento/<int:pk>/facturar/", contabilidad_views.movimiento_facturar, name="movimiento_facturar"),
     path("presupuesto/", panel_presupuesto, name="panel_presupuesto"),
     path("presupuesto/venta/guardar/", presupuesto_views.venta_guardar, name="presupuesto_venta_guardar"),
     path("presupuesto/venta/eliminar/", presupuesto_views.venta_eliminar, name="presupuesto_venta_eliminar"),

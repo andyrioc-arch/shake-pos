@@ -110,14 +110,16 @@ def inversion_desglose():
 
 def margen_contribucion_promedio():
     """Margen de contribución promedio por shake, ponderado por ventas.
-    Margen de contribución = precio de venta − costo variable (ingredientes+empaque).
+    Margen de contribución = ingreso − costo real de la venta (FIFO).
+    Las cortesías no entran: no tienen ingreso y hundirían el promedio.
     Si no hay ventas, promedia las recetas activas."""
-    ventas = Venta.objects.select_related("receta").all()
+    ventas = Venta.objects.filter(es_cortesia=False).con_costeo()
     total_unidades = 0
     total_margen = Decimal("0")
     for v in ventas:
-        mc_unitario = v.precio_efectivo - v.receta.costo_receta
-        total_margen += mc_unitario * v.cantidad
+        # `ganancia` es ingreso menos costo de la LÍNEA completa (add-ons
+        # incluidos); se reparte entre las unidades después, no antes.
+        total_margen += v.ganancia
         total_unidades += v.cantidad
     if total_unidades:
         return total_margen / total_unidades, total_unidades
@@ -156,13 +158,20 @@ def flujo_mensual():
     """Construye el flujo de efectivo mes a mes y la recuperación acumulada."""
     ingresos = defaultdict(Decimal)
     costo_var = defaultdict(Decimal)
+    cortesias = defaultdict(Decimal)
     compras = defaultdict(Decimal)
     extras = defaultdict(Decimal)
 
-    for v in Venta.objects.select_related("receta"):
+    for v in Venta.objects.con_costeo():
         p = _periodo(v.fecha)
         ingresos[p] += v.ingreso
-        costo_var[p] += v.costo_total
+        # El costo de una cortesía es mercadotecnia, no costo variable de venta:
+        # va aparte para no ensuciar el margen del producto. Pero se sigue
+        # restando de la ganancia operativa, porque el insumo sí se gastó.
+        if v.es_cortesia:
+            cortesias[p] += v.costo_de_ventas
+        else:
+            costo_var[p] += v.costo_de_ventas
 
     for c in Compra.objects.all():
         compras[_periodo(c.fecha)] += c.total
@@ -184,7 +193,7 @@ def flujo_mensual():
         # Flujo de efectivo real = ingresos − compras − fijos + extras
         flujo = ing - compras[p] - fijos + extras[p]
         # Para recuperación usamos la ganancia operativa (ingresos − costo variable − fijos)
-        ganancia_op = ing - costo_var[p] - fijos
+        ganancia_op = ing - costo_var[p] - cortesias[p] - fijos
         acumulado += ganancia_op
         if recuperado_en is None and inversion > 0 and acumulado >= inversion:
             recuperado_en = p
@@ -192,6 +201,7 @@ def flujo_mensual():
             "anio": p[0], "mes": p[1],
             "ingresos": ing,
             "costo_variable": costo_var[p],
+            "cortesias": cortesias[p],
             "compras": compras[p],
             "costos_fijos": fijos,
             "extras": extras[p],

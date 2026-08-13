@@ -9,8 +9,11 @@ from .models import (
 @admin.register(Movimiento)
 class MovimientoAdmin(admin.ModelAdmin):
     list_display = ("fecha", "tipo", "descripcion", "monto", "cuenta",
-                    "facturado", "fecha_factura")
-    list_filter = ("tipo", "facturado", "fecha")
+                    "asiento_reconocimiento")
+    # `asiento_reconocimiento` es FK nullable, y el select_related automático
+    # del admin no sigue nullables: sin esto, una consulta por fila.
+    list_select_related = ("cuenta", "asiento_reconocimiento")
+    list_filter = ("tipo", "fecha")
     search_fields = ("descripcion",)
     date_hierarchy = "fecha"
     readonly_fields = ("tipo", "venta", "compra", "asiento_flujo",

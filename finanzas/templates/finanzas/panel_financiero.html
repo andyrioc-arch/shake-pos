@@ -13,6 +13,15 @@
                 letter-spacing:.5px; }
   .card .val  { font-size:26px; font-weight:700; margin-top:6px; }
   .card .sub  { font-size:12px; opacity:.8; margin-top:4px; }
+  /* La tabla del flujo tiene nueve columnas y no cabe en un teléfono, que es
+     donde se usa el punto de venta. Sin esto se corta y NO hay forma de
+     alcanzar las últimas: el ancho sobrante queda recortado, no desplazable. */
+  .scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  /* `max-content` y no un ancho fijo: con `width:100%` la tabla se encoge al
+     contenedor y su contenido se desborda de su propia caja, así que ni
+     desplazándose hasta el final se alcanza la última columna. Además no hay
+     que recordar subir el número cada vez que se agrega una columna. */
+  .scroll-x > table.fin { min-width: max-content; }
   table.fin { width:100%; border-collapse:collapse; margin-top:10px;
               background:#fff; }
   table.fin th, table.fin td { padding:9px 12px; text-align:right;
@@ -93,12 +102,14 @@
   {% endif %}
 
   <h2>Flujo de efectivo mensual</h2>
+  <div class="scroll-x">
   <table class="fin">
     <thead>
       <tr>
         <th>Mes</th>
         <th>Ingresos</th>
         <th>Costo variable</th>
+        <th>Cortesías</th>
         <th>Compras</th>
         <th>Costos fijos</th>
         <th>Flujo de efectivo</th>
@@ -112,6 +123,7 @@
         <td>{{ f.mes_nombre }}</td>
         <td>${{ f.ingresos|floatformat:2|intcomma }}</td>
         <td>${{ f.costo_variable|floatformat:2|intcomma }}</td>
+        <td>${{ f.cortesias|floatformat:2|intcomma }}</td>
         <td>${{ f.compras|floatformat:2|intcomma }}</td>
         <td>${{ f.costos_fijos|floatformat:2|intcomma }}</td>
         <td class="{% if f.flujo_efectivo >= 0 %}pos{% else %}neg{% endif %}">
@@ -121,14 +133,16 @@
         <td>${{ f.ganancia_acumulada|floatformat:2|intcomma }}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="8" style="text-align:center;color:#888;">
+      <tr><td colspan="9" style="text-align:center;color:#888;">
         Aún no hay ventas ni compras registradas.</td></tr>
       {% endfor %}
     </tbody>
   </table>
+  </div>
   <p class="note">
     Flujo de efectivo = ingresos − compras − costos fijos + movimientos extra (dinero real que entra/sale).<br>
-    Ganancia operativa = ingresos − costo variable de lo vendido − costos fijos (sirve para medir recuperación).
+    Ganancia operativa = ingresos − costo variable de lo vendido − cortesías − costos fijos (sirve para medir recuperación).
+    El costo variable es el costo real de las compras que surtieron cada venta; las cortesías van aparte porque son mercadotecnia, no venta.
   </p>
 
   <!-- ══ PRONÓSTICO vs REAL — DESGLOSADO POR CUENTA ══════════════════ -->

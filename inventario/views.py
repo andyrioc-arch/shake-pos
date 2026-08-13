@@ -1,7 +1,7 @@
 import json
 from datetime import date
 from django.utils.timezone import localdate
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation
 
 import reversion
 from django.contrib import messages
@@ -254,15 +254,31 @@ def venta_agregar(request):
         messages.error(request, str(e))
         return redirect("panel_inventario")
 
+    # Costea la venta contra las capas de compra. Va fuera de la transacción y
+    # con red: una venta jamás se cae por el costeo. Si algo falla queda sin
+    # costear y `manage.py recostear --solo-pendientes` la recupera.
+    from inventario import costeo
+    try:
+        for linea in creadas:
+            costeo.costear_venta(linea)
+    except Exception:                                   # noqa: BLE001
+        import logging
+        logging.getLogger(__name__).exception(
+            "No se pudo costear la nota %s", nota.pk)
+        messages.warning(
+            request, "Venta registrada, pero su costo quedó pendiente de calcular.")
+
     # Lealtad: si capturaron el celular del cliente, acumula sus puntos.
     # Va fuera de la transacción de la venta a propósito: la venta ya quedó
     # registrada y un problema del programa de lealtad no debe deshacerla.
     # Las cortesías no acumulan (no se cobraron).
     telefono = request.POST.get("telefono_lealtad", "").strip()
+    nombre_cliente = request.POST.get("nombre_lealtad", "").strip()
     if telefono and not es_cortesia:
         from lealtad import servicios as lealtad
         try:
-            compra = lealtad.registrar_compra_desde_nota(nota, telefono)
+            compra = lealtad.registrar_compra_desde_nota(
+                nota, telefono, nombre=nombre_cliente)
         except lealtad.TelefonoInvalido as e:
             messages.warning(request, f"Venta registrada, pero {e}")
         except lealtad.ErrorLealtad as e:
@@ -394,9 +410,10 @@ def _crear_producto(p, fecha, metodo="efectivo", es_cortesia=False):
 def compra_agregar(request):
     """Registra una compra de stock. Solo superusuario (expone costos).
 
-    Pide cantidad comprada y costo total; calcula el costo unitario
-    (total ÷ cantidad) y con él SOBRESCRIBE el costo del ingrediente, que es
-    el que se usa para costear las ventas (último precio).
+    Se guarda tal cual lo que se pagó: la unidad comprada y el monto total. El
+    costo unitario ya no se deriva ni se guarda, y la compra NO toca el costo
+    del catálogo: ése es un estimado para calcular márgenes aproximados, y el
+    costo real de cada venta sale de las compras por FIFO.
     """
     ingrediente = Ingrediente.objects.filter(pk=request.POST.get("ingrediente")).first()
     cantidad = _to_decimal(request.POST.get("cantidad"), permite_cero=False)
@@ -410,23 +427,18 @@ def compra_agregar(request):
     elif costo_total is None:
         messages.error(request, "El costo total ($) es inválido.")
     else:
-        costo_unitario = (costo_total / cantidad).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP)
         compra = Compra.objects.create(
             fecha=fecha, ingrediente=ingrediente, cantidad=cantidad,
-            costo_unitario=costo_unitario,
+            monto_total=costo_total,
             proveedor=request.POST.get("proveedor", "").strip(),
         )
-        # Último precio: el costo de la compra rige el costeo de ventas.
-        ingrediente.costo_unidad_compra = costo_unitario
-        ingrediente.save(update_fields=["costo_unidad_compra"])
-
+        # El recosteo de las ventas que esta capa puede surtir lo dispara la
+        # señal de Compra, para que valga igual desde el admin o el shell.
         _log(request, compra, ADDITION, "Registró compra de stock")
         messages.success(
             request,
             f"Compra registrada: {cantidad} {ingrediente.unidad_compra} de "
-            f"{ingrediente} por ${costo_total:,.2f}. "
-            f"Costo unitario: ${costo_unitario:,.2f}/{ingrediente.unidad_compra}.")
+            f"{ingrediente} por ${costo_total:,.2f}.")
     return redirect("panel_inventario")
 
 

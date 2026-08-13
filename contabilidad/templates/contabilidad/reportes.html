@@ -39,7 +39,14 @@
   .cuadra.si { background:#e7f3ff; color:#0d6ecd; } .cuadra.no { background:#ffe6f1; color:#c0186a; }
   .cols { display:flex; gap:20px; flex-wrap:wrap; }
   .cols > .blk { flex:1 1 460px; }
-  .facform { display:flex; gap:6px; align-items:center; justify-content:flex-end; }
+  /* El libro tiene seis columnas y el punto de venta se usa en el
+     mostrador con el teléfono en la mano: sin esto las últimas se
+     cortan sin poder alcanzarlas. */
+  .scroll-x { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  /* `max-content` y no un ancho fijo: con `width:100%` la tabla se encoge al
+     contenedor y su contenido se desborda de su propia caja, así que ni al
+     final del desplazamiento se alcanza la última columna. */
+  .scroll-x > table.t { min-width:max-content; }
 </style>
 
 <div class="ct-wrap">
@@ -78,18 +85,19 @@
       <button class="btn" type="submit" style="background:#fa5598;color:#fff;">Registrar gasto</button>
     </form>
     <p style="font-size:12px;color:#777;padding:4px 16px 10px;">
-      Sueldos, renta, marketing, servicios… Aparecen en el libro con su flag «Facturado»
-      y se reconocen en el Estado de Resultados como gasto operativo al facturarse.
+      Sueldos, renta, marketing, servicios… Entran al libro y al Estado de
+      Resultados como gasto operativo del mes en que se registran.
     </p>
   </div>
 
   <!-- ── LIBRO DE MOVIMIENTOS ─────────────────────────────────────────── -->
   <div class="blk">
     <h2>📋 Libro de movimientos</h2>
+    <div class="scroll-x">
     <table class="t">
       <thead><tr>
         <th class="l">Fecha</th><th class="l">Tipo</th><th class="l">Descripción</th>
-        <th>Monto</th><th class="l">Cuenta</th><th>Facturado</th>
+        <th>Monto</th><th class="l">Cuenta</th><th>En resultados</th>
       </tr></thead>
       <tbody>
       {% for m in movimientos %}
@@ -100,18 +108,13 @@
           <td>${{ m.monto|floatformat:2|intcomma }}</td>
           <td class="l">{{ m.cuenta.codigo }} · {{ m.cuenta.nombre }}</td>
           <td>
-            <form class="facform" method="post" action="{% url 'movimiento_facturar' m.pk %}">
-              {% csrf_token %}
-              <input type="hidden" name="anio" value="{{ anio }}">
-              <input type="hidden" name="mes" value="{{ mes }}">
-              <input type="hidden" name="facturado" value="{% if m.facturado %}0{% else %}1{% endif %}">
-              <input type="date" class="dt" name="fecha_factura"
-                     value="{% if m.fecha_factura %}{{ m.fecha_factura|date:'Y-m-d' }}{% else %}{{ m.fecha|date:'Y-m-d' }}{% endif %}"
-                     title="Fecha de factura (reconocimiento)">
-              <button class="badge {% if m.facturado %}ok{% else %}no{% endif %}" type="submit" title="Clic para cambiar">
-                {% if m.facturado %}✓ Facturado{% else %}○ No facturado{% endif %}
-              </button>
-            </form>
+            {% if m.asiento_reconocimiento_id %}
+              <span class="badge ok">✓ Reconocido</span>
+            {% elif m.tipo == 'venta' %}
+              <span class="badge no" title="Faltan compras que respalden lo que consumió esta venta. En cuanto se capturen, entra sola.">⏳ Falta costo</span>
+            {% else %}
+              <span class="badge no" title="Este movimiento no generó asiento de reconocimiento. Corre «manage.py sincronizar_contabilidad».">⚠ Sin reconocer</span>
+            {% endif %}
           </td>
         </tr>
       {% empty %}
@@ -119,9 +122,12 @@
       {% endfor %}
       </tbody>
     </table>
+    </div>
     <p style="font-size:12px;color:#777;padding:8px 16px;">
-      Marca «Facturado» para reconocer el ingreso/gasto en el Estado de Resultados,
-      en la fecha de la factura. Lo no facturado igual afecta balance, flujo y balanza.
+      Compras y gastos entran al Estado de Resultados en cuanto se capturan. Una
+      venta entra cuando su costo está completo: el ingreso y su costo se
+      reconocen juntos o no se reconoce ninguno. Todo, costeado o no, afecta
+      igual el balance, el flujo y la balanza.
     </p>
   </div>
 
@@ -131,15 +137,24 @@
       <h2>📈 Estado de resultados <small>({{ mes_nombre }} {{ anio }})</small>
         <a class="dl" href="{% url 'exportar_estado' 'resultados' %}?anio={{ anio }}&mes={{ mes }}">⬇ xlsx</a></h2>
       <table class="t">
-        <tr><th class="l" colspan="2">Ingresos (facturados)</th></tr>
+        <tr><th class="l" colspan="2">Ingresos reconocidos</th></tr>
         {% for i in resultados.ingresos %}<tr><td class="l">{{ i.nombre }}</td><td>${{ i.monto|floatformat:2|intcomma }}</td></tr>{% empty %}<tr><td class="l" colspan="2" style="color:#999;">Sin ingresos reconocidos.</td></tr>{% endfor %}
         <tr class="tot"><td class="l">Total ingresos</td><td>${{ resultados.total_ingresos|floatformat:2|intcomma }}</td></tr>
         <tr><th class="l" colspan="2">Costo de ventas (FIFO)</th></tr>
         {% for cv in resultados.costo_ventas %}<tr><td class="l">{{ cv.nombre }}</td><td>${{ cv.monto|floatformat:2|intcomma }}</td></tr>{% empty %}<tr><td class="l" colspan="2" style="color:#999;">Sin costo de ventas.</td></tr>{% endfor %}
         <tr class="tot"><td class="l">Utilidad bruta</td>
           <td class="{% if resultados.utilidad_bruta >= 0 %}good{% else %}bad{% endif %}">${{ resultados.utilidad_bruta|floatformat:2|intcomma }}</td></tr>
-        <tr><th class="l" colspan="2">Gastos operativos (facturados)</th></tr>
-        {% for g in resultados.gastos %}<tr><td class="l">{{ g.nombre }}</td><td>${{ g.monto|floatformat:2|intcomma }}</td></tr>{% empty %}<tr><td class="l" colspan="2" style="color:#999;">Sin gastos operativos.</td></tr>{% endfor %}
+        <tr><th class="l" colspan="2">Gastos operativos</th></tr>
+        {% for g in resultados.gastos %}
+          {% if g.subcuentas %}
+            {# Cuenta que agrupa: se muestra su saldo propio y el de cada hija. #}
+            {% if g.propio %}<tr><td class="l">{{ g.nombre }} <span style="color:#999;">(directo)</span></td><td>${{ g.propio|floatformat:2|intcomma }}</td></tr>{% endif %}
+            {% for s in g.subcuentas %}<tr><td class="l" style="padding-left:32px;color:#555;">↳ {{ s.nombre }}</td><td>${{ s.monto|floatformat:2|intcomma }}</td></tr>{% endfor %}
+            <tr><td class="l" style="font-weight:700;">Total {{ g.nombre|lower }}</td><td style="font-weight:700;">${{ g.total|floatformat:2|intcomma }}</td></tr>
+          {% else %}
+            <tr><td class="l">{{ g.nombre }}</td><td>${{ g.total|floatformat:2|intcomma }}</td></tr>
+          {% endif %}
+        {% empty %}<tr><td class="l" colspan="2" style="color:#999;">Sin gastos operativos.</td></tr>{% endfor %}
         <tr class="tot"><td class="l">Total gastos operativos</td><td>${{ resultados.total_gastos|floatformat:2|intcomma }}</td></tr>
         <tr class="tot"><td class="l">Utilidad neta del mes</td>
           <td class="{% if resultados.utilidad >= 0 %}good{% else %}bad{% endif %}">${{ resultados.utilidad|floatformat:2|intcomma }}</td></tr>

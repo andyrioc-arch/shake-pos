@@ -164,10 +164,14 @@ class Command(BaseCommand):
                 )
         self.stdout.write(f"✔ {len(RECETAS)} recetas (con empaque incluido).")
 
-        for fecha, ing_nombre, cant, costo, prov in COMPRAS:
+        for fecha, ing_nombre, cant, precio_unidad, prov in COMPRAS:
+            # En los datos de ejemplo el precio por unidad es el dato de origen;
+            # lo que se guarda es el monto pagado, como en una compra real.
+            cantidad = Decimal(str(cant))
             Compra.objects.get_or_create(
                 fecha=fecha, ingrediente=ing_obj[ing_nombre],
-                cantidad=Decimal(str(cant)), costo_unitario=Decimal(costo),
+                cantidad=cantidad,
+                monto_total=cantidad * Decimal(precio_unidad),
                 defaults=dict(proveedor=prov),
             )
         self.stdout.write(f"✔ {len(COMPRAS)} compras de ejemplo.")

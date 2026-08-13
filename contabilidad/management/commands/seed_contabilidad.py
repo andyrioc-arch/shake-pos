@@ -30,7 +30,6 @@ class Command(BaseCommand):
         self.stdout.write(f"✔ Catálogo de cuentas: {Cuenta.objects.count()} cuentas.")
 
         for fecha, categoria, monto, concepto in GASTOS:
-            mov = posting.registrar_gasto(fecha, categoria, Decimal(monto), concepto)
-            posting.marcar_facturado(mov, True, fecha)
-        self.stdout.write(f"✔ {len(GASTOS)} gastos operativos (facturados).")
+            posting.registrar_gasto(fecha, categoria, Decimal(monto), concepto)
+        self.stdout.write(f"✔ {len(GASTOS)} gastos operativos.")
         self.stdout.write(self.style.SUCCESS("Contabilidad inicializada."))
