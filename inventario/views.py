@@ -124,7 +124,9 @@ def panel_inventario(request):
             "ingreso": ingreso,               # solo superusuario
             "costo": r.costo_receta,          # solo superusuario
             "ganancia": r.ganancia_unitaria,  # solo superusuario
-            "margen": r.margen,               # solo superusuario
+            # En porcentaje, como la alarma: el mismo concepto en dos formatos
+            # dentro de la misma pantalla se lee como si fueran dos cosas.
+            "margen": r.margen * 100,         # solo superusuario
         })
 
     ctx = {

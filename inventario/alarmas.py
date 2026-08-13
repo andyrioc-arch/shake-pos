@@ -2,57 +2,62 @@
 
 Solo la caída. Que un producto mejore su margen no es una alarma, y mezclar
 las dos direcciones convierte el aviso en ruido que se aprende a ignorar.
+
+Todo se mide en PORCENTAJE de punta a punta: así se guarda el umbral, así se
+compara y así sale en el panel. Un ratio a medio camino es una unidad más que
+traducir cada vez que alguien lea esto.
 """
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.utils.timezone import localdate
 
-from .models import ConfiguracionCosteo, Venta
+from .models import ConfiguracionAlarmas, Venta
+
+CIEN = Decimal("100")
 
 
-def _mes_anterior(anio, mes):
-    return (anio - 1, 12) if mes == 1 else (anio, mes - 1)
+def _mes_siguiente(primero):
+    if primero.month == 12:
+        return date(primero.year + 1, 1, 1)
+    return date(primero.year, primero.month + 1, 1)
 
 
-def _margenes_del_mes(anio, mes):
-    """{receta_id: {margen, unidades, nombre, estimado}} de ese mes.
+def _margenes_por_mes(desde, hasta):
+    """{(anio, mes): {receta_id: {margen, unidades, nombre, estimado}}}.
 
-    Las cortesías quedan fuera: no tienen ingreso y hundirían el margen del
-    producto sin que su precio ni su costo hayan cambiado. Es el mismo criterio
-    que usa `finanzas.calculos.margen_contribucion_promedio`.
+    Una sola pasada por el rango en vez de una consulta por mes: además de
+    ahorrarse la precarga repetida, un rango de fechas usa el índice de
+    `fecha`, mientras que filtrar por `fecha__month` obliga a barrer el año.
     """
-    ingreso = defaultdict(Decimal)
-    costo = defaultdict(Decimal)
-    unidades = defaultdict(int)
-    estimado = defaultdict(bool)
-    nombre = {}
+    acum = defaultdict(lambda: defaultdict(lambda: {
+        "ingreso": Decimal("0"), "ganancia": Decimal("0"),
+        "unidades": 0, "estimado": False, "nombre": "",
+    }))
 
-    ventas = (Venta.objects
-              .filter(fecha__year=anio, fecha__month=mes, es_cortesia=False)
-              .con_costeo())
+    ventas = (Venta.objects.comerciales()
+              .filter(fecha__gte=desde, fecha__lt=hasta)
+              .order_by())          # el orden del Meta no sirve para agregar
     for v in ventas:
-        ingreso[v.receta_id] += v.ingreso
-        costo[v.receta_id] += v.costo_de_ventas
-        unidades[v.receta_id] += v.cantidad
+        fila = acum[(v.fecha.year, v.fecha.month)][v.receta_id]
+        fila["ingreso"] += v.ingreso
+        # `ganancia` es ingreso menos costo de la línea completa. La definición
+        # de margen vive en el modelo; repetirla aquí la deja desfasada el día
+        # que cambie, sin que nada falle.
+        fila["ganancia"] += v.ganancia
+        fila["unidades"] += v.cantidad
         # Una venta sin costo completo cae al estimado del catálogo. El número
         # sirve, pero quien lo lea tiene que saber sobre qué está parado.
         if not v.costo_esta_completo:
-            estimado[v.receta_id] = True
-        nombre[v.receta_id] = str(v.receta)
+            fila["estimado"] = True
+        fila["nombre"] = str(v.receta)
 
-    res = {}
-    for rid, ing in ingreso.items():
-        if ing <= 0:
-            continue  # sin ingreso no hay margen que comparar
-        res[rid] = {
-            "margen": (ing - costo[rid]) / ing,
-            "unidades": unidades[rid],
-            "nombre": nombre[rid],
-            "estimado": estimado[rid],
-        }
-    return res
+    return {
+        periodo: {rid: {**fila, "margen": fila["ganancia"] * CIEN / fila["ingreso"]}
+                  for rid, fila in recetas.items() if fila["ingreso"] > 0}
+        for periodo, recetas in acum.items()
+    }
 
 
 def alarmas_margen(hoy=None):
@@ -63,12 +68,13 @@ def alarmas_margen(hoy=None):
     inventa una caída, igual que el costeo no inventa un costo.
     """
     hoy = hoy or localdate()
-    umbral_pct = ConfiguracionCosteo.get().umbral_caida_margen
-    umbral = Decimal(umbral_pct) / Decimal("100")
+    umbral = ConfiguracionAlarmas.get().umbral_caida_margen
 
-    actual = _margenes_del_mes(hoy.year, hoy.month)
-    anio_ant, mes_ant = _mes_anterior(hoy.year, hoy.month)
-    previo = _margenes_del_mes(anio_ant, mes_ant)
+    mes_actual = hoy.replace(day=1)
+    mes_anterior = (mes_actual - timedelta(days=1)).replace(day=1)
+    por_mes = _margenes_por_mes(mes_anterior, _mes_siguiente(mes_actual))
+    actual = por_mes.get((mes_actual.year, mes_actual.month), {})
+    previo = por_mes.get((mes_anterior.year, mes_anterior.month), {})
 
     avisos = []
     for rid, a in actual.items():
@@ -77,11 +83,10 @@ def alarmas_margen(hoy=None):
         # nada: dividir entre él da infinito o invierte el signo.
         if not p or p["margen"] <= 0:
             continue
-        caida = (p["margen"] - a["margen"]) / p["margen"]
+        caida = (p["margen"] - a["margen"]) * CIEN / p["margen"]
         if caida < umbral:
             continue
         avisos.append({
-            "receta_id": rid,
             "nombre": a["nombre"],
             "margen_anterior": p["margen"],
             "margen_actual": a["margen"],
@@ -97,7 +102,6 @@ def alarmas_margen(hoy=None):
     return {
         "avisos": avisos,
         "umbral": umbral,
-        "umbral_pct": umbral_pct,
-        "mes_actual": date(hoy.year, hoy.month, 1),
-        "mes_anterior": date(anio_ant, mes_ant, 1),
+        "mes_actual": mes_actual,
+        "mes_anterior": mes_anterior,
     }

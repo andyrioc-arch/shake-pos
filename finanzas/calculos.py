@@ -113,7 +113,7 @@ def margen_contribucion_promedio():
     Margen de contribución = ingreso − costo real de la venta (FIFO).
     Las cortesías no entran: no tienen ingreso y hundirían el promedio.
     Si no hay ventas, promedia las recetas activas."""
-    ventas = Venta.objects.filter(es_cortesia=False).con_costeo()
+    ventas = Venta.objects.comerciales()
     total_unidades = 0
     total_margen = Decimal("0")
     for v in ventas:

@@ -342,16 +342,16 @@
           {% endif %}
         </td>
         <td class="muted">{{ a.unidades_anterior }} → {{ a.unidades_actual }}</td>
-        <td>{% widthratio a.margen_anterior 1 100 %}%</td>
-        <td class="bad">{% widthratio a.margen_actual 1 100 %}%</td>
-        <td class="bad">−{% widthratio a.caida 1 100 %}%</td>
+        <td>{{ a.margen_anterior|floatformat:1 }}%</td>
+        <td class="bad">{{ a.margen_actual|floatformat:1 }}%</td>
+        <td class="bad">−{{ a.caida|floatformat:1 }}%</td>
       </tr>
       {% endfor %}
     </table>
     </div>
     {% endif %}
     <div class="note">
-      Avisa cuando el margen de un producto cae {{ alarma_margen.umbral_pct }}%
+      Avisa cuando el margen de un producto cae {{ alarma_margen.umbral }}%
       o más respecto al mes anterior. Un producto que no se vendió en alguno de
       los dos meses no aparece: sin comparación no se inventa una caída.
       Las cortesías no cuentan.
@@ -377,7 +377,7 @@
         {% if es_super %}
           <td>${{ r.costo|floatformat:2|intcomma }}</td>
           <td>${{ r.ganancia|floatformat:2|intcomma }}</td>
-          <td>{{ r.margen|floatformat:3 }}</td>
+          <td>{{ r.margen|floatformat:1 }}%</td>
         {% endif %}
         <td>{% if r.activa %}<span class="good">Sí</span>{% else %}<span class="muted">No</span>{% endif %}</td>
       </tr>

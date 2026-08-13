@@ -1,8 +1,9 @@
 from decimal import Decimal
 from datetime import date
 from django.test import TestCase
+from inventario.alarmas import alarmas_margen
 from inventario.models import (
-    Ingrediente, Receta, RecetaIngrediente, Compra, Venta,
+    ConfiguracionAlarmas, Ingrediente, Receta, RecetaIngrediente, Compra, Venta,
     Extra, VentaSustitucion, VentaExtra,
 )
 
@@ -411,40 +412,35 @@ class AlarmaMargenTests(TestCase):
         Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec, cantidad=1)
 
     def test_avisa_cuando_el_margen_cae_mas_que_el_umbral(self):
-        from inventario.alarmas import alarmas_margen
-        # Julio: costo 4 → margen .96. Agosto: costo 20 → margen .80.
-        # Caída relativa = (.96 − .80) / .96 = 16.67% ≥ 10%.
+        # Julio: costo 4 → margen 96%. Agosto: costo 20 → margen 80%.
+        # Caída relativa = (96 − 80) / 96 = 16.67% ≥ 10%.
         self._dos_meses(Decimal("4.00"), Decimal("20.00"))
 
         res = alarmas_margen(hoy=date(2026, 8, 20))
 
         self.assertEqual(len(res["avisos"]), 1)
         a = res["avisos"][0]
-        self.assertEqual(a["margen_anterior"], Decimal("0.96"))
-        self.assertEqual(a["margen_actual"], Decimal("0.80"))
-        self.assertAlmostEqual(float(a["caida"]), 0.1667, places=3)
+        self.assertEqual(a["margen_anterior"], Decimal("96"))
+        self.assertEqual(a["margen_actual"], Decimal("80"))
+        self.assertAlmostEqual(float(a["caida"]), 16.67, places=2)
         self.assertFalse(a["estimado"])
 
     def test_una_caida_menor_al_umbral_no_es_alarma(self):
-        from inventario.alarmas import alarmas_margen
-        # Costo de 4 a 4.40: el margen baja de .96 a .956, menos del 10%.
+        # Costo de 4 a 4.40: el margen baja de 96% a 95.6%, menos del 10%.
         self._dos_meses(Decimal("4.00"), Decimal("4.40"))
         self.assertEqual(alarmas_margen(hoy=date(2026, 8, 20))["avisos"], [])
 
     def test_que_el_margen_suba_no_es_alarma(self):
-        from inventario.alarmas import alarmas_margen
         self._dos_meses(Decimal("20.00"), Decimal("4.00"))
         self.assertEqual(alarmas_margen(hoy=date(2026, 8, 20))["avisos"], [])
 
     def test_sin_ventas_el_mes_anterior_no_se_inventa_una_caida(self):
-        from inventario.alarmas import alarmas_margen
         self._capa(date(2026, 8, 1), Decimal("20.00"))
         Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec, cantidad=1)
         self.assertEqual(alarmas_margen(hoy=date(2026, 8, 20))["avisos"], [])
 
     def test_la_cortesia_no_cuenta(self):
         """Regalar un shake no es que el producto haya perdido margen."""
-        from inventario.alarmas import alarmas_margen
         self._capa(date(2026, 7, 1), Decimal("4.00"))
         self._capa(date(2026, 8, 1), Decimal("4.00"))
         Venta.objects.create(fecha=date(2026, 7, 15), receta=self.rec, cantidad=1)
@@ -452,19 +448,26 @@ class AlarmaMargenTests(TestCase):
                              cantidad=1, es_cortesia=True)
         self.assertEqual(alarmas_margen(hoy=date(2026, 8, 20))["avisos"], [])
 
+    def test_leer_el_panel_no_escribe_en_la_base(self):
+        """Mirar la alarma es una consulta de lectura, aunque nadie haya
+        tocado los ajustes: los valores de fábrica no se guardan solos."""
+        self._dos_meses(Decimal("4.00"), Decimal("20.00"))
+
+        alarmas_margen(hoy=date(2026, 8, 20))
+
+        self.assertEqual(ConfiguracionAlarmas.objects.count(), 0)
+        self.assertEqual(ConfiguracionAlarmas.get().umbral_caida_margen, 10)
+
     def test_el_umbral_es_configurable(self):
-        from inventario.alarmas import alarmas_margen
-        from inventario.models import ConfiguracionCosteo
         self._dos_meses(Decimal("4.00"), Decimal("20.00"))   # caída de 16.67%
 
-        cfg = ConfiguracionCosteo.get()
+        cfg = ConfiguracionAlarmas.get()
         cfg.umbral_caida_margen = 20
         cfg.save()
 
         self.assertEqual(alarmas_margen(hoy=date(2026, 8, 20))["avisos"], [])
 
     def test_enero_compara_contra_diciembre_del_ano_pasado(self):
-        from inventario.alarmas import alarmas_margen
         self._capa(date(2025, 12, 1), Decimal("4.00"))
         self._capa(date(2026, 1, 2), Decimal("20.00"))
         Venta.objects.create(fecha=date(2025, 12, 15), receta=self.rec, cantidad=1)
@@ -477,7 +480,6 @@ class AlarmaMargenTests(TestCase):
 
     def test_marca_el_aviso_que_se_apoya_en_el_estimado(self):
         """Sin la compra capturada, el margen sale del catálogo. Hay que decirlo."""
-        from inventario.alarmas import alarmas_margen
         self._capa(date(2026, 7, 1), Decimal("4.00"))
         Venta.objects.create(fecha=date(2026, 7, 15), receta=self.rec, cantidad=1)
         # Agosto sin capa: cae al catálogo (200 ml × 0.10 = 20 → margen .80).
