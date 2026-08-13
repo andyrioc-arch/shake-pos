@@ -16,9 +16,12 @@ quedó archivada y no se vuelve a tocar.
 P0–P6). Producción corre `main` y tiene aplicadas todas las migraciones hasta
 `contabilidad.0009` e `inventario.0009`.
 
-**La alarma de margen está en rama, sin publicar** (`alarma-margen-bajo`).
-Agrega `inventario.0010`, que **crea** la tabla de configuración que el código
-nuevo necesita: por la regla de abajo, **migrar primero y desplegar después**.
+**La alarma de margen se publicó el 13 de agosto** (PR #2, `inventario.0010`).
+
+**Seis pasos más esperan en la rama `pdf-de-la-nota`**: P7, P9, P10, la gráfica
+de qué se vende más, el enlace del libro a la nota, y la nota con hitos y PDF.
+Agregan `lealtad.0003`, que **crea** dos columnas que el código nuevo lee: por
+la regla de abajo, **migrar primero y desplegar después**.
 
 | Pieza | Dónde |
 |---|---|
@@ -122,6 +125,15 @@ mismo hace `border-collapse:collapse`, que desactiva `sticky` en las celdas.
 sobre blanco y el azul `#1e9aff` 2.95:1, contra el 4.5:1 que exige WCAG AA.
 Donde el color carga un dato o un estado se usan `#c81a63` y `#1478cc`, el
 mismo tono más oscuro. Los tonos vivos se quedan en el cromo de marca.
+
+**`{# #}` de Django es un comentario de UNA línea.** Si abarca dos, se imprime
+tal cual en la página; pasó en la nota, que es lo único que ve el cliente. Para
+varias líneas, `{% comment %}`. Hay un test que recorre todas las plantillas.
+
+**Una propiedad dentro de un bucle de plantilla se evalúa en cada vuelta**, y
+si consulta la base, se nota: el costo de la última compra llevó el catálogo de
+61 a 251 consultas. Lo que recorra el catálogo se resuelve en la vista y se
+pasa ya calculado.
 
 ## Publicar
 
