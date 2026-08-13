@@ -74,7 +74,7 @@ class InventarioStockTests(TestCase):
     def test_total_comprado(self):
         Compra.objects.create(
             fecha=date(2025, 5, 1), ingrediente=self.leche,
-            cantidad=2, costo_unitario=Decimal("30.00"),  # 2 litros = 2000ml
+            cantidad=2, monto_total=Decimal("60.00"),  # 2 litros = 2000ml
         )
         self.assertEqual(self.leche.total_comprado, Decimal("2000"))
 
@@ -86,27 +86,18 @@ class InventarioStockTests(TestCase):
         # Ni se recalcula ni se redondea: es lo que se pagó.
         self.assertEqual(compra.total, Decimal("47.33"))
 
-    def test_una_compra_vieja_sin_monto_cae_al_unitario(self):
-        # Filas anteriores a la migración 0008: el unitario sigue mandando.
-        compra = Compra.objects.create(
-            fecha=date(2025, 5, 1), ingrediente=self.leche,
-            cantidad=2, costo_unitario=Decimal("30.00"),
-        )
-        self.assertIsNone(compra.monto_total)
-        self.assertEqual(compra.total, Decimal("60.00"))
+    def test_una_compra_sin_monto_ya_no_se_puede_guardar(self):
+        """El hueco dejó de existir: la base lo rechaza."""
+        from django.db import IntegrityError, transaction
 
-    def test_el_monto_pagado_le_gana_al_unitario(self):
-        compra = Compra.objects.create(
-            fecha=date(2025, 5, 1), ingrediente=self.leche,
-            cantidad=Decimal("3"), costo_unitario=Decimal("15.77"),
-            monto_total=Decimal("47.33"),      # 3 × 15.77 = 47.31, no 47.33
-        )
-        self.assertEqual(compra.total, Decimal("47.33"))
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Compra.objects.create(
+                fecha=date(2025, 5, 1), ingrediente=self.leche, cantidad=2)
 
     def test_consumo_y_stock(self):
         Compra.objects.create(
             fecha=date(2025, 5, 1), ingrediente=self.leche,
-            cantidad=2, costo_unitario=Decimal("30.00"),  # 2000ml
+            cantidad=2, monto_total=Decimal("60.00"),  # 2000ml
         )
         Venta.objects.create(fecha=date(2025, 5, 2), receta=self.rec, cantidad=3)
         # consumo = 200ml * 3 = 600ml ; stock = 2000 - 600 = 1400
@@ -273,9 +264,9 @@ class SustitucionExtraTests(TestCase):
     def test_inventario_sustituido_no_consume_original(self):
         # Compramos avena y almendra
         Compra.objects.create(fecha=date(2025, 5, 1), ingrediente=self.avena,
-                              cantidad=1, costo_unitario=Decimal("30"))  # 1000ml
+                              cantidad=1, monto_total=Decimal("30.00"))  # 1000ml
         Compra.objects.create(fecha=date(2025, 5, 1), ingrediente=self.almendra,
-                              cantidad=1, costo_unitario=Decimal("55"))  # 1000ml
+                              cantidad=1, monto_total=Decimal("55.00"))  # 1000ml
         v = Venta.objects.create(fecha=date(2025, 5, 2), receta=self.rec, cantidad=1)
         VentaSustitucion.objects.create(
             venta=v, ingrediente_original=self.avena, ingrediente_nuevo=self.almendra
@@ -287,7 +278,7 @@ class SustitucionExtraTests(TestCase):
 
     def test_inventario_extra_consume_ingrediente(self):
         Compra.objects.create(fecha=date(2025, 5, 1), ingrediente=self.espresso,
-                              cantidad=1, costo_unitario=Decimal("80"))  # 1000ml
+                              cantidad=1, monto_total=Decimal("80.00"))  # 1000ml
         v = Venta.objects.create(fecha=date(2025, 5, 2), receta=self.rec, cantidad=3)
         VentaExtra.objects.create(venta=v, extra=self.extra_esp, cantidad=1)
         # El add-on es por línea: 30ml por extra * 1 extra = 30ml (no x3 shakes)

@@ -240,7 +240,10 @@ def diagnostico():
     capas = Compra.objects.aggregate(
         con_saldo=Count("pk", filter=Q(saldo_receta__gt=0)),
         # Capas que el FIFO no puede ver: nacieron sin saldo y quedarían
-        # invisibles para siempre si nadie las reabre.
+        # invisibles para siempre si nadie las reabre. Desde P11 la columna es
+        # NOT NULL, así que esto ya no puede pasar por el ORM; se sigue
+        # contando porque es la única red bajo un `UPDATE` a mano o una
+        # migración que lo deshaga, y cuesta una línea del mismo agregado.
         sin_abrir=Count("pk", filter=Q(saldo_receta__isnull=True)))
     faltante = (ConsumoCapa.objects.filter(compra__isnull=True)
                 .aggregate(t=Sum("cantidad_receta"))["t"] or CERO)

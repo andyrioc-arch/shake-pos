@@ -298,21 +298,25 @@ class Compra(models.Model):
         max_digits=12, decimal_places=2,
         validators=[MinValueValidator(Decimal("0"))],
     )
+    # Los tres dejan de admitir nulos en P11. El código que ya está en
+    # producción los llena siempre —la caja captura el monto desde P1 y
+    # `save()` escribe los otros dos en cada alta—, así que el NOT NULL no
+    # rompe nada y cierra un hueco: un `saldo_receta` nulo era una capa que
+    # el FIFO no veía, y se gastaba sin gastarse.
     monto_total = models.DecimalField(
         "Monto total pagado ($)", max_digits=12, decimal_places=2,
-        null=True, blank=True,
         validators=[MinValueValidator(Decimal("0"))],
         help_text="Lo que de verdad se pagó por esta compra.",
     )
     cantidad_receta = models.DecimalField(
         "Unidades de receta compradas", max_digits=14, decimal_places=4,
-        null=True, blank=True, editable=False,
+        editable=False,
         help_text="Cuántas unidades de receta trajo esta compra, congeladas al "
                   "momento de comprarla.",
     )
     saldo_receta = models.DecimalField(
         "Saldo de la capa", max_digits=14, decimal_places=4,
-        null=True, blank=True, editable=False,
+        editable=False,
         help_text="Unidades de receta que le quedan sin consumir a esta compra. "
                   "Lo lleva el costeo FIFO.",
     )

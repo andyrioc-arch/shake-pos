@@ -169,7 +169,7 @@ class FlujoMultiMesTests(TestCase):
         ing = Ingrediente.objects.get(nombre="Leche")
         Compra.objects.create(
             fecha=date(2025, 5, 2), ingrediente=ing,
-            cantidad=5, costo_unitario=Decimal("30"),  # total 150
+            cantidad=5, monto_total=Decimal("150.00"),  # total 150
         )
         fm = calculos.flujo_mensual()
         mayo = fm["filas"][0]
