@@ -152,7 +152,11 @@ class RecetaAdmin(admin.ModelAdmin):
 
     @admin.display(description="Vendidos")
     def vendidos_col(self, obj):
-        return obj.unidades_vendidas
+        """Todo lo que salió, con lo regalado desglosado si lo hubo."""
+        regaladas = obj.unidades_regaladas
+        if not regaladas:
+            return obj.unidades_vendidas
+        return f"{obj.unidades_vendidas} ({regaladas} de cortesía)"
 
 
 # ── Compras ───────────────────────────────────────────────────────────────────

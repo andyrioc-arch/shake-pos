@@ -400,7 +400,8 @@
     <h2>🥤 Catálogo de productos</h2>
     <table class="iv">
       <tr>
-        <th>Producto</th><th>Perfil</th><th>Precio</th><th>Vendidos</th>
+        <th>Producto</th><th>Perfil</th><th>Precio</th>
+        <th>Salieron</th><th>Cobrados</th><th>Regalados</th>
         {% if es_super %}<th>Costo</th><th>Ganancia/u.</th><th>Margen</th>{% endif %}
         <th>Activa</th>
       </tr>
@@ -410,6 +411,8 @@
         <td>{{ r.perfil }}</td>
         <td>${{ r.precio|floatformat:2|intcomma }}</td>
         <td>{{ r.unidades }}</td>
+        <td>{{ r.cobradas }}</td>
+        <td>{% if r.regaladas %}{{ r.regaladas }}{% else %}<span class="muted">—</span>{% endif %}</td>
         {% if es_super %}
           <td>${{ r.costo|floatformat:2|intcomma }}</td>
           <td>${{ r.ganancia|floatformat:2|intcomma }}</td>
@@ -428,19 +431,23 @@
     <h2>📈 Resumen de ventas</h2>
     <table class="iv">
       <tr>
-        <th>Producto</th><th>Unidades vendidas</th>
+        <th>Producto</th><th>Salieron</th><th>Cobrados</th><th>Regalados</th>
         {% if es_super %}<th>Ingreso</th>{% endif %}
       </tr>
       {% for r in recetas %}
       <tr>
         <td>{{ r.nombre }}</td>
         <td>{{ r.unidades }}</td>
+        <td>{{ r.cobradas }}</td>
+        <td>{% if r.regaladas %}{{ r.regaladas }}{% else %}<span class="muted">—</span>{% endif %}</td>
         {% if es_super %}<td>${{ r.ingreso|floatformat:2|intcomma }}</td>{% endif %}
       </tr>
       {% endfor %}
       <tr class="tot">
         <td>Total</td>
         <td>{{ total_unidades }}</td>
+        <td>{{ total_cobradas }}</td>
+        <td>{{ total_regaladas }}</td>
         {% if es_super %}<td>${{ total_ingreso|floatformat:2|intcomma }}</td>{% endif %}
       </tr>
     </table>

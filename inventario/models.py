@@ -197,8 +197,24 @@ class Receta(models.Model):
 
     @property
     def unidades_vendidas(self):
+        """Todo lo que salió del mostrador, cobrado o regalado.
+
+        Las cortesías cuentan aquí a propósito: se produjeron y consumieron
+        insumo igual que las demás. Quien quiera solo lo que entró a caja
+        tiene `unidades_cobradas`; el margen ya las excluye por su lado.
+        """
         agg = self.ventas.aggregate(total=models.Sum("cantidad"))
         return agg["total"] or 0
+
+    @property
+    def unidades_regaladas(self):
+        agg = self.ventas.filter(es_cortesia=True).aggregate(
+            total=models.Sum("cantidad"))
+        return agg["total"] or 0
+
+    @property
+    def unidades_cobradas(self):
+        return self.unidades_vendidas - self.unidades_regaladas
 
 
 class RecetaIngrediente(models.Model):

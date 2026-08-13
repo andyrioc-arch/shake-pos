@@ -8,7 +8,7 @@ from django.contrib import messages
 from django.contrib.admin.models import ADDITION, CHANGE, DELETION, LogEntry
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.db import transaction
-from django.db.models import ProtectedError
+from django.db.models import ProtectedError, Q, Sum
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -107,20 +107,39 @@ def panel_inventario(request):
         })
 
     # ── Catálogo de recetas ──────────────────────────────────────────────
+    # Las unidades salen de una sola consulta para todo el catálogo: pedirlas
+    # receta por receta cuesta una consulta por producto y ninguna de ellas
+    # dice nada que esta no diga.
+    unidades_por_receta = {
+        fila["receta"]: fila
+        for fila in Venta.objects.values("receta").annotate(
+            total=Sum("cantidad"),
+            regaladas=Sum("cantidad", filter=Q(es_cortesia=True)),
+        )
+    }
+
     recetas = []
     total_unidades = 0
+    total_regaladas = 0
     total_ingreso = Decimal("0")
     for r in Receta.objects.all():
-        unidades = r.unidades_vendidas
+        conteo = unidades_por_receta.get(r.pk, {})
+        unidades = conteo.get("total") or 0
+        regaladas = conteo.get("regaladas") or 0
         ingreso = sum((v.ingreso for v in r.ventas.all()), Decimal("0"))
         total_unidades += unidades
+        total_regaladas += regaladas
         total_ingreso += ingreso
         recetas.append({
             "nombre": f"{r.emoji} {r.nombre}".strip(),
             "perfil": r.perfil,
             "precio": r.precio_venta,
             "activa": r.activa,
+            # `unidades` es todo lo que salió del mostrador; se parte en
+            # cobradas y regaladas sin cambiar lo que significa la primera.
             "unidades": unidades,
+            "cobradas": unidades - regaladas,
+            "regaladas": regaladas,
             "ingreso": ingreso,               # solo superusuario
             "costo": r.costo_receta,          # solo superusuario
             "ganancia": r.ganancia_unitaria,  # solo superusuario
@@ -140,6 +159,8 @@ def panel_inventario(request):
         "num_faltantes": faltantes,
         "recetas": recetas,
         "total_unidades": total_unidades,
+        "total_cobradas": total_unidades - total_regaladas,
+        "total_regaladas": total_regaladas,
         "total_ingreso": total_ingreso,
         # Para el formulario de registro (carrito de productos)
         "recetas_activas": Receta.objects.filter(activa=True),

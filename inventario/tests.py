@@ -381,6 +381,76 @@ class CicloCompletoCajaTests(TestCase):
         self.assertContains(self._reportes(), "Falta costo")
 
 
+class CortesiasEnLosAgregadosTests(TestCase):
+    """Una cortesía se produjo, pero no se cobró. Cada número decide cuál
+    de las dos cosas le importa, y ninguno puede quedarse con las dos."""
+
+    def setUp(self):
+        self.ing = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("30.00"))
+        self.rec = Receta.objects.create(
+            nombre="Shake", precio_venta=Decimal("100.00"))
+        RecetaIngrediente.objects.create(
+            receta=self.rec, ingrediente=self.ing, cantidad=200)
+        Compra.objects.create(
+            fecha=date(2026, 8, 1), ingrediente=self.ing,
+            cantidad=Decimal("1"), monto_total=Decimal("30.00"))
+        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec, cantidad=2)
+        Venta.objects.create(fecha=date(2026, 8, 6), receta=self.rec,
+                             cantidad=1, es_cortesia=True)
+
+    def test_las_unidades_cuentan_lo_regalado_y_el_margen_no(self):
+        from finanzas.calculos import margen_contribucion_promedio
+
+        # Salieron tres shakes: los tres consumieron leche.
+        self.assertEqual(self.rec.unidades_vendidas, 3)
+        self.assertEqual(self.rec.unidades_regaladas, 1)
+        self.assertEqual(self.rec.unidades_cobradas, 2)
+
+        # El margen solo mira los dos que se cobraron. Si contara el regalado
+        # —ingreso cero, costo real— el promedio se hundiría sin que el precio
+        # ni el costo del producto se hubieran movido.
+        _, unidades = margen_contribucion_promedio()
+        self.assertEqual(unidades, 2)
+
+    def test_el_costo_del_regalo_no_es_costo_variable_de_ventas(self):
+        """Sale por mercadotecnia, en su propia columna, no del margen."""
+        from finanzas.calculos import flujo_mensual
+
+        fila = flujo_mensual()["filas"][0]
+
+        self.assertEqual(fila["cortesias"], Decimal("6.00"))    # 200 ml × 0.03
+        self.assertEqual(fila["costo_variable"], Decimal("12.00"))
+        # Pero se sigue restando: el insumo se gastó.
+        self.assertEqual(
+            fila["ganancia_operativa"],
+            fila["ingresos"] - fila["costo_variable"] - fila["cortesias"]
+            - fila["costos_fijos"])
+
+    def test_el_panel_separa_lo_cobrado_de_lo_regalado(self):
+        from django.contrib.auth.models import User
+        from django.urls import reverse
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+        html = self.client.get(reverse("panel_inventario")).content.decode()
+
+        self.assertIn("Cobrados", html)
+        self.assertIn("Regalados", html)
+
+    def test_el_admin_desglosa_la_cortesia(self):
+        from inventario.admin import RecetaAdmin
+        col = RecetaAdmin(Receta, None).vendidos_col(self.rec)
+        self.assertEqual(col, "3 (1 de cortesía)")
+
+    def test_sin_cortesias_el_admin_no_agrega_ruido(self):
+        from inventario.admin import RecetaAdmin
+        limpia = Receta.objects.create(
+            nombre="Otro", precio_venta=Decimal("90.00"))
+        self.assertEqual(RecetaAdmin(Receta, None).vendidos_col(limpia), 0)
+
+
 class AlarmaMargenTests(TestCase):
     """La alarma avisa cuando el margen BAJA. Solo eso.
 
