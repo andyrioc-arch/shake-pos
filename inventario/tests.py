@@ -451,6 +451,61 @@ class CortesiasEnLosAgregadosTests(TestCase):
         self.assertEqual(RecetaAdmin(Receta, None).vendidos_col(limpia), 0)
 
 
+class RepartoDeVentasTests(TestCase):
+    """La gráfica de qué se vende más reparte lo COBRADO."""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        self.rec_a = Receta.objects.create(
+            nombre="Uno", precio_venta=Decimal("100.00"))
+        self.rec_b = Receta.objects.create(
+            nombre="Dos", precio_venta=Decimal("100.00"))
+        Receta.objects.create(nombre="Nunca", precio_venta=Decimal("100.00"))
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+    def _panel(self):
+        from django.urls import reverse
+        return self.client.get(reverse("panel_inventario"))
+
+    def test_reparte_lo_cobrado_de_mayor_a_menor(self):
+        Venta.objects.create(fecha=date(2026, 8, 1), receta=self.rec_a, cantidad=3)
+        Venta.objects.create(fecha=date(2026, 8, 1), receta=self.rec_b, cantidad=1)
+
+        reparto = self._panel().context["reparto"]
+
+        self.assertEqual([r["nombre"] for r in reparto], ["Uno", "Dos"])
+        self.assertEqual(reparto[0]["porcentaje"], Decimal("75"))
+        self.assertEqual(reparto[1]["porcentaje"], Decimal("25"))
+
+    def test_lo_regalado_no_hace_que_un_producto_se_venda_mas(self):
+        Venta.objects.create(fecha=date(2026, 8, 1), receta=self.rec_a, cantidad=1)
+        Venta.objects.create(fecha=date(2026, 8, 1), receta=self.rec_b, cantidad=1)
+        Venta.objects.create(fecha=date(2026, 8, 2), receta=self.rec_b,
+                             cantidad=8, es_cortesia=True)
+
+        reparto = self._panel().context["reparto"]
+
+        self.assertEqual(reparto[0]["porcentaje"], Decimal("50"))
+        self.assertEqual(reparto[1]["porcentaje"], Decimal("50"))
+
+    def test_un_producto_sin_ventas_no_aparece(self):
+        Venta.objects.create(fecha=date(2026, 8, 1), receta=self.rec_a, cantidad=1)
+
+        nombres = [r["nombre"] for r in self._panel().context["reparto"]]
+
+        self.assertEqual(nombres, ["Uno"])
+
+    def test_sin_ventas_cobradas_no_se_divide_entre_cero(self):
+        Venta.objects.create(fecha=date(2026, 8, 1), receta=self.rec_a,
+                             cantidad=2, es_cortesia=True)
+
+        resp = self._panel()
+
+        self.assertEqual(resp.context["reparto"], [])
+        self.assertContains(resp, "Todavía no hay ventas cobradas que repartir")
+
+
 class AlarmaMargenTests(TestCase):
     """La alarma avisa cuando el margen BAJA. Solo eso.
 

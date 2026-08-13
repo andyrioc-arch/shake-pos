@@ -148,10 +148,22 @@ def panel_inventario(request):
             "margen": r.margen * 100,         # solo superusuario
         })
 
+    # ── Qué se vende más ─────────────────────────────────────────────────
+    # Se reparte sobre lo COBRADO, no sobre todo lo que salió: un producto no
+    # se vende más porque se haya regalado más. Los que no se vendieron no
+    # aparecen; una barra en cero no dice nada y empuja al resto hacia abajo.
+    cobradas_total = total_unidades - total_regaladas
+    reparto = sorted(
+        (r for r in recetas if r["cobradas"]),
+        key=lambda r: r["cobradas"], reverse=True)
+    for r in reparto:
+        r["porcentaje"] = Decimal(r["cobradas"]) * 100 / cobradas_total
+
     ctx = {
         "title": "Panel de inventario",
         "active": "inventario",
         "es_super": es_super,
+        "reparto": reparto,
         # La alarma expone costo y margen, así que va detrás de la misma
         # puerta que las columnas de costo: solo el dueño la ve.
         "alarma_margen": alarmas_margen() if es_super else None,

@@ -29,6 +29,24 @@
   .tagfalta { color:#fff; background:#c81a63; padding:2px 8px; border-radius:4px; font-weight:600; }
   .tagok { color:#fff; background:#1478cc; padding:2px 8px; border-radius:4px; font-weight:600; }
   .note { color:#6b6b6b; font-size:12px; padding:6px 18px 14px; }
+
+  /* Reparto de ventas. La barra es decoración: el porcentaje va escrito al
+     lado, así que el dato sobrevive sin color y sin ver la barra. */
+  ol.reparto { list-style:none; margin:0; padding:12px 18px 4px; }
+  ol.reparto li { display:flex; align-items:center; gap:12px; padding:5px 0;
+                  font-size:13px; }
+  .rp-nombre { flex:0 0 34%; min-width:0; overflow-wrap:break-word; }
+  .rp-barra { flex:1 1 auto; height:12px; background:#f0f0f0; border-radius:6px;
+              overflow:hidden; min-width:40px; }
+  .rp-barra > span { display:block; height:100%; background:#1478cc; }
+  .rp-cifra { flex:0 0 auto; font-variant-numeric:tabular-nums;
+              font-weight:600; white-space:nowrap; }
+  @media (max-width: 600px) {
+    /* En el celular la barra se queda sin ancho útil entre el nombre y la
+       cifra; el nombre pasa arriba y la barra ocupa la línea completa. */
+    ol.reparto li { flex-wrap:wrap; }
+    .rp-nombre { flex:1 1 100%; }
+  }
   /* Mismo arreglo que los reportes contables: en el celular las columnas de
      la derecha se salen de la caja. `max-content` y no `width:100%`, porque
      con este último la tabla se encoge al contenedor y su contenido se
@@ -424,6 +442,32 @@
       <tr><td colspan="8" class="muted">Sin recetas registradas.</td></tr>
       {% endfor %}
     </table>
+  </div>
+
+  <!-- ── Qué se vende más ──────────────────────────────────────────── -->
+  <div class="blk">
+    <h2>
+      📊 Qué se vende más
+      {% if reparto %}<span class="pill ok">{{ total_cobradas }} cobrados</span>{% endif %}
+    </h2>
+    {% if reparto %}
+    <ol class="reparto">
+      {% for r in reparto %}
+      <li>
+        <span class="rp-nombre">{{ r.nombre }}</span>
+        <span class="rp-barra"><span style="width:{{ r.porcentaje|floatformat:1 }}%"></span></span>
+        <span class="rp-cifra">{{ r.porcentaje|floatformat:1 }}%
+          <span class="muted">· {{ r.cobradas }}</span></span>
+      </li>
+      {% endfor %}
+    </ol>
+    <div class="note">
+      Reparte lo cobrado, no todo lo que salió: un producto no se vende más
+      porque se haya regalado más. Los que no se han vendido no aparecen.
+    </div>
+    {% else %}
+    <div class="note">Todavía no hay ventas cobradas que repartir.</div>
+    {% endif %}
   </div>
 
   <!-- ── Resumen de ventas ─────────────────────────────────────────── -->
