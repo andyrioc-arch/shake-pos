@@ -6,6 +6,10 @@ Para retomar en otra conversación.
 migrado con el session pooler y desplegado en https://shake-pos.vercel.app.
 `reglas-negocio-andy` cumplió su función y ya no se usa.
 
+**Lo siguiente ya está hecho y sin publicar: la alarma de margen bajo**, en la
+rama `alarma-margen-bajo`. Es la primera pieza de la lista que Andy pidió y sí
+ve. 253 tests. Ver [Alarma de margen](#alarma-de-margen-hecha-sin-publicar).
+
 Contexto de fondo en [CLAUDE.md](CLAUDE.md), plan completo en
 [DISENO-COSTEO.md](DISENO-COSTEO.md), foto previa en
 [BASELINE-COSTEO.md](BASELINE-COSTEO.md).
@@ -138,10 +142,54 @@ se incumple, en el código, no en la regla. Aquí se migró todo primero porque 
 posteo de IVA del código viejo vive dentro de `if mov.facturado:` y ese botón no
 se presionó nunca.
 
+## Alarma de margen (hecha, sin publicar)
+
+Rama `alarma-margen-bajo`, seis commits, 253 tests. Avisa cuando el margen de un
+producto **baja** más que el umbral respecto al mes anterior. Solo la caída: que
+un producto mejore no es una alarma, y mezclar las dos direcciones convierte el
+aviso en ruido que se aprende a ignorar.
+
+Decisiones que tomó Rubén y ya no hay que preguntar:
+
+- **El disparador es una caída del 10% contra el mes anterior**, no un umbral de
+  margen mínimo ni una comparación contra el esperado.
+- **Un solo umbral global**, configurable desde el admin, no uno por receta.
+
+Tres cosas que la alarma se niega a hacer, y por qué:
+
+- **Inventar una caída.** Un producto que no se vendió en alguno de los dos
+  meses no aparece, igual que el costeo no inventa un costo.
+- **Contar cortesías.** No cobran; incluirlas hunde el margen sin que el precio
+  ni el costo hayan cambiado. El filtro bajó a `Venta.objects.comerciales()`,
+  junto a `con_costeo()`, y `finanzas.calculos` ya lo usa.
+- **Callar que se apoya en el catálogo.** Si a alguna venta le falta su compra,
+  el aviso se marca «· estimado», con la explicación visible: ese costo es el de
+  hoy, así que corregir un ingrediente mueve el porcentaje solo.
+
+**Limitación conocida, decidida a propósito.** Compara un mes en curso —que a
+principios de mes puede llevar una sola venta— contra un mes completo. Una venta
+atípica enciende el aviso igual que una subida real de insumos; la columna de
+unidades (`40 → 1`) es la pista. Con 8 ventas capturadas, cualquier piso de
+unidades dejaría la alarma muda. Se revisa cuando haya un mes con volumen real.
+
+**Para publicarla:** `inventario.0010` **crea** la tabla que el código nuevo
+necesita, así que **migrar primero y desplegar después**. No toca costeo, así
+que no hace falta `sincronizar_contabilidad` ni `recostear`.
+
+Lo que se aprendió peleando con la interfaz, y está en CLAUDE.md:
+
+- `base.html` vuelve toda tabla `display:block` con su propio `overflow-x` en
+  móvil. Eso mete un contenedor de desplazamiento entre la celda y el scroller
+  y ahí `position:sticky` deja de aplicar, igual que `border-collapse:collapse`.
+  Una columna anclada necesita devolverle a la tabla su `display:table`.
+- Los tonos vivos de la marca no alcanzan para texto: 3.08:1 el rosa y 2.95:1
+  el azul, contra el 4.5:1 de WCAG AA. Donde el color carga un dato se usan
+  `#c81a63` y `#1478cc`.
+
 ## Qué sigue
 
-**Recomendación: saltar a lo que Andy ve.** Es casi todo lo que ella pidió y
-sigue sin empezar. Lo que queda del plan de costeo es chico salvo P9.
+**Recomendación: seguir con lo que Andy ve.** Queda casi toda su lista. Lo que
+resta del plan de costeo es chico salvo P9.
 
 **Del plan (3 pasos, 1 con peso real):**
 
@@ -157,9 +205,9 @@ sigue sin empezar. Lo que queda del plan de costeo es chico salvo P9.
   mientras existan, todo esto se revierte con un despliegue.
 
 **Lo que Andy ve y no existe:** enlace del libro de movimientos a la nota,
-alarma de margen bajo, gráfica de % de ventas por producto, PDF de la nota al
-escanearla, y que la nota anuncie el premio alcanzado y el cambio de nivel. El
-desglose de cuentas lo cerró P6.
+gráfica de % de ventas por producto, PDF de la nota al escanearla, y que la nota
+anuncie el premio alcanzado y el cambio de nivel. El desglose de cuentas lo
+cerró P6, y la alarma de margen está hecha y esperando publicación.
 
 ## Lo que no depende de código
 

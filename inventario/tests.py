@@ -1,8 +1,9 @@
 from decimal import Decimal
 from datetime import date
 from django.test import TestCase
+from inventario.alarmas import alarmas_margen
 from inventario.models import (
-    Ingrediente, Receta, RecetaIngrediente, Compra, Venta,
+    ConfiguracionAlarmas, Ingrediente, Receta, RecetaIngrediente, Compra, Venta,
     Extra, VentaSustitucion, VentaExtra,
 )
 
@@ -378,3 +379,170 @@ class CicloCompletoCajaTests(TestCase):
         venta.refresh_from_db()
         self.assertTrue(venta.costo_incompleto)
         self.assertContains(self._reportes(), "Falta costo")
+
+
+class AlarmaMargenTests(TestCase):
+    """La alarma avisa cuando el margen BAJA. Solo eso.
+
+    El margen del mes sale del costo real de las ventas, así que la alarma se
+    enciende cuando el insumo sube de precio, no cuando alguien edita el
+    catálogo.
+    """
+
+    def setUp(self):
+        self.ing = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("100.00"))
+        self.rec = Receta.objects.create(
+            nombre="Shake", precio_venta=Decimal("100.00"))
+        RecetaIngrediente.objects.create(
+            receta=self.rec, ingrediente=self.ing, cantidad=200)
+
+    def _capa(self, fecha, monto):
+        """Una capa que alcanza justo para una venta: 200 ml."""
+        return Compra.objects.create(
+            fecha=fecha, ingrediente=self.ing,
+            cantidad=Decimal("0.2"), monto_total=monto)
+
+    def _dos_meses(self, monto_julio, monto_agosto):
+        """Una venta en julio y otra en agosto, cada una con su propia capa."""
+        self._capa(date(2026, 7, 1), monto_julio)
+        self._capa(date(2026, 8, 1), monto_agosto)
+        Venta.objects.create(fecha=date(2026, 7, 15), receta=self.rec, cantidad=1)
+        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec, cantidad=1)
+
+    def test_avisa_cuando_el_margen_cae_mas_que_el_umbral(self):
+        # Julio: costo 4 → margen 96%. Agosto: costo 20 → margen 80%.
+        # Caída relativa = (96 − 80) / 96 = 16.67% ≥ 10%.
+        self._dos_meses(Decimal("4.00"), Decimal("20.00"))
+
+        res = alarmas_margen(hoy=date(2026, 8, 20))
+
+        self.assertEqual(len(res["avisos"]), 1)
+        a = res["avisos"][0]
+        self.assertEqual(a["margen_anterior"], Decimal("96"))
+        self.assertEqual(a["margen_actual"], Decimal("80"))
+        self.assertAlmostEqual(float(a["caida"]), 16.67, places=2)
+        self.assertFalse(a["estimado"])
+
+    def test_una_caida_menor_al_umbral_no_es_alarma(self):
+        # Costo de 4 a 4.40: el margen baja de 96% a 95.6%, menos del 10%.
+        self._dos_meses(Decimal("4.00"), Decimal("4.40"))
+        self.assertEqual(alarmas_margen(hoy=date(2026, 8, 20))["avisos"], [])
+
+    def test_que_el_margen_suba_no_es_alarma(self):
+        self._dos_meses(Decimal("20.00"), Decimal("4.00"))
+        self.assertEqual(alarmas_margen(hoy=date(2026, 8, 20))["avisos"], [])
+
+    def test_sin_ventas_el_mes_anterior_no_se_inventa_una_caida(self):
+        self._capa(date(2026, 8, 1), Decimal("20.00"))
+        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec, cantidad=1)
+        self.assertEqual(alarmas_margen(hoy=date(2026, 8, 20))["avisos"], [])
+
+    def test_la_cortesia_no_cuenta(self):
+        """Regalar un shake no es que el producto haya perdido margen."""
+        self._capa(date(2026, 7, 1), Decimal("4.00"))
+        self._capa(date(2026, 8, 1), Decimal("4.00"))
+        Venta.objects.create(fecha=date(2026, 7, 15), receta=self.rec, cantidad=1)
+        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec,
+                             cantidad=1, es_cortesia=True)
+        self.assertEqual(alarmas_margen(hoy=date(2026, 8, 20))["avisos"], [])
+
+    def test_leer_el_panel_no_escribe_en_la_base(self):
+        """Mirar la alarma es una consulta de lectura, aunque nadie haya
+        tocado los ajustes: los valores de fábrica no se guardan solos."""
+        self._dos_meses(Decimal("4.00"), Decimal("20.00"))
+
+        alarmas_margen(hoy=date(2026, 8, 20))
+
+        self.assertEqual(ConfiguracionAlarmas.objects.count(), 0)
+        self.assertEqual(ConfiguracionAlarmas.get().umbral_caida_margen, 10)
+
+    def test_el_umbral_es_configurable(self):
+        self._dos_meses(Decimal("4.00"), Decimal("20.00"))   # caída de 16.67%
+
+        cfg = ConfiguracionAlarmas.get()
+        cfg.umbral_caida_margen = 20
+        cfg.save()
+
+        self.assertEqual(alarmas_margen(hoy=date(2026, 8, 20))["avisos"], [])
+
+    def test_enero_compara_contra_diciembre_del_ano_pasado(self):
+        self._capa(date(2025, 12, 1), Decimal("4.00"))
+        self._capa(date(2026, 1, 2), Decimal("20.00"))
+        Venta.objects.create(fecha=date(2025, 12, 15), receta=self.rec, cantidad=1)
+        Venta.objects.create(fecha=date(2026, 1, 5), receta=self.rec, cantidad=1)
+
+        res = alarmas_margen(hoy=date(2026, 1, 20))
+
+        self.assertEqual(len(res["avisos"]), 1)
+        self.assertEqual(res["mes_anterior"], date(2025, 12, 1))
+
+    def test_marca_el_aviso_que_se_apoya_en_el_estimado(self):
+        """Sin la compra capturada, el margen sale del catálogo. Hay que decirlo."""
+        self._capa(date(2026, 7, 1), Decimal("4.00"))
+        Venta.objects.create(fecha=date(2026, 7, 15), receta=self.rec, cantidad=1)
+        # Agosto sin capa: cae al catálogo (200 ml × 0.10 = 20 → margen .80).
+        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec, cantidad=1)
+
+        avisos = alarmas_margen(hoy=date(2026, 8, 20))["avisos"]
+
+        self.assertEqual(len(avisos), 1)
+        self.assertTrue(avisos[0]["estimado"])
+
+    def test_el_panel_muestra_la_alarma_solo_al_dueno(self):
+        from django.contrib.auth.models import User
+        from django.urls import reverse
+        self._dos_meses(Decimal("4.00"), Decimal("20.00"))
+        url = reverse("panel_inventario")
+
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+        self.assertContains(self.client.get(url), "Alarma de margen")
+
+        self.client.logout()
+        User.objects.create_user("cajero", "c@c.com", "pass")
+        self.client.login(username="cajero", password="pass")
+        self.assertNotContains(self.client.get(url), "Alarma de margen")
+
+    def test_el_panel_publica_los_porcentajes_de_la_alarma(self):
+        """Lo que se verificó a mano, fijado: el recorrido completo hasta la
+        pantalla, en porcentaje y con las unidades de la muestra a la vista."""
+        from django.contrib.auth.models import User
+        from django.urls import reverse
+        self._dos_meses(Decimal("4.00"), Decimal("20.00"))
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+        html = self.client.get(reverse("panel_inventario")).content.decode()
+
+        self.assertIn("96.0%", html)      # julio
+        self.assertIn("80.0%", html)      # agosto
+        self.assertIn("−16.7%", html)     # la caída
+        self.assertIn("1 → 1", html)      # sobre cuántas ventas se midió
+        self.assertIn("1 con caída", html)
+        self.assertNotIn("· estimado", html)   # ambas ventas están costeadas
+
+    def test_el_panel_marca_el_aviso_apoyado_en_el_catalogo(self):
+        from django.contrib.auth.models import User
+        from django.urls import reverse
+        self._capa(date(2026, 7, 1), Decimal("4.00"))
+        Venta.objects.create(fecha=date(2026, 7, 15), receta=self.rec, cantidad=1)
+        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec, cantidad=1)
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+        self.assertContains(
+            self.client.get(reverse("panel_inventario")), "· estimado")
+
+    def test_el_panel_dice_cuando_no_hay_caidas(self):
+        from django.contrib.auth.models import User
+        from django.urls import reverse
+        self._dos_meses(Decimal("4.00"), Decimal("4.00"))
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+        resp = self.client.get(reverse("panel_inventario"))
+
+        self.assertContains(resp, "Sin caídas")
+        self.assertNotContains(resp, "con caída")

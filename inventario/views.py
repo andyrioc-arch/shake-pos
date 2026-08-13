@@ -13,6 +13,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
+from .alarmas import alarmas_margen
 from .models import (
     Compra, Extra, Ingrediente, Nota, Receta, RecetaIngrediente,
     Venta, VentaExtra, VentaSustitucion,
@@ -123,13 +124,18 @@ def panel_inventario(request):
             "ingreso": ingreso,               # solo superusuario
             "costo": r.costo_receta,          # solo superusuario
             "ganancia": r.ganancia_unitaria,  # solo superusuario
-            "margen": r.margen,               # solo superusuario
+            # En porcentaje, como la alarma: el mismo concepto en dos formatos
+            # dentro de la misma pantalla se lee como si fueran dos cosas.
+            "margen": r.margen * 100,         # solo superusuario
         })
 
     ctx = {
         "title": "Panel de inventario",
         "active": "inventario",
         "es_super": es_super,
+        # La alarma expone costo y margen, así que va detrás de la misma
+        # puerta que las columnas de costo: solo el dueño la ve.
+        "alarma_margen": alarmas_margen() if es_super else None,
         "ingredientes": ingredientes,
         "num_faltantes": faltantes,
         "recetas": recetas,

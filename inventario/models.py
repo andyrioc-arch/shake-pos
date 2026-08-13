@@ -390,6 +390,16 @@ class VentaQuerySet(models.QuerySet):
         return self.filter(models.Q(costo_fifo__isnull=True) |
                            models.Q(costo_incompleto=True))
 
+    def comerciales(self):
+        """Las que tienen margen: una cortesía no lo tiene, porque no cobra.
+
+        Meterlas hunde el margen del producto sin que su precio ni su costo
+        hayan cambiado. Va aquí, junto a `con_costeo()`, por la misma razón:
+        es una regla que varios paneles tienen que repetir igual, y olvidarla
+        en uno no rompe nada —solo publica otro número.
+        """
+        return self.filter(es_cortesia=False).con_costeo()
+
 
 class Venta(models.Model):
     """Registro de una venta de shakes."""
@@ -697,3 +707,38 @@ class ConsumoCapa(models.Model):
     def __str__(self):
         origen = self.compra_id or "sin capa"
         return f"venta {self.venta_id} ← compra {origen}: {self.cantidad_receta}"
+
+
+class ConfiguracionAlarmas(models.Model):
+    """Ajustes de los avisos del panel. Solo existe un registro (id=1).
+
+    Es de alarmas, no del costeo: las tres reglas del costeo no llevan
+    perilla, y una clase que se llamara «configuración del costeo» invitaría
+    a ponerles una.
+    """
+
+    umbral_caida_margen = models.PositiveSmallIntegerField(
+        "Avisar si el margen baja (%)", default=10,
+        validators=[MinValueValidator(1)],
+        help_text="Caída respecto al mes anterior a partir de la cual se "
+                  "enciende la alarma. 10 = de 60% a 54% ya avisa.")
+
+    class Meta:
+        verbose_name = "Configuración de alarmas"
+        verbose_name_plural = "Configuración de alarmas"
+
+    def __str__(self):
+        return f"Alarma de margen: baja de {self.umbral_caida_margen}%"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get(cls):
+        """Los ajustes guardados, o los de fábrica si nadie los ha tocado.
+
+        Sin `get_or_create`: leer el panel es una consulta de solo lectura y
+        no tiene por qué escribir en la base para responderla.
+        """
+        return cls.objects.filter(pk=1).first() or cls()
