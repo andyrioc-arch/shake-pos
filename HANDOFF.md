@@ -43,7 +43,8 @@ escondía un botón que nadie presionaba, ahora está a la vista y con nombre.
 
 ## Lo que se publicó
 
-**240 tests.** Ocho pasos del plan, más dos reglas visibles.
+Ocho pasos del plan, más dos reglas visibles. Eran 240 tests entonces; hoy
+son 294.
 
 | | Qué |
 |---|---|
@@ -122,7 +123,9 @@ escondía un botón que nadie presionaba, ahora está a la vista y con nombre.
 - **Un paso por rama.** El bloque P0–P6 fue grande porque el diseño no lo
   dejaba partir —quitar el gate sin el costo persistido deja el margen mal, y
   persistir capas antes de arreglar el redondeo obliga a recostear dos veces—.
-  P7, P9, P10 y P11 son independientes y van sueltos.
+  El resto fue suelto. **P11 necesitó dos ramas para un solo paso**, porque
+  `migrate` aplica todo lo pendiente y sus dos tandas tenían que quedar
+  separadas por un despliegue.
 - **Commitear seguido.** Este bloque llegó a 1,457 líneas en 40 archivos con
   cero commits. Un día de trabajo verificado sin punto de guardado.
 - Nunca empujar a `main` sin consultarlo. El repo es de Andy.
@@ -146,8 +149,8 @@ se presionó nunca.
 
 ## Alarma de margen (publicada, PR #2)
 
-Rama `alarma-margen-bajo`, seis commits, 253 tests. Avisa cuando el margen de un
-producto **baja** más que el umbral respecto al mes anterior. Solo la caída: que
+Avisa cuando el margen de un producto **baja** más que el umbral respecto al mes
+anterior. Solo la caída: que
 un producto mejore no es una alarma, y mezclar las dos direcciones convierte el
 aviso en ruido que se aprende a ignorar.
 
