@@ -47,6 +47,11 @@
      contenedor y su contenido se desborda de su propia caja, así que ni al
      final del desplazamiento se alcanza la última columna. */
   .scroll-x > table.t { min-width:max-content; }
+  /* El enlace a la nota se subraya siempre: en una tabla de puros datos,
+     un color por sí solo no dice que algo se pueda abrir. #0d6ecd da 4.6:1
+     sobre blanco; el azul de marca se queda en 2.95:1. */
+  a.ver-nota { color:#0d6ecd; text-decoration:underline; text-underline-offset:2px; }
+  a.ver-nota:hover { color:#000; }
 </style>
 
 <div class="ct-wrap">
@@ -104,7 +109,16 @@
         <tr>
           <td class="l">{{ m.fecha|date:"d/m/Y" }}</td>
           <td class="l"><span class="badge {% if m.tipo == 'venta' %}v{% else %}c{% endif %}">{{ m.get_tipo_display }}</span></td>
-          <td class="l">{{ m.descripcion }}</td>
+          <td class="l">
+            {% if m.venta.nota %}
+              {# El libro dice cuánto entró; la nota dice qué se llevó el
+                 cliente. Sin el enlace hay que buscarla a mano por fecha. #}
+              <a class="ver-nota" href="{{ m.venta.nota.get_absolute_url }}"
+                 title="Ver la nota de esta venta">{{ m.descripcion }}</a>
+            {% else %}
+              {{ m.descripcion }}
+            {% endif %}
+          </td>
           <td>${{ m.monto|floatformat:2|intcomma }}</td>
           <td class="l">{{ m.cuenta.codigo }} · {{ m.cuenta.nombre }}</td>
           <td>
