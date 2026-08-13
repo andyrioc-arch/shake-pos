@@ -22,6 +22,12 @@
   .tagfalta { color:#fff; background:#fa5598; padding:2px 8px; border-radius:4px; font-weight:600; }
   .tagok { color:#fff; background:#1e9aff; padding:2px 8px; border-radius:4px; font-weight:600; }
   .note { color:#777; font-size:12px; padding:6px 18px 14px; }
+  /* Mismo arreglo que los reportes contables: en el celular las columnas de
+     la derecha se salen de la caja. `max-content` y no `width:100%`, porque
+     con este último la tabla se encoge al contenedor y su contenido se
+     desborda igual, sin poder alcanzarlo ni al final del desplazamiento. */
+  .scroll-x { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  .scroll-x > table.iv { min-width:max-content; }
 
   .forms { display:flex; gap:18px; flex-wrap:wrap; margin:18px 0; }
   .card-form { flex:1 1 340px; background:#fff; border:2px solid #000; border-radius:12px;
@@ -315,6 +321,7 @@
       {% endif %}
     </h2>
     {% if alarma_margen.avisos %}
+    <div class="scroll-x">
     <table class="iv">
       <tr>
         <th>Producto</th>
@@ -331,16 +338,17 @@
             <span class="muted" title="Alguna venta no tiene su costo completo: el margen se apoya en el estimado del catálogo.">· estimado</span>
           {% endif %}
         </td>
-        <td>{{ a.margen_anterior|floatformat:3 }}</td>
-        <td class="bad">{{ a.margen_actual|floatformat:3 }}</td>
-        <td class="bad">−{{ a.caida|floatformat:3 }}</td>
+        <td>{% widthratio a.margen_anterior 1 100 %}%</td>
+        <td class="bad">{% widthratio a.margen_actual 1 100 %}%</td>
+        <td class="bad">−{% widthratio a.caida 1 100 %}%</td>
         <td class="muted">{{ a.unidades_anterior }} → {{ a.unidades_actual }}</td>
       </tr>
       {% endfor %}
     </table>
+    </div>
     {% endif %}
     <div class="note">
-      Avisa cuando el margen de un producto cae {{ alarma_margen.umbral|floatformat:2 }}
+      Avisa cuando el margen de un producto cae {{ alarma_margen.umbral_pct }}%
       o más respecto al mes anterior. Un producto que no se vendió en alguno de
       los dos meses no aparece: sin comparación no se inventa una caída.
       Las cortesías no cuentan.

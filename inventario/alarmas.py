@@ -63,7 +63,8 @@ def alarmas_margen(hoy=None):
     inventa una caída, igual que el costeo no inventa un costo.
     """
     hoy = hoy or localdate()
-    umbral = Decimal(ConfiguracionCosteo.get().umbral_caida_margen) / Decimal("100")
+    umbral_pct = ConfiguracionCosteo.get().umbral_caida_margen
+    umbral = Decimal(umbral_pct) / Decimal("100")
 
     actual = _margenes_del_mes(hoy.year, hoy.month)
     anio_ant, mes_ant = _mes_anterior(hoy.year, hoy.month)
@@ -96,6 +97,7 @@ def alarmas_margen(hoy=None):
     return {
         "avisos": avisos,
         "umbral": umbral,
+        "umbral_pct": umbral_pct,
         "mes_actual": date(hoy.year, hoy.month, 1),
         "mes_anterior": date(anio_ant, mes_ant, 1),
     }
