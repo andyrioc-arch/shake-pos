@@ -10,13 +10,16 @@ En producción desde el 6 de agosto de 2026: **https://shake-pos.vercel.app**
 
 `main` es la rama oficial y de publicación desde el 12 de agosto de 2026, cuando
 se puso al día con `deploy/vercel` mediante un avance directo. `deploy/vercel`
-quedó archivada y no se vuelve a tocar. La migración `lealtad.0002` ya está
-aplicada en producción.
+quedó archivada y no se vuelve a tocar.
+
+**El 13 de agosto de 2026 se publicó el rediseño del costeo** (PR #1: P-IVA y
+P0–P6). Producción corre `main` y tiene aplicadas todas las migraciones hasta
+`contabilidad.0009` e `inventario.0009`.
 
 | Pieza | Dónde |
 |---|---|
 | App | Vercel, proyecto `shake-pos` (cuenta personal de Rubén, plan Hobby) |
-| Base | Supabase, proyecto `shake-pos`, ref `xrimahsxtkfdhenigito`, Postgres 17, us-east-1 |
+| Base | Supabase, proyecto `shake-pos`, ref `xrimahsxtkfdhenigito`, Postgres 17, us-east-1, **plan Pro con respaldos diarios** |
 | Repo | `github.com/andyrioc-arch/shake-pos` |
 
 **Los datos transaccionales de producción son de PRUEBA** (10 compras, 8 ventas,
@@ -24,12 +27,31 @@ aplicada en producción.
 ingredientes— y los 3 costos fijos. Ningún número histórico es un contrato que
 haya que preservar.
 
-## Dónde va el trabajo en curso
+## Estado del costeo tras publicar
 
-Rama **`reglas-negocio-andy`**, sin empujar ni desplegar. Implementa las reglas
-de negocio que pidió Andy. El plan completo está en
-[DISENO-COSTEO.md](DISENO-COSTEO.md) y la foto previa en
-[BASELINE-COSTEO.md](BASELINE-COSTEO.md).
+Verificado contra producción el 13 de agosto de 2026, después de migrar,
+desplegar y correr `sincronizar_contabilidad` + `recostear --todo`:
+
+```
+balanza cuadra     True
+balance cuadra     True
+saldo inventario   487.81      ← positivo; antes esta cuenta se hundía
+ventas             8
+sin costear        0
+incompletas        8           ← las 8, por los insumos sin capturar
+consumo sin capa   3573
+```
+
+**Las 8 ventas están incompletas, así que ninguna reconoce ingreso: la cuenta
+401 sigue en cero.** Es el comportamiento correcto, no una falla —el ingreso y
+su costo entran juntos o no entran—, y se destapa capturando las compras que
+faltan, no tocando código.
+
+El plan completo está en [DISENO-COSTEO.md](DISENO-COSTEO.md) y la foto previa
+en [BASELINE-COSTEO.md](BASELINE-COSTEO.md).
+
+**De aquí en adelante, un paso por rama.** El bloque P0–P6 fue grande porque el
+diseño no lo dejaba partir; P7, P9, P10 y P11 son independientes y van sueltos.
 
 ## Reglas de este proyecto
 
@@ -187,14 +209,14 @@ costeo.**
 
 ## Pendiente
 
-- Rama `reglas-negocio-andy` sin empujar, sin PR, sin desplegar.
+- **Faltan las compras reales de diez insumos, y ya bloquean el reporte.**
+  Medido en producción el 13 de agosto: las 8 ventas están incompletas, así que
+  ninguna reconoce ingreso y la 401 sigue en cero. Es a propósito —el ingreso y
+  su costo entran juntos o no entran— pero significa que el Estado de
+  Resultados lo destapan los tickets, no un despliegue. La lista está en
+  BASELINE-COSTEO.md y lo captura Andy.
 - Sin despliegue automático (punto único de falla): Vercel no pudo conectar el
   repo por ser de otra cuenta.
-- **Faltan capturar las compras reales de diez insumos.** Sin ellas el costo de
-  ventas queda incompleto por más que el código esté bien. Lo hace Andy con los
-  tickets físicos. La lista está en BASELINE-COSTEO.md. **Con P5 esto pasó de
-  molestia a bloqueo del reporte**: una venta sin costo completo no reconoce
-  ingreso, así que la 401 seguirá en cero hasta que esas compras existan.
 - El premio "Latte gratis" no tiene receta ligada. Lo hace Andy.
 - Quedan **P7, P9, P10 y P11** del plan de costeo, más lo que Andy ve y aún no
   existe: enlace del libro a la nota, alarma de margen, gráfica de productos,
