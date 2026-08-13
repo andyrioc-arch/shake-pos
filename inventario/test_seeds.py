@@ -6,6 +6,7 @@ from io import StringIO
 from inventario.models import Ingrediente, Receta, Venta
 from finanzas.models import CostoFijo
 from contabilidad.models import Cuenta, Movimiento, Asiento
+from contabilidad.posting import CATALOGO
 from presupuesto.models import PresupuestoVenta
 
 
@@ -25,7 +26,7 @@ class SeedCommandsTests(TestCase):
 
     def test_seed_contabilidad_genera_asientos_que_cuadran(self):
         self._run("seed_contabilidad", "--reset")
-        self.assertEqual(Cuenta.objects.count(), 16)
+        self.assertEqual(Cuenta.objects.count(), len(CATALOGO))
         self.assertGreater(
             Movimiento.objects.filter(tipo=Movimiento.Tipo.GASTO).count(), 0)
         # Todos los asientos generados deben cuadrar

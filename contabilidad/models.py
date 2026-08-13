@@ -4,7 +4,6 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 
 CENTAVO = Decimal("0.01")
-IVA_TASA = Decimal("0.16")
 
 
 def redondea(v):
@@ -32,6 +31,14 @@ class Cuenta(models.Model):
     nombre = models.CharField(max_length=120)
     tipo = models.CharField(max_length=12, choices=Tipo.choices)
     descripcion = models.CharField(max_length=200, blank=True)
+    # Agrupa cuentas en el reporte SIN mover el posteo: los asientos siguen
+    # yendo a la cuenta hija. Una cuenta puede recibir movimientos propios Y
+    # tener hijas a la vez (504 Mercadotecnia es las dos cosas).
+    padre = models.ForeignKey(
+        "self", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="subcuentas", verbose_name="Cuenta padre",
+        help_text="Solo para agrupar en los reportes. No cambia dónde se postea.",
+    )
 
     class Meta:
         verbose_name = "Cuenta"
@@ -207,8 +214,15 @@ class Movimiento(models.Model):
     )
     # Para gastos operativos: categoría (clave de CategoriaGasto).
     categoria = models.CharField(max_length=30, blank=True)
-    facturado = models.BooleanField("Facturado", default=False)
-    fecha_factura = models.DateField("Fecha de factura", null=True, blank=True)
+    # Reliquias del botón «Facturado», que ya no existe: el reconocimiento es
+    # automático y NADIE lee estas dos columnas. Se quedan congeladas, con el
+    # valor que les dejó el código viejo, hasta que P11 las borre: así revertir
+    # el despliegue devuelve el Estado de Resultados que estaba publicado.
+    # `editable=False` las saca del admin para que nadie las capture creyendo
+    # que todavía mueven el reconocimiento de mes.
+    facturado = models.BooleanField("Facturado", default=False, editable=False)
+    fecha_factura = models.DateField("Fecha de factura", null=True, blank=True,
+                                     editable=False)
 
     venta = models.ForeignKey(
         "inventario.Venta", on_delete=models.CASCADE,
@@ -233,7 +247,9 @@ class Movimiento(models.Model):
         ordering = ["-fecha", "-id"]
         indexes = [
             models.Index(fields=["fecha"]),
-            models.Index(fields=["tipo", "facturado"]),
+            # Sin `facturado`: ninguna consulta lo filtra ya, y mantenerlo en
+            # el índice cuesta escritura en cada alta a cambio de nada.
+            models.Index(fields=["tipo"]),
         ]
 
     def __str__(self):

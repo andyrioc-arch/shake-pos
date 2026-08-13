@@ -4,7 +4,7 @@ from django.utils.timezone import localdate
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.http import Http404, HttpResponse
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
@@ -122,23 +122,3 @@ def exportar(request, reporte):
     return resp
 
 
-@require_POST
-@login_required
-@solo_super
-def movimiento_facturar(request, pk):
-    """Cambia el estado 'Facturado' de un movimiento (y su reconocimiento)."""
-    mov = get_object_or_404(Movimiento, pk=pk)
-    facturado = request.POST.get("facturado") == "1"
-    fecha_factura = None
-    if request.POST.get("fecha_factura"):
-        try:
-            fecha_factura = date.fromisoformat(request.POST["fecha_factura"])
-        except ValueError:
-            fecha_factura = None
-    posting.marcar_facturado(mov, facturado, fecha_factura)
-    messages.success(
-        request,
-        f"Movimiento marcado como {'facturado' if facturado else 'no facturado'}.")
-    anio = request.POST.get("anio") or mov.fecha.year
-    mes = request.POST.get("mes") or mov.fecha.month
-    return redirect(f"{reverse('reportes_contables')}?anio={anio}&mes={mes}")

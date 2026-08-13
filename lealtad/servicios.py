@@ -14,7 +14,8 @@ from django.utils import timezone
 
 from .models import (
     ALFABETO_CODIGO, Canje, Cliente, Compra, ConfiguracionPrograma,
-    MovimientoPuntos, PromocionPuntos, TelefonoInvalido, normaliza_telefono,
+    MovimientoPuntos, PromocionPuntos, TelefonoInvalido, normaliza_nombre,
+    normaliza_telefono,
 )
 
 
@@ -63,11 +64,12 @@ def alta_cliente(telefono, nombre="", cumpleanos=None,
     Devuelve `(cliente, creado)`. Nunca duplica un teléfono.
     """
     telefono = normaliza_telefono(telefono)
+    nombre = normaliza_nombre(nombre)
     cliente = Cliente.objects.filter(telefono=telefono).first()
     if cliente:
         cambios = []
         if nombre and not cliente.nombre:
-            cliente.nombre = nombre.strip()
+            cliente.nombre = nombre
             cambios.append("nombre")
         if cumpleanos and not cliente.cumpleanos:
             cliente.cumpleanos = cumpleanos
@@ -77,7 +79,7 @@ def alta_cliente(telefono, nombre="", cumpleanos=None,
         return cliente, False
 
     cliente = Cliente.objects.create(
-        telefono=telefono, nombre=(nombre or "").strip(),
+        telefono=telefono, nombre=nombre,
         cumpleanos=cumpleanos, origen=origen,
         acepta_mensajes=acepta_mensajes,
     )

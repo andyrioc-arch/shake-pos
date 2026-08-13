@@ -1,17 +1,11 @@
 """Reglas de generación automática de asientos (partida doble) y reportes.
 
-Catálogo básico usado por las reglas automáticas:
-  101  Caja y bancos          (Activo)
-  105  IVA acreditable        (Activo)  -> IVA que pagamos en gastos
-  201  IVA por pagar          (Pasivo)  -> IVA que cobramos en ventas
-  301  Capital                (Capital)
-  401  Ventas                 (Ingreso)
-  501  Costo / Insumos        (Gasto)
-  502  Renta                  (Gasto)
-  503  Servicios              (Gasto)
-  504  Mercadotecnia          (Gasto)
-  505  Sueldos                (Gasto)
-  509  Otros gastos           (Gasto)
+El plan de cuentas que usan las reglas automáticas está en `CATALOGO`, unas
+líneas abajo.
+
+El IVA no se lleva en la contabilidad: los importes se registran completos, tal
+como entran y salen de caja. El único lugar donde se desglosa es la nota que se
+le entrega al cliente (ver `inventario.models`).
 """
 import calendar
 from datetime import date
@@ -20,79 +14,16 @@ from django.db import transaction
 from django.db.models import Sum
 from .models import (
     Cuenta, Asiento, MovimientoContable,
-    CategoriaGasto, Movimiento, IVA_TASA, redondea,
+    CategoriaGasto, Movimiento,
 )
 
-
-def _desglose_iva(total):
-    """Separa un total con IVA incluido en (subtotal, iva) del 16%."""
-    iva = redondea(total * IVA_TASA / (Decimal("1") + IVA_TASA))
-    return total - iva, iva
-
-
-# ── COSTEO FIFO (IAS 2): valúa el Costo de Ventas por capas ────────────────────
-def _orden_recon(mov):
-    """Clave de orden por reconocimiento (fecha de factura, luego fecha)."""
-    return (mov.fecha_factura or mov.fecha, mov.pk)
-
-
-def fifo_cogs():
-    """Costo de Ventas por FIFO de cada venta facturada.
-
-    Reproduce, en orden de reconocimiento, las compras facturadas como capas de
-    inventario y las ventas facturadas consumiéndolas (la más antigua primero).
-    Devuelve {venta_id: costo_de_ventas}.
-    """
-    from collections import defaultdict, deque
-    from inventario.models import Ingrediente
-
-    ing = {i.id: i for i in Ingrediente.objects.all()}
-    capas = defaultdict(deque)   # ingrediente_id -> deque[[cantidad, costo_unit]]
-
-    compras = Movimiento.objects.filter(
-        tipo=Movimiento.Tipo.COMPRA, facturado=True).select_related(
-        "compra__ingrediente")
-    for m in sorted(compras, key=_orden_recon):
-        c = m.compra
-        if not c or not c.ingrediente.cantidad_por_unidad:
-            continue
-        cant_receta = c.cantidad * c.ingrediente.cantidad_por_unidad
-        costo_unit = c.costo_unitario / c.ingrediente.cantidad_por_unidad
-        capas[c.ingrediente_id].append([cant_receta, costo_unit])
-
-    cogs = {}
-    ventas = Movimiento.objects.filter(
-        tipo=Movimiento.Tipo.VENTA, facturado=True).select_related("venta__receta")
-    for m in sorted(ventas, key=_orden_recon):
-        v = m.venta
-        if not v:
-            continue
-        total = Decimal("0")
-        for ing_id, cantidad in v.consumo_ingredientes().items():
-            falta = cantidad
-            dq = capas[ing_id]
-            while falta > 0 and dq:
-                capa = dq[0]
-                toma = min(falta, capa[0])
-                total += toma * capa[1]
-                capa[0] -= toma
-                falta -= toma
-                if capa[0] <= 0:
-                    dq.popleft()
-            if falta > 0:   # sin capas suficientes: usa el costo actual del ingrediente
-                obj = ing.get(ing_id)
-                total += falta * (obj.costo_unidad_receta if obj else Decimal("0"))
-        cogs[v.id] = redondea(total)
-    return cogs
 
 # Catálogo básico: codigo -> (nombre, tipo)
 CATALOGO = [
     ("101", "Caja y bancos", Cuenta.Tipo.ACTIVO),
-    ("105", "IVA acreditable", Cuenta.Tipo.ACTIVO),
     ("106", "Compras por facturar", Cuenta.Tipo.ACTIVO),
     ("115", "Inventario", Cuenta.Tipo.ACTIVO),
     ("116", "Gastos por comprobar", Cuenta.Tipo.ACTIVO),
-    ("201", "IVA por pagar", Cuenta.Tipo.PASIVO),
     ("202", "Ventas por facturar", Cuenta.Tipo.PASIVO),
     ("301", "Capital", Cuenta.Tipo.CAPITAL),
     ("401", "Ventas", Cuenta.Tipo.INGRESO),
@@ -105,6 +36,10 @@ CATALOGO = [
     ("509", "Otros gastos", Cuenta.Tipo.GASTO),
 ]
 
+# Agrupación en los REPORTES (hija → padre). No cambia dónde se postea: los
+# asientos de cortesía siguen yendo a la 506; el reporte la lee dentro de 504.
+JERARQUIA = {"506": "504"}
+
 # Cuentas puente para el criterio de reconocimiento (IFRS):
 CTA_CAJA = "101"
 CTA_COMPRAS_POR_FACTURAR = "106"   # activo: compra pagada, gasto aún no reconocido
@@ -115,7 +50,6 @@ CTA_COSTO_VENTAS = "501"
 CTA_INVENTARIO = "115"         # activo: mercancía comprada aún no vendida
 CTA_GASTOS_POR_COMPROBAR = "116"   # activo: gasto pagado aún no reconocido
 CTA_CORTESIAS = "506"          # gasto: costo de productos regalados (activaciones)
-CTA_IVA_POR_PAGAR = "201"      # pasivo: IVA cobrado que se debe a Hacienda
 
 # Cuenta de gasto por categoría (claves base; las nuevas usan CategoriaGasto).
 GASTO_A_CUENTA = {
@@ -138,18 +72,25 @@ def _codigo_cuenta_gasto(tipo):
 
 
 def crear_catalogo():
-    """Crea (idempotente) el catálogo de cuentas básico."""
+    """Crea (idempotente) el catálogo de cuentas básico y su jerarquía."""
     creadas = 0
     for codigo, nombre, tipo in CATALOGO:
         _, hecho = Cuenta.objects.update_or_create(
             codigo=codigo, defaults=dict(nombre=nombre, tipo=tipo)
         )
         creadas += 1 if hecho else 0
+
+    # La jerarquía se repone aquí además de en la migración: `_cuenta_segura()`
+    # puede recrear una cuenta borrada, y sin esto renacería suelta y
+    # desaparecería de su grupo en el reporte sin que nadie se entere.
+    por_codigo = {c.codigo: c for c in
+                  Cuenta.objects.filter(codigo__in=[*JERARQUIA, *JERARQUIA.values()])}
+    for hija_cod, padre_cod in JERARQUIA.items():
+        hija, padre = por_codigo.get(hija_cod), por_codigo.get(padre_cod)
+        if hija and padre and hija.padre_id != padre.id:
+            hija.padre = padre
+            hija.save(update_fields=["padre"])
     return creadas
-
-
-def _cuenta(codigo):
-    return Cuenta.objects.get(codigo=codigo)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -186,15 +127,16 @@ def _reemplaza_asiento(referencia, fecha, concepto, lineas):
 
 
 @transaction.atomic
-def sincronizar_movimiento(mov: Movimiento, cogs_map=None):
+def sincronizar_movimiento(mov: Movimiento):
     """(Re)genera los asientos de un movimiento según su estado actual.
 
     • FLUJO (siempre): efectivo contra cuenta puente. Afecta balance, flujo y
       balanza, pero NO el estado de resultados.
-    • RECONOCIMIENTO (solo si facturado, IAS 2 / IFRS):
-        - Compra → entra a Inventario (activo).
-        - Venta  → reconoce el ingreso (neto de IVA) Y el Costo de Ventas por
-                   FIFO (Costo de ventas contra Inventario), en la fecha factura.
+    • RECONOCIMIENTO (automático, IAS 2 / IFRS), en la fecha del movimiento:
+        - Compra y gasto → siempre.
+        - Venta  → solo si su costo está completo. Ingreso y costo entran
+                   juntos o no entran: reconocer el ingreso con costo parcial
+                   infla la utilidad bruta en silencio.
     """
     cero = Decimal("0")
     es_cortesia = mov.tipo == Movimiento.Tipo.VENTA and \
@@ -225,62 +167,48 @@ def sincronizar_movimiento(mov: Movimiento, cogs_map=None):
 
     ref_rec = f"Mov #{mov.pk} reconocimiento"
     reconocimiento = None
-    if mov.facturado:
-        fecha_rec = mov.fecha_factura or mov.fecha
-        if mov.tipo == Movimiento.Tipo.VENTA:
-            if cogs_map is None:
-                cogs_map = fifo_cogs()
-            costo = cogs_map.get(mov.venta_id, Decimal("0"))
-            if es_cortesia:
-                # Regalo: solo el costo del inventario → gasto de cortesías.
-                if costo:
-                    reconocimiento = _reemplaza_asiento(
-                        ref_rec, fecha_rec, f"Cortesía: {mov.descripcion}",
-                        [(CTA_CORTESIAS, costo, cero),
-                         (CTA_INVENTARIO, cero, costo)])
-                else:
-                    Asiento.objects.filter(referencia=ref_rec, automatico=True).delete()
-            else:
-                # Ingreso: DEBE Ventas por facturar · HABER Ventas (subtotal) · HABER IVA
-                subtotal, iva = _desglose_iva(mov.monto)
-                lineas = [(CTA_VENTAS_POR_FACTURAR, mov.monto, cero),
-                          (CTA_VENTAS, cero, subtotal),
-                          (CTA_IVA_POR_PAGAR, cero, iva)]
-                # Costo de Ventas (FIFO): DEBE Costo de ventas · HABER Inventario
-                if costo:
-                    lineas += [(CTA_COSTO_VENTAS, costo, cero),
-                               (CTA_INVENTARIO, cero, costo)]
+    fecha_rec = mov.fecha
+    if mov.tipo == Movimiento.Tipo.VENTA:
+        # El costo es un hecho guardado por inventario.costeo, no algo que se
+        # recalcule aquí. Se difiere el reconocimiento ENTERO —ingreso
+        # incluido— mientras el costo no esté completo (invariante I2).
+        completo = bool(mov.venta_id) and mov.venta.costo_esta_completo
+        costo = mov.venta.costo_fifo if completo else None
+        if not completo:
+            Asiento.objects.filter(referencia=ref_rec, automatico=True).delete()
+        elif es_cortesia:
+            # Regalo: solo el costo del inventario → gasto de cortesías.
+            if costo:
                 reconocimiento = _reemplaza_asiento(
-                    ref_rec, fecha_rec, f"Reconoce venta: {mov.descripcion}", lineas)
-        elif mov.tipo == Movimiento.Tipo.COMPRA:
-            # Compra → Inventario: DEBE Inventario · HABER Compras por facturar
+                    ref_rec, fecha_rec, f"Cortesía: {mov.descripcion}",
+                    [(CTA_CORTESIAS, costo, cero),
+                     (CTA_INVENTARIO, cero, costo)])
+            else:
+                Asiento.objects.filter(referencia=ref_rec, automatico=True).delete()
+        else:
+            # Ingreso: DEBE Ventas por facturar · HABER Ventas (total)
+            lineas = [(CTA_VENTAS_POR_FACTURAR, mov.monto, cero),
+                      (CTA_VENTAS, cero, mov.monto)]
+            # Costo de Ventas (FIFO): DEBE Costo de ventas · HABER Inventario
+            if costo:
+                lineas += [(CTA_COSTO_VENTAS, costo, cero),
+                           (CTA_INVENTARIO, cero, costo)]
             reconocimiento = _reemplaza_asiento(
-                ref_rec, fecha_rec, f"Compra a inventario: {mov.descripcion}",
-                [(CTA_INVENTARIO, mov.monto, cero),
-                 (CTA_COMPRAS_POR_FACTURAR, cero, mov.monto)])
-        else:  # GASTO → se reconoce como gasto del periodo
-            reconocimiento = _reemplaza_asiento(
-                ref_rec, fecha_rec, f"Reconoce gasto: {mov.descripcion}",
-                [(mov.cuenta.codigo, mov.monto, cero),
-                 (CTA_GASTOS_POR_COMPROBAR, cero, mov.monto)])
-    else:
-        Asiento.objects.filter(referencia=ref_rec, automatico=True).delete()
+                ref_rec, fecha_rec, f"Reconoce venta: {mov.descripcion}", lineas)
+    elif mov.tipo == Movimiento.Tipo.COMPRA:
+        # Compra → Inventario: DEBE Inventario · HABER Compras por facturar
+        reconocimiento = _reemplaza_asiento(
+            ref_rec, fecha_rec, f"Compra a inventario: {mov.descripcion}",
+            [(CTA_INVENTARIO, mov.monto, cero),
+             (CTA_COMPRAS_POR_FACTURAR, cero, mov.monto)])
+    else:  # GASTO → se reconoce como gasto del periodo
+        reconocimiento = _reemplaza_asiento(
+            ref_rec, fecha_rec, f"Reconoce gasto: {mov.descripcion}",
+            [(mov.cuenta.codigo, mov.monto, cero),
+             (CTA_GASTOS_POR_COMPROBAR, cero, mov.monto)])
 
     Movimiento.objects.filter(pk=mov.pk).update(
         asiento_flujo=flujo, asiento_reconocimiento=reconocimiento)
-
-
-def resincronizar_cogs():
-    """Recalcula el FIFO y regenera el reconocimiento de TODAS las ventas facturadas.
-
-    Necesario porque al facturar una compra/venta cambian las capas y, por lo
-    tanto, el Costo de Ventas de otras ventas.
-    """
-    cogs_map = fifo_cogs()
-    ventas = Movimiento.objects.filter(
-        tipo=Movimiento.Tipo.VENTA, facturado=True)
-    for mov in ventas:
-        sincronizar_movimiento(mov, cogs_map=cogs_map)
 
 
 @transaction.atomic
@@ -328,8 +256,8 @@ def sincronizar_compra(compra):
 def registrar_gasto(fecha, categoria, monto, descripcion=""):
     """Crea un movimiento de gasto operativo (sueldos, renta, marketing…).
 
-    Se registra en el libro con su categoría y cuenta de gasto; el asiento de
-    reconocimiento (que lo lleva al Estado de Resultados) se genera al facturar.
+    Se registra en el libro con su categoría y cuenta de gasto, y entra al
+    Estado de Resultados en el acto: un gasto pagado es un gasto del periodo.
     """
     cuenta = _cuenta_segura(_codigo_cuenta_gasto(categoria))
     mov = Movimiento.objects.create(
@@ -337,21 +265,6 @@ def registrar_gasto(fecha, categoria, monto, descripcion=""):
         descripcion=descripcion or categoria, monto=monto, cuenta=cuenta,
     )
     sincronizar_movimiento(mov)
-    return mov
-
-
-def marcar_facturado(mov: Movimiento, facturado: bool, fecha_factura=None):
-    """Cambia el estado de facturación y regenera el reconocimiento.
-
-    Como el FIFO depende de qué compras/ventas están facturadas, al cambiar el
-    estado se recalcula el Costo de Ventas de todas las ventas facturadas.
-    """
-    mov.facturado = facturado
-    if facturado:
-        mov.fecha_factura = fecha_factura or mov.fecha_factura or mov.fecha
-    mov.save(update_fields=["facturado", "fecha_factura"])
-    sincronizar_movimiento(mov)
-    resincronizar_cogs()
     return mov
 
 
@@ -416,12 +329,14 @@ def balanza_comprobacion(anio=None, mes=None):
 def estado_resultados(anio=None, mes=None):
     """Ingresos − Costo de Ventas = Utilidad bruta; − Gastos = Utilidad neta.
 
-    Solo considera movimientos reconocidos (facturados) EN el mes.
+    Solo considera lo reconocido EN el mes. Una venta cuyo costo aún no está
+    completo no aparece aquí: ni su ingreso ni su costo.
     """
     desde, hasta = _rango_mes(anio, mes)
     agg = _agg(desde=desde, hasta=hasta)
-    cuentas = {c.id: c for c in Cuenta.objects.all()}
-    ingresos, costo_ventas, gastos = [], [], []
+    cuentas = {c.id: c for c in Cuenta.objects.select_related("padre")}
+    ingresos, costo_ventas = [], []
+    saldos_gasto = {}                       # cuenta_id -> saldo, para agrupar
     tot_ing = tot_cv = tot_gas = Decimal("0")
     for cid, (d, h) in agg.items():
         c = cuentas[cid]
@@ -431,15 +346,65 @@ def estado_resultados(anio=None, mes=None):
         if c.tipo == Cuenta.Tipo.INGRESO:
             ingresos.append({"nombre": c.nombre, "monto": saldo}); tot_ing += saldo
         elif c.tipo == Cuenta.Tipo.GASTO:
-            if c.codigo == CTA_COSTO_VENTAS:
+            if _es_costo_de_ventas(c):
                 costo_ventas.append({"nombre": c.nombre, "monto": saldo}); tot_cv += saldo
             else:
-                gastos.append({"nombre": c.nombre, "monto": saldo}); tot_gas += saldo
+                saldos_gasto[cid] = saldo
+                tot_gas += saldo
+
+    gastos = _agrupa_gastos(saldos_gasto, cuentas)
+    ingresos.sort(key=lambda x: x["nombre"])
+    costo_ventas.sort(key=lambda x: x["nombre"])
     utilidad_bruta = tot_ing - tot_cv
     return {"ingresos": ingresos, "costo_ventas": costo_ventas, "gastos": gastos,
             "total_ingresos": tot_ing, "total_costo_ventas": tot_cv,
             "utilidad_bruta": utilidad_bruta,
             "total_gastos": tot_gas, "utilidad": utilidad_bruta - tot_gas}
+
+
+def _es_costo_de_ventas(cuenta):
+    """¿Es la 501 o cuelga de ella?
+
+    Generalizado a la descendencia para que agregar mañana una subcuenta de
+    Costo de ventas no la mande sin aviso al bloque de gastos operativos, que
+    la sacaría de la utilidad bruta.
+    """
+    actual = cuenta
+    while actual is not None:
+        if actual.codigo == CTA_COSTO_VENTAS:
+            return True
+        actual = actual.padre
+    return False
+
+
+def _agrupa_gastos(saldos, cuentas):
+    """Gastos anidados por cuenta padre, ordenados por código.
+
+    Una cuenta padre puede tener saldo PROPIO y además hijas: la 504 recibe
+    posteos directos vía `registrar_gasto` y encima agrupa a la 506. Por eso el
+    grupo lleva `propio` aparte de `subcuentas`, y el total es la suma de ambos.
+
+    El orden es explícito: antes se iteraba el agregado tal cual y las filas
+    salían en un orden que dependía del motor.
+    """
+    grupos = {}                              # cuenta_id del padre -> grupo
+    for cid, saldo in saldos.items():
+        c = cuentas[cid]
+        cabeza = c.padre if c.padre_id else c
+        g = grupos.setdefault(cabeza.id, {
+            "nombre": cabeza.nombre, "codigo": cabeza.codigo,
+            "propio": Decimal("0"), "subcuentas": [], "total": Decimal("0"),
+        })
+        if c.id == cabeza.id:
+            g["propio"] += saldo
+        else:
+            g["subcuentas"].append({"nombre": c.nombre, "codigo": c.codigo,
+                                    "monto": saldo})
+        g["total"] += saldo
+
+    for g in grupos.values():
+        g["subcuentas"].sort(key=lambda x: x["codigo"])
+    return sorted(grupos.values(), key=lambda g: g["codigo"])
 
 
 def _resultado_desde_agg(agg, cuentas):

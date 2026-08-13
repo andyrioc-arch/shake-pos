@@ -74,9 +74,21 @@ def resultados(ws, anio, mes, periodo):
         _money(ws, r, 2, it["monto"]); r += 1
     _total(ws, r, "Utilidad bruta", d["utilidad_bruta"], 2); r += 2
     _seccion(ws, r, "GASTOS OPERATIVOS", 2); r += 1
-    for it in d["gastos"]:
-        ws.cell(row=r, column=1, value=it["nombre"])
-        _money(ws, r, 2, it["monto"]); r += 1
+    # Anidado igual que la pantalla: el xlsx y el reporte tienen que decir lo
+    # mismo, o cada uno cuenta una historia distinta de la mercadotecnia.
+    for g in d["gastos"]:
+        if not g["subcuentas"]:
+            ws.cell(row=r, column=1, value=g["nombre"])
+            _money(ws, r, 2, g["total"]); r += 1
+            continue
+        if g["propio"]:
+            ws.cell(row=r, column=1, value=f"{g['nombre']} (directo)")
+            _money(ws, r, 2, g["propio"]); r += 1
+        for s in g["subcuentas"]:
+            ws.cell(row=r, column=1, value=f"    ↳ {s['nombre']}")
+            _money(ws, r, 2, s["monto"]); r += 1
+        ws.cell(row=r, column=1, value=f"Total {g['nombre'].lower()}")
+        _money(ws, r, 2, g["total"], negrita=True); r += 1
     _total(ws, r, "Total gastos operativos", d["total_gastos"], 2); r += 2
     _total(ws, r, "UTILIDAD NETA DEL PERIODO", d["utilidad"], 2)
     _anchos(ws, [34, 16])

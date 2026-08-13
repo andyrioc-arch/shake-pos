@@ -315,12 +315,13 @@ def buscar(request):
     """Busca un cliente por teléfono o código. Lo usa el formulario de venta."""
     cliente = servicios.buscar_cliente(request.GET.get("q"))
     if not cliente:
-        return JsonResponse({"encontrado": False})
+        return JsonResponse({"encontrado": False, "necesita_nombre": True})
     nivel = cliente.nivel
     return JsonResponse({
         "encontrado": True,
         "id": cliente.pk,
         "nombre": cliente.nombre or "",
+        "necesita_nombre": not cliente.nombre,
         "telefono": cliente.telefono_display,
         "puntos": cliente.puntos_saldo,
         "nivel": str(nivel) if nivel else "",

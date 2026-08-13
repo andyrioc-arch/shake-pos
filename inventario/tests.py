@@ -77,6 +77,31 @@ class InventarioStockTests(TestCase):
         )
         self.assertEqual(self.leche.total_comprado, Decimal("2000"))
 
+    def test_el_total_sale_del_monto_pagado(self):
+        compra = Compra.objects.create(
+            fecha=date(2025, 5, 1), ingrediente=self.leche,
+            cantidad=Decimal("1.5"), monto_total=Decimal("47.33"),
+        )
+        # Ni se recalcula ni se redondea: es lo que se pagó.
+        self.assertEqual(compra.total, Decimal("47.33"))
+
+    def test_una_compra_vieja_sin_monto_cae_al_unitario(self):
+        # Filas anteriores a la migración 0008: el unitario sigue mandando.
+        compra = Compra.objects.create(
+            fecha=date(2025, 5, 1), ingrediente=self.leche,
+            cantidad=2, costo_unitario=Decimal("30.00"),
+        )
+        self.assertIsNone(compra.monto_total)
+        self.assertEqual(compra.total, Decimal("60.00"))
+
+    def test_el_monto_pagado_le_gana_al_unitario(self):
+        compra = Compra.objects.create(
+            fecha=date(2025, 5, 1), ingrediente=self.leche,
+            cantidad=Decimal("3"), costo_unitario=Decimal("15.77"),
+            monto_total=Decimal("47.33"),      # 3 × 15.77 = 47.31, no 47.33
+        )
+        self.assertEqual(compra.total, Decimal("47.33"))
+
     def test_consumo_y_stock(self):
         Compra.objects.create(
             fecha=date(2025, 5, 1), ingrediente=self.leche,
@@ -134,6 +159,29 @@ class AdminViewTests(TestCase):
         RecetaIngrediente.objects.create(
             receta=self.rec, ingrediente=self.ing, cantidad=200
         )
+
+    def _comprar(self, cantidad, costo_total):
+        from django.urls import reverse
+        self.client.post(reverse("inventario_compra_agregar"), {
+            "ingrediente": self.ing.pk, "cantidad": cantidad,
+            "costo_total": costo_total, "fecha": date(2026, 8, 12).isoformat(),
+        })
+        return Compra.objects.latest("id")
+
+    def test_la_caja_guarda_el_monto_exacto_que_se_pago(self):
+        # Antes se dividía entre la cantidad y se redondeaba: 47.33 / 1.5 daba
+        # 31.55, y al multiplicar de vuelta salían 47.325. Dos centavos perdidos.
+        compra = self._comprar("1.5", "47.33")
+        self.assertEqual(compra.monto_total, Decimal("47.33"))
+        self.assertEqual(compra.total, Decimal("47.33"))
+
+    def test_una_compra_no_toca_el_costo_del_catalogo(self):
+        # El costo del catálogo es un estimado para calcular márgenes; el costo
+        # real de una venta sale de las compras por FIFO.
+        antes = self.ing.costo_unidad_compra
+        self._comprar("2", "500.00")
+        self.ing.refresh_from_db()
+        self.assertEqual(self.ing.costo_unidad_compra, antes)
 
     def test_admin_ingrediente_carga(self):
         resp = self.client.get("/admin/inventario/ingrediente/")
@@ -247,3 +295,86 @@ class SustitucionExtraTests(TestCase):
     def test_extra_costo_property(self):
         # 30ml * 0.08 = 2.40
         self.assertEqual(self.extra_esp.costo, Decimal("2.40"))
+
+
+class CicloCompletoCajaTests(TestCase):
+    """El recorrido de punta a punta, por HTTP, como lo hace Andy.
+
+    Es el escenario que se verificó a mano en el navegador: una venta sin
+    respaldo queda fuera del Estado de Resultados, y en el instante en que se
+    captura la compra que le faltaba —desde la caja, sin apretar nada más— se
+    reconoce sola y el reporte la muestra con su costo.
+    """
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        from contabilidad import posting
+        posting.crear_catalogo()
+        self.user = User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.force_login(self.user)
+        self.ing = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("99.00"))
+        self.rec = Receta.objects.create(
+            nombre="Shake", precio_venta=Decimal("90.00"))
+        RecetaIngrediente.objects.create(
+            receta=self.rec, ingrediente=self.ing, cantidad=200)
+
+    def _reportes(self, anio=2026, mes=8):
+        from django.urls import reverse
+        return self.client.get(
+            f"{reverse('reportes_contables')}?anio={anio}&mes={mes}")
+
+    def test_de_venta_diferida_a_reconocida_capturando_la_compra(self):
+        from contabilidad import posting
+        from contabilidad.models import Movimiento
+        from django.urls import reverse
+
+        venta = Venta.objects.create(
+            fecha=date(2026, 8, 6), receta=self.rec, cantidad=3)   # 600 ml
+
+        # 1. Sin compras: el dinero entró a caja, pero el reporte no la cuenta.
+        self.assertEqual(
+            posting.estado_resultados(2026, 8)["total_ingresos"], Decimal("0"))
+        resp = self._reportes()
+        self.assertContains(resp, "Falta costo")
+        self.assertNotContains(resp, "✓ Reconocido")
+
+        # 2. Se captura la compra desde la caja, fechada antes de la venta.
+        self.client.post(reverse("inventario_compra_agregar"), {
+            "ingrediente": self.ing.pk, "cantidad": "1.5",
+            "costo_total": "47.33", "fecha": date(2026, 8, 1).isoformat(),
+        })
+
+        # 3. La venta se costeó y se reconoció sola.
+        venta.refresh_from_db()
+        self.assertFalse(venta.costo_incompleto)
+        self.assertEqual(venta.costo_fifo, Decimal("18.93"))   # 600 × 47.33/1500
+        self.assertIsNotNone(
+            Movimiento.objects.get(venta=venta).asiento_reconocimiento)
+
+        er = posting.estado_resultados(2026, 8)
+        self.assertEqual(er["total_ingresos"], Decimal("270"))
+        self.assertEqual(er["total_costo_ventas"], Decimal("18.93"))
+        self.assertTrue(posting.balance_general(2026, 8)["cuadra"])
+        self.assertTrue(posting.balanza_comprobacion(2026, 8)["cuadra"])
+
+        # 4. Y el libro lo dice en pantalla.
+        resp = self._reportes()
+        self.assertContains(resp, "✓ Reconocido")
+        self.assertNotContains(resp, "Falta costo")
+
+    def test_una_compra_posterior_a_la_venta_no_la_cuesta(self):
+        """FIFO respeta la fecha: no se surte un shake con hielo del año que viene."""
+        from django.urls import reverse
+        venta = Venta.objects.create(
+            fecha=date(2026, 8, 6), receta=self.rec, cantidad=3)
+
+        self.client.post(reverse("inventario_compra_agregar"), {
+            "ingrediente": self.ing.pk, "cantidad": "1.5",
+            "costo_total": "47.33", "fecha": date(2026, 8, 20).isoformat(),
+        })
+
+        venta.refresh_from_db()
+        self.assertTrue(venta.costo_incompleto)
+        self.assertContains(self._reportes(), "Falta costo")

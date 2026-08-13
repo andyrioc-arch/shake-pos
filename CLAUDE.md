@@ -1,23 +1,35 @@
 # shake-pos — contexto del proyecto
 
 Sistema POS para SHAKE: inventario, finanzas, contabilidad de partida doble,
-presupuesto y programa de lealtad. Django 6, 5 apps, 174 tests. El README
-explica qué hace cada módulo; este archivo cubre el despliegue y la operación.
+presupuesto y programa de lealtad. Django 6, 5 apps. El README explica qué hace
+cada módulo; este archivo cubre el despliegue y la operación.
 
 ## Estado
 
 En producción desde el 6 de agosto de 2026: **https://shake-pos.vercel.app**
 
-Todo el trabajo de despliegue vive en la rama **`deploy/vercel`**, que ya está
-en GitHub. `main` se mergeó a esta rama el 8 de agosto de 2026, así que aquí
-vive también el trabajo de lealtad (código único de cliente, devoluciones de
-canje); lo contrario no es cierto: `main` no tiene nada del despliegue.
+`main` es la rama oficial y de publicación desde el 12 de agosto de 2026, cuando
+se puso al día con `deploy/vercel` mediante un avance directo. `deploy/vercel`
+quedó archivada y no se vuelve a tocar. La migración `lealtad.0002` ya está
+aplicada en producción.
 
 | Pieza | Dónde |
 |---|---|
 | App | Vercel, proyecto `shake-pos` (cuenta personal de Rubén, plan Hobby) |
 | Base | Supabase, proyecto `shake-pos`, ref `xrimahsxtkfdhenigito`, Postgres 17, us-east-1 |
 | Repo | `github.com/andyrioc-arch/shake-pos` |
+
+**Los datos transaccionales de producción son de PRUEBA** (10 compras, 8 ventas,
+2 clientes, 1 canje). Lo único real es el catálogo —19 recetas, 30
+ingredientes— y los 3 costos fijos. Ningún número histórico es un contrato que
+haya que preservar.
+
+## Dónde va el trabajo en curso
+
+Rama **`reglas-negocio-andy`**, sin empujar ni desplegar. Implementa las reglas
+de negocio que pidió Andy. El plan completo está en
+[DISENO-COSTEO.md](DISENO-COSTEO.md) y la foto previa en
+[BASELINE-COSTEO.md](BASELINE-COSTEO.md).
 
 ## Reglas de este proyecto
 
@@ -78,30 +90,106 @@ puede devolver a `*/10 * * * *`, que es lo que el módulo de lealtad espera.
 vercel deploy --prod --yes
 ```
 
-Antes: `python manage.py test` (deben pasar 174). Las migraciones no corren en
+Antes: `python manage.py test` (deben pasar todos). Las migraciones no corren en
 el despliegue; se aplican aparte con la cadena del session pooler (5432):
 
 ```
 DATABASE_URL='<session pooler :5432>' python manage.py migrate
 ```
 
-**Pendiente de aplicar: `lealtad.0002`.** Agrega la columna única `codigo` a
-`Cliente` y le asigna uno a cada cliente existente. Hasta que corra, cualquier
-vista que toque `Cliente` truena en producción con «column does not exist».
+**El orden depende de la migración, no hay una regla única.**
+
+- *Agrega* algo que el código nuevo necesita (una columna, una cuenta):
+  **migrar primero, desplegar después.** Toda columna nueva debe nacer
+  aceptando nulos o con `db_default`, porque Django suelta el DEFAULT justo
+  después del `ADD COLUMN` y en esa ventana el código viejo escribe sin ella.
+- *Quita* algo que el código viejo todavía usa: **desplegar primero, migrar
+  después.** Al revés, el código viejo sigue escribiendo en lo que se acaba de
+  borrar y `_cuenta_segura()` lo recrea sin avisar, dejando una cuenta huérfana
+  fuera del catálogo. Es el caso de `contabilidad.0007`, que borra las cuentas
+  de IVA.
+- *No toca datos*: el orden da igual. Es el caso de `contabilidad.0008`, que
+  solo congela la columna `facturado` como reliquia. Aun así conviene correrla
+  con el despliegue para que el modelo y la base no queden desfasados.
 
 No hay despliegue automático: Vercel no pudo conectar el repo por ser de otra
 cuenta. Cada publicación es manual.
 
+## Cómo funciona el costeo (lo más delicado del sistema)
+
+Desde el 12 de agosto de 2026, el costo de una venta es un **dato guardado**, no
+un cálculo que se rehace al vuelo.
+
+- Cada compra es una **capa**: `Compra.cantidad_receta` es cuánto trajo,
+  congelado al comprarla, y `Compra.saldo_receta` cuánto le queda. El precio de
+  la capa no se guarda, se deriva (`costo_unitario_capa` = total ÷ cantidad
+  congelada), así que corregir la presentación de un ingrediente mañana no
+  cambia lo que costó esta compra.
+- Cada venta guarda su costo real (`Venta.costo_fifo`). `NULL` significa «sin
+  costear»; nunca cero por defecto.
+- `ConsumoCapa` registra qué capa surtió a qué venta. Es lo que permite
+  **deshacer** el costeo, y sin eso no se puede recostear ni borrar nada bien.
+- Todo vive en `inventario/costeo.py`; `inventario/signals.py` lo mantiene al
+  día pase lo que pase con ventas y compras.
+
+Tres reglas que sostienen el módulo. Romper cualquiera reintroduce un bug que ya
+costó encontrar:
+
+1. **No se inventa costo.** Si faltan capas, esa parte no se cuesta y la venta
+   queda `costo_incompleto=True`. Costearla con el precio del catálogo abona
+   inventario que nunca entró y deja el activo en negativo, con el balance
+   diciendo «cuadra» igual.
+2. **Ingreso y costo entran juntos o no entran.** Una venta sin costo completo
+   no genera asiento de reconocimiento. Reconocer el ingreso con costo parcial
+   infla la utilidad bruta en silencio.
+3. **Se redondea UNA sola vez**, al escribir `costo_fifo`. Redondear cada capa
+   deja un centavo atorado en Inventario por venta, y se acumula.
+
+Al borrar o editar una venta se devuelve el inventario **y se recuestan las
+ventas posteriores**: con FIFO, liberar una capa vieja cambia el costo de todo
+lo que vino después.
+
+Desde P5 **no hay botón «Facturado»**: compras y gastos se reconocen al
+capturarse, y una venta se reconoce cuando su costo está completo. Los paneles
+comerciales leen `Venta.costo_de_ventas`, que cae al estimado del catálogo si el
+costo falta **o está incompleto**; la contabilidad no la usa nunca, solo
+`costo_fifo`. `Movimiento.facturado` quedó como columna muerta: nadie la lee,
+y se queda congelada hasta que P11 la borre para que revertir el despliegue
+devuelva el reporte que estaba publicado.
+
+```
+python manage.py recostear --todo          # rehace el costeo completo
+python manage.py recostear --verificar     # no cambia nada, solo audita
+python manage.py recostear --solo-pendientes
+```
+
+`--verificar` comprueba tres igualdades: que cada venta valga lo que suman sus
+capas, que ninguna capa deba más de lo que trajo, y que ninguna venta reconocida
+esté sin costo completo. **Correrlo después de cada despliegue que toque
+costeo.**
+
 ## Pendiente
 
-- Rama sin empujar, sin PR.
-- Sin despliegue automático (punto único de falla).
-- Datos de ejemplo en los 5 módulos; faltan los reales.
-- El premio "Latte gratis" no tiene receta ligada, así que no calcula margen.
-- **44 hallazgos de una auditoría** sin atender: solo se arregló lo que
-  bloqueaba el despliegue. Los relevantes son bugs que aparecen con volumen —un
-  `select_for_update` que falla en Postgres por un join nullable, posible
-  deadlock por orden de bloqueo invertido entre `canjear()` y
-  `expirar_puntos()`, desbordamiento de `CharField` al truncar descripciones, y
-  consultas N+1 en los paneles que eran gratis en SQLite y ahora pagan latencia
-  de red. Son cambios en la lógica de negocio: consultarlos con Andy.
+- Rama `reglas-negocio-andy` sin empujar, sin PR, sin desplegar.
+- Sin despliegue automático (punto único de falla): Vercel no pudo conectar el
+  repo por ser de otra cuenta.
+- **Faltan capturar las compras reales de diez insumos.** Sin ellas el costo de
+  ventas queda incompleto por más que el código esté bien. Lo hace Andy con los
+  tickets físicos. La lista está en BASELINE-COSTEO.md. **Con P5 esto pasó de
+  molestia a bloqueo del reporte**: una venta sin costo completo no reconoce
+  ingreso, así que la 401 seguirá en cero hasta que esas compras existan.
+- El premio "Latte gratis" no tiene receta ligada. Lo hace Andy.
+- Quedan **P7, P9, P10 y P11** del plan de costeo, más lo que Andy ve y aún no
+  existe: enlace del libro a la nota, alarma de margen, gráfica de productos,
+  PDF de la nota, aviso de premio y cambio de nivel en la nota, y costo
+  consolidado por producto. P8 se cayó del plan; el desglose de cuentas lo
+  cerró P6.
+- Tres asuntos menores anotados en la revisión de P3 y no atendidos: editar una
+  compra ya consumida no reajusta su capa, el recosteo masivo corre dentro del
+  request, y hay un residuo de un centavo cuando muchas ventas cruzan las mismas
+  capas.
+- **44 hallazgos de una auditoría** previa sin atender. De ellos, el
+  desbordamiento de `CharField` ya se cerró para `Cliente.nombre` y
+  `Cliente.notas`; siguen abiertos el `select_for_update` con join nullable, el
+  posible deadlock entre `canjear()` y `expirar_puntos()`, y las consultas N+1
+  de los paneles.

@@ -86,7 +86,7 @@
   .costo-unit strong { color:#1e9aff; }
   .cortesia-box { border:2px dashed #8700ff; border-radius:8px; padding:10px 12px; margin:10px 0; background:#f3ecff; }
   .cortesia-check { font-weight:800; font-size:13px; cursor:pointer; display:flex; align-items:center; gap:6px; }
-  #cortesia-motivo-box { margin-top:8px; }
+  #cortesia-motivo-box, #lealtad-nombre-box { margin-top:8px; }
   .lealtad-box { border:2px dashed #fa5598; border-radius:8px; padding:10px 12px;
         margin:10px 0; background:#fff0f6; }
   .lealtad-box label { font-weight:800; font-size:13px; display:block; margin-bottom:5px; }
@@ -190,6 +190,12 @@
                    inputmode="numeric" placeholder="55 1234 5678 o su código"
                    autocomplete="off">
             <div id="lealtad-info" class="lealtad-info"></div>
+            <div id="lealtad-nombre-box" style="display:none;">
+              <label>Nombre del cliente</label>
+              <input type="text" name="nombre_lealtad" id="lealtad-nombre"
+                     placeholder="¿Cómo se llama?" autocomplete="off"
+                     maxlength="80">
+            </div>
           </div>
 
           <!-- Cortesía (activación / regalo) -->
@@ -543,19 +549,36 @@
   (function () {
     const tel = document.getElementById("lealtad-tel");
     const info = document.getElementById("lealtad-info");
-    if (!tel || !info) return;
+    const nombreBox = document.getElementById("lealtad-nombre-box");
+    const nombre = document.getElementById("lealtad-nombre");
+    if (!tel || !info || !nombreBox) return;
     let timer = null;
+    let consulta = 0;
 
-    function limpiar() { info.textContent = ""; info.className = "lealtad-info"; }
+    function pedirNombre(haceFalta) {
+      nombreBox.style.display = haceFalta ? "" : "none";
+      if (!haceFalta) { nombre.value = ""; }
+    }
+
+    function limpiar() {
+      info.textContent = "";
+      info.className = "lealtad-info";
+      pedirNombre(false);
+    }
 
     function consultar() {
       const q = tel.value.trim();
-      if (q.replace(/\D/g, "").length < 6) { limpiar(); return; }
+      if (q.replace(/\D/g, "").length < 6) { consulta++; limpiar(); return; }
+      // Una respuesta rezagada no debe pisar a una más nueva: escondería la
+      // caja del nombre o borraría lo que el cajero ya tecleó.
+      const mia = ++consulta;
       fetch("{% url 'lealtad_buscar' %}?q=" + encodeURIComponent(q))
         .then(function (r) { return r.json(); })
         .then(function (d) {
+          if (mia !== consulta) { return; }
+          pedirNombre(d.necesita_nombre);
           if (!d.encontrado) {
-            info.textContent = "Cliente nuevo: se registra solo al guardar la venta.";
+            info.textContent = "Cliente nuevo: se registra al guardar la venta.";
             info.className = "lealtad-info nuevo";
             return;
           }
@@ -565,7 +588,7 @@
           info.textContent = texto;
           info.className = "lealtad-info ok";
         })
-        .catch(limpiar);
+        .catch(function () { if (mia === consulta) { limpiar(); } });
     }
 
     tel.addEventListener("input", function () {

@@ -104,10 +104,10 @@ partida doble y genera asientos automáticamente.
 
 ### Qué incluye
 
-- **Catálogo de cuentas** — plan contable básico pre-cargado (Caja, IVA,
-  Ventas, gastos por tipo, Capital). Editable.
-- **Facturas de venta** — registras subtotal y si aplica IVA 16%; el total
-  y el asiento contable se generan solos.
+- **Catálogo de cuentas** — plan contable básico pre-cargado (Caja, Ventas,
+  Inventario, gastos por tipo, Capital). Editable.
+- **Facturas de venta** — registras el importe y el asiento contable se genera
+  solo.
 - **Facturas de gasto** — igual, clasificadas por tipo (insumos, renta,
   servicios, mercadotecnia, sueldos, otros).
 - **Asientos contables (pólizas)** — cada uno con sus movimientos debe/haber,
@@ -118,15 +118,17 @@ partida doble y genera asientos automáticamente.
 
 ### Asientos automáticos (cómo funcionan)
 
-Venta de contado con IVA:
+Venta de contado:
     DEBE  Caja y bancos     (total)
-    HABER Ventas            (subtotal)
-    HABER IVA por pagar     (iva)
+    HABER Ventas            (total)
 
-Gasto de contado con IVA:
-    DEBE  Cuenta de gasto   (subtotal)
-    DEBE  IVA acreditable   (iva)
+Gasto de contado:
+    DEBE  Cuenta de gasto   (total)
     HABER Caja y bancos     (total)
+
+> **El IVA no se contabiliza.** Los importes se registran completos, tal como
+> entran y salen de caja. El único lugar donde se desglosa es la nota que se le
+> entrega al cliente.
 
 ### Cómo verlo
 
@@ -140,7 +142,7 @@ Y para cargar el catálogo + facturas de ejemplo:
 
 > Nota fiscal: bajo RESICO el SAT calcula tus impuestos con base en tu
 > facturación (CFDI), no en esta contabilidad. Este módulo es una herramienta
-> de gestión para entender tu negocio (patrimonio, utilidad real, IVA), no un
+> de gestión para entender tu negocio (patrimonio, utilidad real), no un
 > sustituto de tus obligaciones ante el SAT ni de tu contador.
 
 ---
