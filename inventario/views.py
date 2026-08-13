@@ -9,6 +9,7 @@ from django.contrib.admin.models import ADDITION, CHANGE, DELETION, LogEntry
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.db import transaction
 from django.db.models import ProtectedError, Q, Sum
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
@@ -352,18 +353,7 @@ def _qr_svg(url):
 def nota_ver(request, token):
     """Comprobante público de una venta (para el cliente: enlace / QR)."""
     nota = get_object_or_404(Nota, token=token)
-    lineas = []
-    for v in nota.lineas.select_related("receta").prefetch_related(
-            "extras__extra", "sustituciones__ingrediente_original",
-            "sustituciones__ingrediente_nuevo"):
-        lineas.append({
-            "nombre": f"{v.receta.emoji} {v.receta.nombre}".strip(),
-            "cantidad": v.cantidad,
-            "importe": v.ingreso,
-            "extras": [f"{e.cantidad}× {e.extra.nombre}" for e in v.extras.all()],
-            "subs": [f"{s.ingrediente_original} → {s.ingrediente_nuevo}"
-                     for s in v.sustituciones.all()],
-        })
+    lineas = _lineas_de_la_nota(nota)
     url = request.build_absolute_uri(nota.get_absolute_url())
     ctx = {
         "nota": nota,
@@ -374,6 +364,56 @@ def nota_ver(request, token):
         "lealtad": _lealtad_de_la_nota(nota, request),
     }
     return render(request, "inventario/nota.html", ctx)
+
+
+def _lineas_de_la_nota(nota):
+    """Las líneas del comprobante. Las leen la pantalla y el PDF por igual."""
+    return [{
+        "nombre": f"{v.receta.emoji} {v.receta.nombre}".strip(),
+        "cantidad": v.cantidad,
+        "importe": v.ingreso,
+        "extras": [f"{e.cantidad}× {e.extra.nombre}" for e in v.extras.all()],
+        "subs": [f"{s.ingrediente_original} → {s.ingrediente_nuevo}"
+                 for s in v.sustituciones.all()],
+    } for v in nota.lineas.select_related("receta").prefetch_related(
+        "extras__extra", "sustituciones__ingrediente_original",
+        "sustituciones__ingrediente_nuevo")]
+
+
+def nota_pdf(request, token):
+    """La misma nota, en PDF, para guardarla o mandarla.
+
+    Pública como la nota: quien tiene el token ya puede verla en pantalla, y
+    pedir sesión aquí solo impediría que el cliente se lleve su comprobante.
+    """
+    from .pdf import nota_pdf as construir_pdf
+
+    nota = get_object_or_404(Nota, token=token)
+    url = request.build_absolute_uri(nota.get_absolute_url())
+    lealtad = _lealtad_de_la_nota(nota, request)
+    datos = None
+    if lealtad:
+        hitos = []
+        if lealtad["nivel_alcanzado"]:
+            hitos.append(f"Subiste a {lealtad['nivel_alcanzado'].nombre}")
+        if lealtad["premio_listo"]:
+            hitos.append(f"Ya puedes canjear {lealtad['premio_listo'].nombre}")
+        if lealtad["falta"]:
+            hitos.append(f"Te faltan {lealtad['falta']} puntos "
+                         f"para {lealtad['premio'].nombre}")
+        datos = {
+            "titulo": (f"{lealtad['cliente'].nombre_corto}, ganaste "
+                       f"{lealtad['compra'].puntos_ganados} puntos"),
+            "saldo": f"{lealtad['cliente'].puntos_saldo} puntos disponibles",
+            "hitos": hitos,
+        }
+
+    pdf = construir_pdf(nota, _lineas_de_la_nota(nota), url, datos)
+    resp = HttpResponse(pdf, content_type="application/pdf")
+    # `inline`: al escanear el QR desde el celular se abre en pantalla en vez
+    # de caer a la carpeta de descargas sin que nadie lo vea.
+    resp["Content-Disposition"] = f'inline; filename="nota-{nota.folio}.pdf"'
+    return resp
 
 
 def _lealtad_de_la_nota(nota, request):

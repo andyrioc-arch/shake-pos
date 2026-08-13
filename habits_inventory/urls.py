@@ -24,6 +24,7 @@ urlpatterns = [
     path("inventario/", panel_inventario, name="panel_inventario"),
     path("inventario/venta/agregar/", inventario_views.venta_agregar, name="inventario_venta_agregar"),
     path("n/<uuid:token>/", inventario_views.nota_ver, name="nota_ver"),
+    path("n/<uuid:token>/pdf/", inventario_views.nota_pdf, name="nota_pdf"),
     path("inventario/compra/agregar/", inventario_views.compra_agregar, name="inventario_compra_agregar"),
     path("actividad/", panel_actividad, name="panel_actividad"),
 

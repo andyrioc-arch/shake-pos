@@ -1,6 +1,7 @@
 Django>=5.0,<7
 django-reversion>=5.0
 qrcode>=7.4
+reportlab>=4.0          # la nota en PDF; dibuja el ticket, no convierte HTML
 openpyxl>=3.1
 whitenoise>=6.0
 # Solo para firmar los pases de Google Wallet (opcional).

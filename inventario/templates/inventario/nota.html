@@ -34,6 +34,7 @@
            padding:11px; font-weight:800; font-size:13px; box-shadow:3px 3px 0 #000; color:#000; cursor:pointer; }
     .btn.wa { background:#25D366; color:#fff; }
     .btn.print { background:var(--yellow); }
+    .btn.pdf { background:#fff; }
     .btn.new { background:var(--blue); color:#fff; }
     .foot { text-align:center; font-size:11px; color:#999; padding:12px; }
     .lealtad { background:#fff0f6; border-top:2px dashed #bbb; padding:16px 18px;
@@ -138,6 +139,7 @@
     <div class="acts">
       <a class="btn wa" href="https://wa.me/?text={{ url|urlencode }}" target="_blank" rel="noopener">Enviar por WhatsApp</a>
       <a class="btn print" href="#" onclick="window.print();return false;">Imprimir</a>
+      <a class="btn pdf" href="{% url 'nota_pdf' nota.token %}">Guardar PDF</a>
       {% if es_staff %}<a class="btn new" href="/inventario/">Nueva venta</a>{% endif %}
     </div>
 

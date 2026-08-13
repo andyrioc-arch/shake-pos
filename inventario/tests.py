@@ -3,8 +3,8 @@ from datetime import date
 from django.test import TestCase
 from inventario.alarmas import alarmas_margen
 from inventario.models import (
-    ConfiguracionAlarmas, Ingrediente, Receta, RecetaIngrediente, Compra, Venta,
-    Extra, VentaSustitucion, VentaExtra,
+    ConfiguracionAlarmas, Ingrediente, Nota, Receta, RecetaIngrediente, Compra,
+    Venta, Extra, VentaSustitucion, VentaExtra,
 )
 
 
@@ -449,6 +449,66 @@ class CortesiasEnLosAgregadosTests(TestCase):
         limpia = Receta.objects.create(
             nombre="Otro", precio_venta=Decimal("90.00"))
         self.assertEqual(RecetaAdmin(Receta, None).vendidos_col(limpia), 0)
+
+
+class NotaPdfTests(TestCase):
+    """La nota en PDF: pública como la nota, y sin depender de la de pantalla."""
+
+    def setUp(self):
+        self.ing = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("30.00"))
+        self.rec = Receta.objects.create(
+            nombre="Shake", emoji="🍫", precio_venta=Decimal("100.00"))
+        RecetaIngrediente.objects.create(
+            receta=self.rec, ingrediente=self.ing, cantidad=200)
+        self.nota = Nota.objects.create(
+            fecha=date(2026, 8, 5), total=Decimal("200.00"),
+            pago_con=Decimal("500.00"), cambio=Decimal("300.00"))
+        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec,
+                             cantidad=2, nota=self.nota)
+
+    def _pdf(self):
+        from django.urls import reverse
+        return self.client.get(reverse("nota_pdf", args=[self.nota.token]))
+
+    def test_devuelve_un_pdf_de_verdad(self):
+        resp = self._pdf()
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Content-Type"], "application/pdf")
+        self.assertTrue(resp.content.startswith(b"%PDF-"))
+        self.assertIn(self.nota.folio, resp["Content-Disposition"])
+
+    def test_no_pide_sesion(self):
+        """Quien tiene el token ya puede ver la nota; pedir contraseña aquí
+        solo impediría que el cliente se lleve su comprobante."""
+        self.client.logout()
+        self.assertEqual(self._pdf().status_code, 200)
+
+    def test_una_nota_que_no_existe_da_404(self):
+        import uuid
+        from django.urls import reverse
+        resp = self.client.get(reverse("nota_pdf", args=[uuid.uuid4()]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_el_emoji_del_producto_no_rompe_el_dibujo(self):
+        """Las fuentes base del PDF no tienen emoji: se quitan en vez de
+        salir como cuadros negros."""
+        from inventario.pdf import _limpio
+        self.assertEqual(_limpio("🍫 Afterparty Shake"), "Afterparty Shake")
+        self.assertTrue(self._pdf().content.startswith(b"%PDF-"))
+
+    def test_los_simbolos_con_significado_se_traducen_en_vez_de_perderse(self):
+        """Una sustitución sin su flecha queda como «Plátano  Fresa», que ya
+        no dice cuál entró y cuál salió."""
+        from inventario.pdf import _limpio
+        self.assertEqual(_limpio("Plátano → Fresa"), "Plátano -> Fresa")
+        self.assertEqual(_limpio("2× Creatina"), "2x Creatina")
+
+    def test_la_nota_de_pantalla_ofrece_el_pdf(self):
+        resp = self.client.get(self.nota.get_absolute_url())
+        self.assertContains(resp, "Guardar PDF")
 
 
 class CostoUltimaCompraTests(TestCase):
