@@ -214,21 +214,6 @@ class Movimiento(models.Model):
     )
     # Para gastos operativos: categoría (clave de CategoriaGasto).
     categoria = models.CharField(max_length=30, blank=True)
-    # Reliquias del botón «Facturado», que ya no existe: el reconocimiento es
-    # automático y NADIE lee estas dos columnas. Se quedan congeladas, con el
-    # valor que les dejó el código viejo, hasta que P11 las borre: así revertir
-    # el despliegue devuelve el Estado de Resultados que estaba publicado.
-    # `editable=False` las saca del admin para que nadie las capture creyendo
-    # que todavía mueven el reconocimiento de mes.
-    # `null=True` es el primer paso de P11, y solo eso: la columna es NOT NULL
-    # sin default en la base, así que borrarla de un golpe tumba la caja en
-    # cualquiera de los dos órdenes de despliegue. Nullable primero abre la
-    # ventana donde el código viejo la sigue llenando y el nuevo puede
-    # omitirla; la tanda 2 la borra, ya con el código nuevo arriba.
-    facturado = models.BooleanField("Facturado", default=False, editable=False,
-                                    null=True)
-    fecha_factura = models.DateField("Fecha de factura", null=True, blank=True,
-                                     editable=False)
 
     venta = models.ForeignKey(
         "inventario.Venta", on_delete=models.CASCADE,
@@ -253,8 +238,6 @@ class Movimiento(models.Model):
         ordering = ["-fecha", "-id"]
         indexes = [
             models.Index(fields=["fecha"]),
-            # Sin `facturado`: ninguna consulta lo filtra ya, y mantenerlo en
-            # el índice cuesta escritura en cada alta a cambio de nada.
             models.Index(fields=["tipo"]),
         ]
 
