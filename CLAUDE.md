@@ -14,7 +14,7 @@ quedó archivada y no se vuelve a tocar.
 
 **El 13 de agosto de 2026 se publicó el rediseño del costeo** (PR #1: P-IVA y
 P0–P6). Producción corre `main` y tiene aplicadas todas las migraciones hasta
-`contabilidad.0009` e `inventario.0009`.
+`contabilidad.0011`, `inventario.0012` y `lealtad.0003`.
 
 **La alarma de margen se publicó el 13 de agosto** (PR #2, `inventario.0010`).
 
@@ -57,8 +57,9 @@ faltan, no tocando código.
 El plan completo está en [DISENO-COSTEO.md](DISENO-COSTEO.md) y la foto previa
 en [BASELINE-COSTEO.md](BASELINE-COSTEO.md).
 
-**De aquí en adelante, un paso por rama.** El bloque P0–P6 fue grande porque el
-diseño no lo dejaba partir; P7, P9, P10 y P11 son independientes y van sueltos.
+**Un paso por rama.** El bloque P0–P6 fue grande porque el diseño no lo dejaba
+partir; el resto fue suelto, y P11 llegó a necesitar **dos ramas para un solo
+paso** —ver la regla de abajo sobre cuándo ningún orden de despliegue funciona—.
 
 ## Reglas de este proyecto
 
@@ -159,8 +160,8 @@ DATABASE_URL='<session pooler :5432>' python manage.py migrate
   borrar y `_cuenta_segura()` lo recrea sin avisar, dejando una cuenta huérfana
   fuera del catálogo. Es el caso de `contabilidad.0007`, que borra las cuentas
   de IVA.
-- *No toca datos*: el orden da igual. Es el caso de `contabilidad.0008`, que
-  solo congela la columna `facturado` como reliquia. Aun así conviene correrla
+- *No toca datos*: el orden da igual. Fue el caso de `contabilidad.0008`, que
+  congelaba la columna `facturado` como reliquia (P11 ya la borró). Aun así conviene correrla
   con el despliegue para que el modelo y la base no queden desfasados.
 
 **Cuando ningún orden funciona, hay que partir el cambio.** P11 borraba
@@ -246,7 +247,7 @@ capas, que ninguna capa deba más de lo que trajo, y que ninguna venta reconocid
 esté sin costo completo. **Correrlo después de cada despliegue que toque
 costeo.**
 
-## Alarma de margen (en rama, sin publicar)
+## Alarma de margen
 
 Avisa cuando el margen de un producto **baja**. Solo la caída: mezclar las dos
 direcciones convierte el aviso en ruido que se aprende a ignorar.
@@ -270,6 +271,8 @@ de la misma puerta que las columnas de costo (solo superusuario).
 **Limitación conocida, decidida a propósito:** compara un mes en curso —que
 puede llevar una sola venta— contra un mes completo, así que a principios de
 mes una venta atípica enciende el aviso igual que una subida real de insumos.
+Con las 8 ventas de prueba, todas de agosto, el bloque sale vacío hasta que
+haya dos meses con historia.
 La columna de unidades (`40 → 1`) es la pista. Con el volumen de hoy cualquier
 piso de unidades dejaría la alarma muda; se revisa cuando haya un mes con
 ventas de verdad.
