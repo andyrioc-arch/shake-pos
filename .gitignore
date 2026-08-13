@@ -7,3 +7,9 @@ staticfiles/
 .vercel
 .env*
 deploy/*.log
+
+# Respaldos de datos de producción: traen teléfonos de clientes y hashes
+# de contraseñas. Nunca deben llegar al repo.
+respaldo-prod-*.json
+*.dump
+*.sql
