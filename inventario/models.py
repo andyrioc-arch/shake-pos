@@ -298,11 +298,6 @@ class Compra(models.Model):
         max_digits=12, decimal_places=2,
         validators=[MinValueValidator(Decimal("0"))],
     )
-    # Los tres dejan de admitir nulos en P11. El código que ya está en
-    # producción los llena siempre —la caja captura el monto desde P1 y
-    # `save()` escribe los otros dos en cada alta—, así que el NOT NULL no
-    # rompe nada y cierra un hueco: un `saldo_receta` nulo era una capa que
-    # el FIFO no veía, y se gastaba sin gastarse.
     monto_total = models.DecimalField(
         "Monto total pagado ($)", max_digits=12, decimal_places=2,
         validators=[MinValueValidator(Decimal("0"))],
@@ -319,12 +314,6 @@ class Compra(models.Model):
         editable=False,
         help_text="Unidades de receta que le quedan sin consumir a esta compra. "
                   "Lo lleva el costeo FIFO.",
-    )
-    costo_unitario = models.DecimalField(
-        "Costo unitario ($)", max_digits=12, decimal_places=2,
-        null=True, blank=True,
-        validators=[MinValueValidator(Decimal("0"))],
-        help_text="Derivado del monto total. Se conserva por compatibilidad.",
     )
     proveedor = models.CharField(max_length=120, blank=True)
     notas = models.CharField(max_length=200, blank=True)
@@ -366,15 +355,22 @@ class Compra(models.Model):
 
     @property
     def total(self):
-        """Lo que se pagó por la compra.
+        """Lo que se pagó por la compra. Es el dato, no un cálculo."""
+        return self.monto_total
 
-        La fuente de verdad es `monto_total`. Se cae a `cantidad × unitario`
-        solo para filas viejas que aún no tengan el monto: la división para
-        derivar el unitario pierde centavos, la multiplicación no los recupera.
+    @property
+    def costo_unitario(self):
+        """Cuánto salió cada unidad de compra. SOLO para mostrar.
+
+        Nunca para reconstruir el total: la división pierde centavos y la
+        multiplicación no los recupera. Por eso no se cuantiza —quien lo
+        imprima decide con cuántos decimales— y por eso `total` no la usa.
+        Era una columna hasta P11; se derivaba de `monto_total` y se guardaba
+        al lado, que es una copia esperando desfasarse.
         """
-        if self.monto_total is not None:
-            return self.monto_total
-        return self.cantidad * (self.costo_unitario or Decimal("0"))
+        if self.cantidad:
+            return self.monto_total / self.cantidad
+        return Decimal("0")
 
 
 class Nota(models.Model):

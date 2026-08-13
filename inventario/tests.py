@@ -86,6 +86,23 @@ class InventarioStockTests(TestCase):
         # Ni se recalcula ni se redondea: es lo que se pagó.
         self.assertEqual(compra.total, Decimal("47.33"))
 
+    def test_el_unitario_se_deriva_y_no_reconstruye_el_total(self):
+        """Desde P11 el unitario es una propiedad, no una columna.
+
+        Es para mostrar. Reconstruir el total multiplicándolo de vuelta da
+        47.325 en vez de 47.33: la división pierde centavos y la
+        multiplicación no los recupera. Ese era el bug que cerró P1, y
+        guardar el derivado al lado del dato es como vuelve a entrar.
+        """
+        compra = Compra.objects.create(
+            fecha=date(2025, 5, 1), ingrediente=self.leche,
+            cantidad=Decimal("1.5"), monto_total=Decimal("47.33"),
+        )
+
+        self.assertEqual(compra.total, Decimal("47.33"))
+        self.assertNotEqual(compra.cantidad * compra.costo_unitario.quantize(
+            Decimal("0.01")), compra.total)
+
     def test_una_compra_sin_monto_ya_no_se_puede_guardar(self):
         """El hueco dejó de existir: la base lo rechaza."""
         from django.db import IntegrityError, transaction
