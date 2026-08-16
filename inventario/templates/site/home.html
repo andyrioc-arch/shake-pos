@@ -21,6 +21,7 @@
   .dash a.act { --accent:var(--blue); }
   .dash a.cat { --accent:var(--pink); }
   .dash a.lea { --accent:var(--pink); }
+  .dash a.ped { --accent:var(--blue); }
   .gestionar { margin:22px 0 0; }
   .gestionar a { color:#999; font-size:13px; text-decoration:none; }
   .gestionar a:hover { color:#000; text-decoration:underline; }
@@ -47,6 +48,18 @@
     <div class="ico">📦</div>
     <div class="ttl">Inventario</div>
     <div class="desc">Stock, faltantes, recetas y resumen de ventas.</div>
+    <div class="bar"></div>
+  </a>
+  <a class="card ped" href="/pedidos/">
+    <div class="ico">🧾</div>
+    <div class="ttl">Pedidos</div>
+    <div class="desc">
+      {% if pendientes %}
+        {{ pendientes }} pendiente{{ pendientes|pluralize }} por entregar.
+      {% else %}
+        Nada pendiente por entregar.
+      {% endif %}
+    </div>
     <div class="bar"></div>
   </a>
   <a class="card lea" href="/lealtad/">

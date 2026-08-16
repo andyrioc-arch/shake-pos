@@ -26,6 +26,8 @@ urlpatterns = [
     path("n/<uuid:token>/", inventario_views.nota_ver, name="nota_ver"),
     path("n/<uuid:token>/pdf/", inventario_views.nota_pdf, name="nota_pdf"),
     path("inventario/compra/agregar/", inventario_views.compra_agregar, name="inventario_compra_agregar"),
+    path("pedidos/", inventario_views.panel_pedidos, name="panel_pedidos"),
+    path("pedidos/<int:pk>/entregar/", inventario_views.pedido_entregar, name="pedido_entregar"),
     path("actividad/", panel_actividad, name="panel_actividad"),
 
     # Catálogo de productos (solo superusuario)

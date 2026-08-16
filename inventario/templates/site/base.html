@@ -63,6 +63,7 @@
     <nav>
       <a href="/" class="{% if active == 'home' %}active{% endif %}">Inicio</a>
       <a href="/inventario/" class="{% if active == 'inventario' %}active{% endif %}">📦 Inventario</a>
+      <a href="/pedidos/" class="{% if active == 'pedidos' %}active{% endif %}">🧾 Pedidos</a>
       <a href="/lealtad/" class="{% if active == 'lealtad' %}active{% endif %}">💗 Lealtad</a>
       {% if user.is_superuser %}
         <a href="/catalogo/" class="{% if active == 'catalogo' %}active{% endif %}">🧾 Catálogo</a>

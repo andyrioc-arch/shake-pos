@@ -233,6 +233,15 @@
           {% csrf_token %}
           <input type="hidden" name="productos_json" id="productos-json">
 
+          <!-- A nombre de quién va el pedido. Va primero porque se pregunta
+               primero, y es el mismo nombre que usa lealtad. -->
+          <div style="margin-bottom:10px;">
+            <label>🧾 A nombre de</label>
+            <input type="text" name="nombre_cliente" id="nombre-cliente"
+                   placeholder="¿Cómo se llama?" autocomplete="off"
+                   maxlength="80" required>
+          </div>
+
           <!-- Lealtad: celular del cliente para acumular sus puntos -->
           <div class="lealtad-box">
             <label>💗 Celular del cliente <span class="muted">(opcional)</span></label>
@@ -240,12 +249,6 @@
                    inputmode="numeric" placeholder="55 1234 5678 o su código"
                    autocomplete="off">
             <div id="lealtad-info" class="lealtad-info"></div>
-            <div id="lealtad-nombre-box" style="display:none;">
-              <label>Nombre del cliente</label>
-              <input type="text" name="nombre_lealtad" id="lealtad-nombre"
-                     placeholder="¿Cómo se llama?" autocomplete="off"
-                     maxlength="80">
-            </div>
           </div>
 
           <!-- Cortesía (activación / regalo) -->
@@ -643,6 +646,9 @@
 
     document.getElementById("venta-form").addEventListener("submit", function (e) {
       if (carrito.length === 0) { e.preventDefault(); return; }
+      if (!document.getElementById("nombre-cliente").value.trim()) {
+        e.preventDefault(); alert("Escribe a nombre de quién va el pedido."); return;
+      }
       if (esCortesia()) {
         if (!document.getElementById("cortesia-motivo").value.trim()) {
           e.preventDefault(); alert("Escribe el motivo de la cortesía."); return;
@@ -692,21 +698,14 @@
   (function () {
     const tel = document.getElementById("lealtad-tel");
     const info = document.getElementById("lealtad-info");
-    const nombreBox = document.getElementById("lealtad-nombre-box");
-    const nombre = document.getElementById("lealtad-nombre");
-    if (!tel || !info || !nombreBox) return;
+    const nombre = document.getElementById("nombre-cliente");
+    if (!tel || !info || !nombre) return;
     let timer = null;
     let consulta = 0;
-
-    function pedirNombre(haceFalta) {
-      nombreBox.style.display = haceFalta ? "" : "none";
-      if (!haceFalta) { nombre.value = ""; }
-    }
 
     function limpiar() {
       info.textContent = "";
       info.className = "lealtad-info";
-      pedirNombre(false);
     }
 
     function consultar() {
@@ -719,7 +718,12 @@
         .then(function (r) { return r.json(); })
         .then(function (d) {
           if (mia !== consulta) { return; }
-          pedirNombre(d.necesita_nombre);
+          // Si el cliente ya tiene nombre, se rellena el del pedido —pero solo
+          // si está vacío: pisar lo que el cajero acaba de teclear le cambiaría
+          // el nombre al pedido debajo de las manos.
+          if (d.encontrado && d.nombre && !nombre.value.trim()) {
+            nombre.value = d.nombre;
+          }
           if (!d.encontrado) {
             info.textContent = "Cliente nuevo: se registra al guardar la venta.";
             info.className = "lealtad-info nuevo";

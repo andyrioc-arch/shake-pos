@@ -399,6 +399,12 @@ class Nota(models.Model):
     es_cortesia = models.BooleanField("Cortesía", default=False)
     motivo_cortesia = models.CharField(
         "Motivo de la cortesía", max_length=200, blank=True)
+    nombre_cliente = models.CharField(
+        "A nombre de", max_length=80, blank=True,
+        help_text="Para cantar el pedido cuando esté listo.")
+    entregada_en = models.DateTimeField(
+        "Entregada", null=True, blank=True,
+        help_text="Cuándo salió el pedido del mostrador. Vacío = pendiente.")
 
     class Meta:
         verbose_name = "Nota / comprobante"
@@ -412,6 +418,11 @@ class Nota(models.Model):
     def folio(self):
         """Folio corto y legible a partir del token."""
         return self.token.hex[:8].upper()
+
+    @property
+    def pendiente(self):
+        """¿Sigue en la barra sin entregar?"""
+        return self.entregada_en is None
 
     @property
     def subtotal(self):
