@@ -23,9 +23,9 @@ from inventario.models import Ingrediente, Nota, Receta, RecetaIngrediente, Vent
 from lealtad import automatizaciones, mensajeria, metricas, servicios, views
 from lealtad.models import (
     LARGO_NOMBRE, Automatizacion, Campana, Canje, Cliente, Compra,
-    ConfiguracionPrograma, Mensaje, MovimientoPuntos, Nivel, Plantilla, Premio,
-    PromocionPuntos, TelefonoInvalido, normaliza_nombre, normaliza_telefono,
-    telefono_bonito,
+    ConfiguracionPrograma, DescuentoCliente, Mensaje, MovimientoPuntos, Nivel,
+    Plantilla, Premio, PromocionPuntos, TelefonoInvalido, normaliza_nombre,
+    normaliza_telefono, telefono_bonito,
 )
 
 
@@ -1305,3 +1305,232 @@ class ComandosTests(TestCase):
         call_command("lealtad_run", "--forzar-horario", stdout=StringIO())
         self.assertTrue(
             Mensaje.objects.filter(estado=Mensaje.Estado.ENVIADO).exists())
+
+
+class DescuentoClienteTests(TestCase):
+    """Descuentos pactados con un cliente, con su vigencia."""
+
+    def setUp(self):
+        self.cliente, _ = servicios.alta_cliente("9991234567", nombre="Andrea")
+        self.hoy = timezone.localdate()
+
+    def _descuento(self, pct="15", **extra):
+        datos = dict(cliente=self.cliente, porcentaje=Decimal(pct),
+                     desde=self.hoy)
+        datos.update(extra)
+        return DescuentoCliente.objects.create(**datos)
+
+    # ── Vigencia ────────────────────────────────────────────────────────────
+    def test_uno_de_hoy_esta_vigente(self):
+        d = self._descuento()
+        self.assertTrue(d.esta_vigente())
+        self.assertEqual(d.estado, "vigente")
+
+    def test_sin_fecha_de_fin_no_vence(self):
+        """Vacío es «sin vencimiento», no «vencido»: un convenio no lleva fin."""
+        d = self._descuento(hasta=None)
+        self.assertTrue(d.esta_vigente(self.hoy + timedelta(days=3650)))
+
+    def test_uno_que_empieza_mañana_todavia_no_aplica(self):
+        d = self._descuento(desde=self.hoy + timedelta(days=1))
+        self.assertFalse(d.esta_vigente())
+        self.assertEqual(d.estado, "programado")
+
+    def test_uno_que_termino_ayer_ya_no_aplica(self):
+        d = self._descuento(desde=self.hoy - timedelta(days=10),
+                            hasta=self.hoy - timedelta(days=1))
+        self.assertFalse(d.esta_vigente())
+        self.assertEqual(d.estado, "vencido")
+
+    def test_el_ultimo_dia_todavia_cuenta(self):
+        """La vigencia incluye sus dos extremos; medio día menos son quejas."""
+        d = self._descuento(desde=self.hoy, hasta=self.hoy)
+        self.assertTrue(d.esta_vigente())
+
+    def test_uno_desactivado_no_aplica_aunque_este_en_fecha(self):
+        d = self._descuento(activo=False)
+        self.assertFalse(d.esta_vigente())
+        self.assertEqual(d.estado, "desactivado")
+
+    def test_el_estado_nunca_contradice_a_esta_vigente(self):
+        """`estado` solo explica el «no»; quién decide es `esta_vigente()`.
+
+        Si se separan, la pantalla diría «vigente» sobre algo que la caja ya
+        no aplica.
+        """
+        casos = [
+            {},
+            {"activo": False},
+            {"desde": self.hoy + timedelta(days=1)},
+            {"desde": self.hoy - timedelta(days=9), "hasta": self.hoy - timedelta(days=1)},
+            {"hasta": self.hoy},
+            {"activo": False, "hasta": self.hoy - timedelta(days=1)},
+        ]
+        for extra in casos:
+            with self.subTest(**extra):
+                d = self._descuento(**extra)
+                self.assertEqual(d.esta_vigente(), d.estado == "vigente")
+
+    # ── Cuál gana ───────────────────────────────────────────────────────────
+    def test_sin_descuentos_no_hay_ninguno(self):
+        self.assertIsNone(self.cliente.descuento_vigente)
+
+    def test_con_uno_solo_ese_es(self):
+        d = self._descuento("15")
+        self.assertEqual(self.cliente.descuento_vigente, d)
+
+    def test_con_dos_encimados_gana_el_mayor(self):
+        """Tiene que haber una regla: si no, el mismo cliente paga distinto
+        según el orden en que se dieron de alta."""
+        self._descuento("10")
+        mayor = self._descuento("25")
+        self.assertEqual(self.cliente.descuento_vigente, mayor)
+
+    def test_uno_vencido_no_le_gana_a_uno_vigente_menor(self):
+        self._descuento("50", desde=self.hoy - timedelta(days=30),
+                        hasta=self.hoy - timedelta(days=1))
+        vigente = self._descuento("5")
+        self.assertEqual(self.cliente.descuento_vigente, vigente)
+
+    def test_el_descuento_de_otro_cliente_no_se_le_pega(self):
+        otro, _ = servicios.alta_cliente("9997654321")
+        DescuentoCliente.objects.create(
+            cliente=otro, porcentaje=Decimal("30"), desde=self.hoy)
+        self.assertIsNone(self.cliente.descuento_vigente)
+
+    def test_borrar_al_cliente_se_lleva_sus_descuentos(self):
+        self._descuento()
+        self.cliente.delete()
+        self.assertEqual(DescuentoCliente.objects.count(), 0)
+
+
+class DescuentoPanelTests(TestCase):
+    """La pantalla del dueño: dar de alta, listar y borrar."""
+
+    def setUp(self):
+        self.andy = User.objects.create_superuser("andy", "a@x.mx", "x")
+        self.cajero = User.objects.create_user("caja", "c@x.mx", "x",
+                                               is_staff=True)
+        self.client.force_login(self.andy)
+        self.cliente, _ = servicios.alta_cliente("9991234567", nombre="Andrea")
+        self.hoy = timezone.localdate()
+
+    def _guardar(self, **extra):
+        datos = {"cliente": "9991234567", "porcentaje": "15",
+                 "descripcion": "Convenio gimnasio", "activo": "1"}
+        datos.update(extra)
+        return self.client.post(reverse("lealtad_descuento_guardar"), datos)
+
+    def test_se_da_de_alta_buscando_por_celular(self):
+        resp = self._guardar()
+        self.assertRedirects(resp, reverse("lealtad_descuentos"))
+        d = DescuentoCliente.objects.get()
+        self.assertEqual(d.cliente, self.cliente)
+        self.assertEqual(d.porcentaje, Decimal("15"))
+        self.assertEqual(d.descripcion, "Convenio gimnasio")
+
+    def test_sin_fecha_de_inicio_empieza_hoy(self):
+        self._guardar(desde="")
+        self.assertEqual(DescuentoCliente.objects.get().desde, self.hoy)
+
+    def test_un_cliente_que_no_existe_no_crea_nada(self):
+        self._guardar(cliente="9990000000")
+        self.assertEqual(DescuentoCliente.objects.count(), 0)
+
+    def test_un_porcentaje_fuera_de_rango_se_rechaza(self):
+        for malo in ("0", "-5", "101", "abc", ""):
+            with self.subTest(porcentaje=malo):
+                self._guardar(porcentaje=malo)
+                self.assertEqual(DescuentoCliente.objects.count(), 0)
+
+    def test_un_porcentaje_no_finito_no_tumba_la_pagina(self):
+        """`Decimal` acepta NaN e Infinity y luego revienta al compararlos.
+
+        Sin la guarda de `is_finite()` esto es un 500, no un mensaje.
+        """
+        for malo in ("NaN", "sNaN", "-NaN", "Infinity", "-Infinity"):
+            with self.subTest(porcentaje=malo):
+                resp = self._guardar(porcentaje=malo)
+                self.assertRedirects(resp, reverse("lealtad_descuentos"))
+                self.assertEqual(DescuentoCliente.objects.count(), 0)
+
+    def test_el_formulario_ofrece_editar(self):
+        """La vista sabe editar; la pantalla tiene que poder pedirlo."""
+        self._guardar()
+        d = DescuentoCliente.objects.get()
+        resp = self.client.get(reverse("lealtad_descuentos"))
+        self.assertContains(resp, 'name="pk"')
+        self.assertContains(resp, f'data-editar="{d.pk}"')
+        self.assertContains(resp, f'data-porcentaje="{d.porcentaje}"')
+
+    def test_una_vigencia_al_reves_se_rechaza(self):
+        """Se vería en la lista y no aplicaría nunca: la peor forma de fallar."""
+        self._guardar(desde=self.hoy.isoformat(),
+                      hasta=(self.hoy - timedelta(days=1)).isoformat())
+        self.assertEqual(DescuentoCliente.objects.count(), 0)
+
+    def test_se_puede_editar_sin_cambiarle_el_cliente(self):
+        self._guardar()
+        d = DescuentoCliente.objects.get()
+        self._guardar(pk=d.pk, porcentaje="20", cliente="9990000000")
+        d.refresh_from_db()
+        self.assertEqual(d.porcentaje, Decimal("20"))
+        self.assertEqual(d.cliente, self.cliente)
+
+    def test_la_lista_los_muestra(self):
+        self._guardar()
+        resp = self.client.get(reverse("lealtad_descuentos"))
+        self.assertContains(resp, "Andrea")
+        self.assertContains(resp, "Convenio gimnasio")
+        self.assertContains(resp, "15%")
+
+    def test_se_elimina(self):
+        self._guardar()
+        d = DescuentoCliente.objects.get()
+        self.client.post(reverse("lealtad_descuento_eliminar", args=[d.pk]))
+        self.assertEqual(DescuentoCliente.objects.count(), 0)
+
+    def test_el_cajero_no_entra(self):
+        """Es dinero: misma puerta que el resto de lo que expone montos."""
+        self.client.force_login(self.cajero)
+        for url in (reverse("lealtad_descuentos"),
+                    reverse("lealtad_descuento_guardar")):
+            with self.subTest(url=url):
+                resp = self.client.post(url) if "guardar" in url \
+                    else self.client.get(url)
+                self.assertEqual(resp.status_code, 302)
+                self.assertEqual(resp["Location"], f"/?next={url}")
+
+
+class DescuentoEnLaBusquedaTests(TestCase):
+    """Lo que la caja ve al teclear el celular."""
+
+    def setUp(self):
+        self.cajero = User.objects.create_user("caja", "c@x.mx", "x",
+                                               is_staff=True)
+        self.client.force_login(self.cajero)
+        self.cliente, _ = servicios.alta_cliente("9991234567", nombre="Andrea")
+
+    def _buscar(self):
+        return self.client.get(
+            f"{reverse('lealtad_buscar')}?q=9991234567").json()
+
+    def test_sin_descuento_viene_vacio(self):
+        datos = self._buscar()
+        self.assertIsNone(datos["descuento"])
+        self.assertEqual(datos["descuento_motivo"], "")
+
+    def test_con_descuento_vigente_lo_anuncia(self):
+        DescuentoCliente.objects.create(
+            cliente=self.cliente, porcentaje=Decimal("15"),
+            descripcion="Convenio gimnasio", desde=timezone.localdate())
+        datos = self._buscar()
+        self.assertEqual(Decimal(datos["descuento"]), Decimal("15"))
+        self.assertEqual(datos["descuento_motivo"], "Convenio gimnasio")
+
+    def test_uno_vencido_no_se_anuncia(self):
+        hoy = timezone.localdate()
+        DescuentoCliente.objects.create(
+            cliente=self.cliente, porcentaje=Decimal("15"),
+            desde=hoy - timedelta(days=30), hasta=hoy - timedelta(days=1))
+        self.assertIsNone(self._buscar()["descuento"])

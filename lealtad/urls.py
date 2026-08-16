@@ -26,6 +26,12 @@ panel_urls = [
     path("canjes/<int:pk>/cancelar/", views.canje_cancelar,
          name="lealtad_canje_cancelar"),
 
+    path("descuentos/", views.descuentos, name="lealtad_descuentos"),
+    path("descuentos/guardar/", views.descuento_guardar,
+         name="lealtad_descuento_guardar"),
+    path("descuentos/<int:pk>/eliminar/", views.descuento_eliminar,
+         name="lealtad_descuento_eliminar"),
+
     path("premios/", views.premios, name="lealtad_premios"),
     path("premios/guardar/", views.premio_guardar, name="lealtad_premio_guardar"),
     path("premios/<int:pk>/eliminar/", views.premio_eliminar,

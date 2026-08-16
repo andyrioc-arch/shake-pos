@@ -732,6 +732,14 @@
           let texto = (d.nombre || "Cliente") + " · " + d.puntos + " puntos";
           if (d.nivel) { texto += " · " + d.nivel; }
           if (d.premios.length) { texto += " · 🎁 puede canjear: " + d.premios.join(", "); }
+          // El descuento pactado se canta aquí para que el cajero no dependa
+          // de acordarse. Va al final porque es lo que cambia el cobro.
+          if (d.descuento) {
+            // `parseFloat` para que 15.00 se lea «15%». El valor exacto viaja
+            // completo en la respuesta; esto es solo lo que ve el cajero.
+            texto += " · 🏷️ " + parseFloat(d.descuento) + "% de descuento";
+            if (d.descuento_motivo) { texto += " (" + d.descuento_motivo + ")"; }
+          }
           info.textContent = texto;
           info.className = "lealtad-info ok";
         })
