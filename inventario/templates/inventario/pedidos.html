@@ -1,0 +1,86 @@
+{% extends "site/base.html" %}
+{% block title %}Pedidos{% endblock %}
+{% block extra_head %}
+<style>
+  /* Tarjetas y no una tabla: esto se lee de pie, de reojo y con el celular en
+     una mano. En una tabla el nombre —lo único que se canta— compite con el
+     folio, la hora y el total. */
+  .pedidos { display:grid; gap:14px; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); }
+  .pedido { background:#fff; border:2px solid #000; border-radius:12px;
+            box-shadow:5px 5px 0 #000; overflow:hidden; display:flex; flex-direction:column; }
+  .pedido header { background:#000; color:#fff; padding:10px 16px;
+                   display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
+  .pedido .nombre { font-size:20px; font-weight:800; line-height:1.15; }
+  .pedido .folio { font-size:12px; color:rgba(255,255,255,.6); white-space:nowrap; }
+  .pedido .body { padding:14px 16px; flex:1; }
+  .pedido ul { margin:0; padding-left:18px; }
+  .pedido li { font-size:14px; margin-bottom:3px; }
+  .meta { margin-top:10px; font-size:12px; color:#666; display:flex; gap:10px; flex-wrap:wrap; }
+  .regalo { background:#f3ecff; color:#5b00b0; border:1px solid #8700ff;
+            padding:1px 8px; border-radius:6px; font-weight:700; }
+  .pedido form { margin:0; padding:0 16px 16px; }
+  .btn-entregar { width:100%; padding:12px; font-size:15px; font-weight:800;
+                  border:2px solid #000; border-radius:8px; background:#1e9aff;
+                  color:#fff; cursor:pointer; box-shadow:3px 3px 0 #000; }
+  .btn-entregar:hover { background:#1478cc; }
+  .btn-entregar:active { transform:translate(3px,3px); box-shadow:none; }
+  .vacio { background:#fff; border:2px dashed #000; border-radius:12px;
+           padding:44px 20px; text-align:center; }
+  .vacio .grande { font-size:44px; line-height:1; }
+  .vacio p { color:#666; margin:12px 0 0; }
+  .muted { color:#999; }
+  /* Los mensajes se pintan en cada plantilla, no en base.html. Sin este
+     bloque el aviso de «entregado» no se ve aquí y reaparece en la siguiente
+     página que sí los pinte, fuera de contexto. */
+  .msg { padding:10px 14px; border:2px solid #000; border-radius:8px;
+         margin:10px 0; font-size:13px; font-weight:600; }
+  .msg.success { background:#e7f3ff; }
+  .msg.error { background:#ffe6f1; }
+</style>
+{% endblock %}
+{% block content %}
+{% if messages %}
+  {% for m in messages %}<div class="msg {{ m.tags }}">{{ m }}</div>{% endfor %}
+{% endif %}
+<h1>🧾 Pedidos pendientes</h1>
+<p class="muted">
+  {% if pedidos %}
+    {{ pedidos|length }} por entregar. Al marcar uno como entregado, sale de la lista.
+  {% else %}
+    Aquí aparece lo que falta por entregar.
+  {% endif %}
+</p>
+
+{% if pedidos %}
+<div class="pedidos">
+  {% for p in pedidos %}
+  <div class="pedido">
+    <header>
+      <span class="nombre">{{ p.nombre|default:"Sin nombre" }}</span>
+      <span class="folio">{{ p.creada|date:"H:i" }}</span>
+    </header>
+    <div class="body">
+      <ul>
+        {% for linea in p.lineas %}<li>{{ linea }}</li>{% endfor %}
+      </ul>
+      <div class="meta">
+        <span>Folio {{ p.folio }}</span>
+        {% if p.es_cortesia %}<span class="regalo">🎁 Cortesía</span>{% endif %}
+        {% if es_super and not p.es_cortesia %}<span>${{ p.total|floatformat:2 }}</span>{% endif %}
+        <a href="{{ p.url }}">Ver nota</a>
+      </div>
+    </div>
+    <form method="post" action="{% url 'pedido_entregar' p.pk %}">
+      {% csrf_token %}
+      <button class="btn-entregar" type="submit">✓ Entregado</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="vacio">
+  <div class="grande">✨</div>
+  <p>No hay nada pendiente. Todo entregado.</p>
+</div>
+{% endif %}
+{% endblock %}

@@ -506,7 +506,9 @@ class VentaConLealtadTests(TestCase):
             "pago_con": "300",
             "fecha": timezone.localdate().isoformat(),
             "telefono_lealtad": telefono,
-            "nombre_lealtad": nombre,
+            # Es el mismo campo para las dos cosas: el nombre con el que se
+            # canta el pedido es el que se le pone al cliente en lealtad.
+            "nombre_cliente": nombre or "Mostrador",
         }
         if cortesia:
             datos.update(cortesia="1", motivo_cortesia="Activación", pago_con="")

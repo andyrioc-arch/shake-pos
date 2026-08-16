@@ -131,6 +131,7 @@ class DiaDeUsoTests(TestCase):
             "productos_json": json.dumps(productos),
             "fecha": self.hoy.isoformat(),
             "metodo_pago": "efectivo",
+            "nombre_cliente": "Andrea",
         }
         datos.update(extra)
         return (cliente or self.c_caja).post(
@@ -204,6 +205,19 @@ class DiaDeUsoTests(TestCase):
         self.assertEqual(pdf.content[:5], b"%PDF-")
         self.assertEqual(pdf["Content-Disposition"],
                          f'inline; filename="nota-{n1.folio}.pdf"')
+
+        # ── 3b · La barra entrega el pedido ─────────────────────────────────
+        pedidos = self.c_caja.get(reverse("panel_pedidos"))
+        self.assertContains(pedidos, "Andrea")
+        self.assertTrue(n1.pendiente)
+        self.c_caja.post(reverse("pedido_entregar", args=[n1.pk]))
+        n1.refresh_from_db()
+        self.assertIsNotNone(n1.entregada_en)
+        # Se afirma el estado vacío y no la ausencia del nombre: el aviso de
+        # «Pedido de Andrea entregado» viaja en la siguiente petición y lleva
+        # el nombre dentro, así que buscarlo daría un falso negativo.
+        self.assertContains(self.c_caja.get(reverse("panel_pedidos")),
+                            "No hay nada pendiente")
 
         # ── 4 · Llega la factura del proveedor ──────────────────────────────
         self._comprar(self.leche, "2", "60.00")
@@ -309,8 +323,7 @@ class DiaDeUsoTests(TestCase):
 
         # ── 8 · Venta con el celular del cliente ────────────────────────────
         self._vender([{"receta": self.shake.pk, "cantidad": 2}],
-                     pago_con="300", telefono_lealtad="9991234567",
-                     nombre_lealtad="Andrea")
+                     pago_con="300", telefono_lealtad="9991234567")
         cliente = Cliente.objects.get()
         self.assertEqual(cliente.telefono, "+529991234567")
         self.assertEqual(cliente.nombre, "Andrea")

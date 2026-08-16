@@ -808,3 +808,122 @@ class AlarmaMargenTests(TestCase):
 
         self.assertContains(resp, "Sin caídas")
         self.assertNotContains(resp, "con caída")
+
+
+class PedidosPendientesTests(TestCase):
+    """La barra: a nombre de quién va cada pedido y qué falta por entregar."""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        self.cajero = User.objects.create_user(
+            "caja", "caja@x.mx", "x", is_staff=True)
+        self.client.force_login(self.cajero)
+        self.ing = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("30.00"))
+        self.rec = Receta.objects.create(
+            nombre="Shake", emoji="🍓", precio_venta=Decimal("100.00"))
+        RecetaIngrediente.objects.create(
+            receta=self.rec, ingrediente=self.ing, cantidad=200)
+
+    def _vender(self, nombre="Andrea", **extra):
+        import json
+        from django.urls import reverse
+        datos = {
+            "productos_json": json.dumps(
+                [{"receta": self.rec.pk, "cantidad": 1}]),
+            "metodo_pago": "efectivo", "pago_con": "200",
+            "nombre_cliente": nombre,
+        }
+        datos.update(extra)
+        return self.client.post(reverse("inventario_venta_agregar"), datos)
+
+    def _pedidos(self):
+        from django.urls import reverse
+        return self.client.get(reverse("panel_pedidos"))
+
+    def test_la_venta_guarda_a_nombre_de_quien_va(self):
+        self._vender("Andrea")
+        self.assertEqual(Nota.objects.get().nombre_cliente, "Andrea")
+
+    def test_sin_nombre_no_se_registra_la_venta(self):
+        """La validación tira toda la venta, no la deja a medias."""
+        from django.urls import reverse
+        resp = self._vender("")
+        self.assertRedirects(resp, reverse("panel_inventario"))
+        self.assertEqual(Nota.objects.count(), 0)
+        self.assertEqual(Venta.objects.count(), 0)
+
+    def test_solo_espacios_tampoco_cuenta_como_nombre(self):
+        self._vender("   ")
+        self.assertEqual(Nota.objects.count(), 0)
+
+    def test_un_nombre_larguisimo_no_revienta(self):
+        """`CharField(80)` en Postgres corta con error, no truncando."""
+        self._vender("A" * 300)
+        self.assertEqual(len(Nota.objects.get().nombre_cliente), 80)
+
+    def test_una_venta_nueva_nace_pendiente(self):
+        self._vender("Andrea")
+        nota = Nota.objects.get()
+        self.assertIsNone(nota.entregada_en)
+        self.assertTrue(nota.pendiente)
+
+    def test_la_lista_muestra_lo_pendiente_con_su_nombre(self):
+        self._vender("Andrea")
+        resp = self._pedidos()
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Andrea")
+        self.assertContains(resp, "1× 🍓 Shake")
+
+    def test_al_entregarlo_desaparece_de_la_lista(self):
+        from django.urls import reverse
+        self._vender("Andrea")
+        nota = Nota.objects.get()
+        resp = self.client.post(reverse("pedido_entregar", args=[nota.pk]))
+        self.assertRedirects(resp, reverse("panel_pedidos"))
+        nota.refresh_from_db()
+        self.assertIsNotNone(nota.entregada_en)
+        self.assertFalse(nota.pendiente)
+        self.assertContains(self._pedidos(), "No hay nada pendiente")
+
+    def test_entregar_dos_veces_no_reescribe_la_hora(self):
+        """En la barra dos personas aprietan el mismo botón a la vez."""
+        from django.urls import reverse
+        self._vender("Andrea")
+        nota = Nota.objects.get()
+        url = reverse("pedido_entregar", args=[nota.pk])
+        self.client.post(url)
+        nota.refresh_from_db()
+        primera = nota.entregada_en
+        self.client.post(url)
+        nota.refresh_from_db()
+        self.assertEqual(nota.entregada_en, primera)
+
+    def test_los_pedidos_salen_en_el_orden_en_que_entraron(self):
+        """Se atiende por turno; el más viejo va arriba."""
+        self._vender("Primero")
+        self._vender("Segundo")
+        cuerpo = self._pedidos().content.decode()
+        self.assertLess(cuerpo.index("Primero"), cuerpo.index("Segundo"))
+
+    def test_la_cortesia_tambien_se_entrega(self):
+        """Un regalo también se prepara y se canta: no puede saltarse la lista."""
+        self._vender("Andrea", cortesia="1", motivo_cortesia="Activación",
+                     pago_con="")
+        self.assertContains(self._pedidos(), "Cortesía")
+
+    def test_el_cajero_no_ve_montos_en_la_lista(self):
+        """Misma puerta que el resto: el staff ve unidades, no dinero."""
+        self._vender("Andrea")
+        self.assertNotContains(self._pedidos(), "$100.00")
+
+    def test_la_lista_vacia_lo_dice(self):
+        self.assertContains(self._pedidos(), "No hay nada pendiente")
+
+    def test_pide_sesion(self):
+        from django.urls import reverse
+        self.client.logout()
+        resp = self.client.get(reverse("panel_pedidos"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/login/", resp["Location"])

@@ -1,5 +1,6 @@
 import json
 from datetime import date
+from django.utils import timezone
 from django.utils.timezone import localdate
 from decimal import Decimal, InvalidOperation
 
@@ -52,6 +53,9 @@ def home(request):
         "active": "home",
         "es_super": request.user.is_superuser,
         "cumplimiento": cumplimiento,
+        # Cuántos pedidos faltan por entregar. Es lo primero que se mira al
+        # llegar, así que se dice aquí y no solo dentro de su pantalla.
+        "pendientes": Nota.objects.filter(entregada_en__isnull=True).count(),
     }
     return render(request, "site/home.html", ctx)
 
@@ -257,6 +261,10 @@ def venta_agregar(request):
     fecha = _fecha(request.POST.get("fecha"))
     es_cortesia = request.POST.get("cortesia") == "1"
     motivo = request.POST.get("motivo_cortesia", "").strip()
+    # A nombre de quién va el pedido. Es el mismo nombre que usa lealtad: dos
+    # campos para lo mismo en la misma pantalla se contestan distinto, y el
+    # cliente acaba llamándose de dos formas según por dónde se le mire.
+    nombre_cliente = request.POST.get("nombre_cliente", "").strip()[:80]
     metodo = request.POST.get("metodo_pago", "efectivo")
     if metodo not in {c.value for c in Venta.MetodoPago}:
         metodo = "efectivo"
@@ -278,6 +286,8 @@ def venta_agregar(request):
                     f"con {len(creadas)} producto(s)")
             if not creadas:
                 raise _VentaError("No se pudo registrar la venta (productos inválidos).")
+            if not nombre_cliente:
+                raise _VentaError("Escribe a nombre de quién va el pedido.")
             if es_cortesia and not motivo:
                 raise _VentaError("Escribe el motivo de la cortesía.")
             if metodo == "efectivo" and not es_cortesia:
@@ -293,6 +303,7 @@ def venta_agregar(request):
                 fecha=fecha, metodo_pago=metodo, total=total,
                 pago_con=pago_con, cambio=cambio,
                 es_cortesia=es_cortesia, motivo_cortesia=motivo,
+                nombre_cliente=nombre_cliente,
             )
             Venta.objects.filter(pk__in=[v.pk for v in creadas]).update(nota=nota)
     except _VentaError as e:
@@ -318,7 +329,6 @@ def venta_agregar(request):
     # registrada y un problema del programa de lealtad no debe deshacerla.
     # Las cortesías no acumulan (no se cobraron).
     telefono = request.POST.get("telefono_lealtad", "").strip()
-    nombre_cliente = request.POST.get("nombre_lealtad", "").strip()
     if telefono and not es_cortesia:
         from lealtad import servicios as lealtad
         try:
@@ -341,6 +351,54 @@ def venta_agregar(request):
         change_message=f"Registró venta ({etiqueta}) · nota {nota.folio}",
     )
     return redirect("nota_ver", token=nota.token)
+
+
+@login_required
+def panel_pedidos(request):
+    """Lo que falta por entregar en la barra. Para todo el personal.
+
+    Solo pendientes: un pedido entregado desaparece. Lo que se necesita aquí es
+    saber qué falta, y una lista que crece todo el día deja de leerse a la
+    tercera hora. El histórico ya vive en el admin y en el libro.
+    """
+    pendientes = (Nota.objects.filter(entregada_en__isnull=True)
+                  .prefetch_related("lineas__receta")
+                  .order_by("creada"))
+    pedidos = [{
+        "pk": n.pk,
+        "folio": n.folio,
+        "nombre": n.nombre_cliente,
+        "creada": n.creada,
+        "total": n.total,
+        "es_cortesia": n.es_cortesia,
+        "url": n.get_absolute_url(),
+        "lineas": [f"{l.cantidad}× {l.receta.emoji} {l.receta.nombre}".strip()
+                   for l in n.lineas.all()],
+    } for n in pendientes]
+    return render(request, "inventario/pedidos.html", {
+        "title": "Pedidos",
+        "active": "pedidos",
+        "pedidos": pedidos,
+        "es_super": request.user.is_superuser,
+    })
+
+
+@require_POST
+@login_required
+def pedido_entregar(request, pk):
+    """Marca un pedido como entregado y lo saca de la lista.
+
+    Idempotente: si dos personas aprietan el botón a la vez, la segunda no
+    reescribe la hora de la primera. En la barra eso pasa.
+    """
+    nota = get_object_or_404(Nota, pk=pk)
+    if nota.entregada_en is None:
+        nota.entregada_en = timezone.now()
+        nota.save(update_fields=["entregada_en"])
+        _log(request, nota, CHANGE, "Entregó el pedido")
+        nombre = nota.nombre_cliente or nota.folio
+        messages.success(request, f"Pedido de {nombre} entregado.")
+    return redirect("panel_pedidos")
 
 
 def _qr_svg(url):

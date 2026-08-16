@@ -11,8 +11,9 @@ from .models import (
 
 @admin.register(Nota)
 class NotaAdmin(admin.ModelAdmin):
-    list_display = ("folio", "creada", "metodo_pago", "total", "cambio")
-    list_filter = ("metodo_pago", "fecha")
+    list_display = ("folio", "nombre_cliente", "creada", "metodo_pago", "total",
+                    "cambio", "entregada_en")
+    list_filter = ("metodo_pago", "fecha", "entregada_en")
     readonly_fields = ("token", "creada")
     date_hierarchy = "creada"
 
