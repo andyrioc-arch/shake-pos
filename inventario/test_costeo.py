@@ -294,3 +294,71 @@ class CostoDeVentasTests(CosteoBase):
         venta = self._venta(2, cantidad=1)     # ingreso 100, costo real 4
         self.assertEqual(Venta.objects.get(pk=venta.pk).ganancia,
                          Decimal("96.00"))
+
+
+class BorrarVentaConModificacionesTests(CosteoBase):
+    """Borrar una venta con add-on o sustitución dejaba huérfanos sus consumos.
+
+    Django manda todos los `pre_delete` primero, luego borra y hasta el final
+    los `post_delete`; los hijos se borran antes que el padre. Cuando llegaba el
+    `post_delete` del extra la venta seguía en la base, así que la señal la
+    volvía a costear e insertaba `ConsumoCapa` colgando de una venta que
+    desaparecía enseguida. En Postgres reventaba en el COMMIT —error 500 al
+    borrar cualquier venta con extras— y en SQLite al revisar las llaves.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cafe = Ingrediente.objects.create(
+            nombre="Café en grano", unidad_compra="kg",
+            cantidad_por_unidad=Decimal("1000"), unidad_receta="g",
+            costo_unidad_compra=Decimal("500"))
+        self.shot = Extra.objects.create(
+            nombre="Shot doble", ingrediente=self.cafe,
+            cantidad=Decimal("10"), cargo=Decimal("15"))
+        self.almendra = Ingrediente.objects.create(
+            nombre="Almendra", unidad_compra="litro",
+            cantidad_por_unidad=Decimal("1000"), unidad_receta="ml",
+            costo_unidad_compra=Decimal("999"))
+        self._compra(1, 2, "40")
+        Compra.objects.create(
+            fecha=date(2026, 8, 1), ingrediente=self.cafe,
+            cantidad=Decimal("1"), monto_total=Decimal("400"))
+        Compra.objects.create(
+            fecha=date(2026, 8, 1), ingrediente=self.almendra,
+            cantidad=Decimal("1"), monto_total=Decimal("60"))
+
+    def test_borrar_una_venta_con_addon(self):
+        venta = self._venta(2)
+        VentaExtra.objects.create(venta=venta, extra=self.shot, cantidad=1)
+        venta.delete()
+        self.assertEqual(Venta.objects.count(), 0)
+        self.assertEqual(ConsumoCapa.objects.count(), 0)
+
+    def test_borrar_una_venta_con_sustitucion(self):
+        venta = self._venta(2)
+        VentaSustitucion.objects.create(
+            venta=venta, ingrediente_original=self.leche,
+            ingrediente_nuevo=self.almendra)
+        venta.delete()
+        self.assertEqual(Venta.objects.count(), 0)
+        self.assertEqual(ConsumoCapa.objects.count(), 0)
+
+    def test_al_borrarla_le_devuelve_su_saldo_a_cada_capa(self):
+        venta = self._venta(2)
+        VentaExtra.objects.create(venta=venta, extra=self.shot, cantidad=1)
+        venta.delete()
+        capa_leche = Compra.objects.get(ingrediente=self.leche)
+        capa_cafe = Compra.objects.get(ingrediente=self.cafe)
+        self.assertEqual(capa_leche.saldo_receta, capa_leche.cantidad_receta)
+        self.assertEqual(capa_cafe.saldo_receta, capa_cafe.cantidad_receta)
+
+    def test_las_ventas_posteriores_siguen_costeadas(self):
+        """La otra mitad: borrar libera capas viejas y baja el costo del resto."""
+        primera = self._venta(2)
+        VentaExtra.objects.create(venta=primera, extra=self.shot, cantidad=1)
+        segunda = self._venta(3)
+        primera.delete()
+        segunda.refresh_from_db()
+        self.assertFalse(segunda.costo_incompleto)
+        self.assertEqual(segunda.costo_fifo, Decimal("4.00"))   # 200 ml × 0.02
