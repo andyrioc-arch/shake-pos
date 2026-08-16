@@ -72,8 +72,24 @@ def venta_guardada(sender, instance, created, update_fields=None, **kwargs):
 
 # ── Modificaciones de una venta (extras y sustituciones) ──────────────────────
 def _recostear_venta_de(objeto):
+    # Si la venta entera se está borrando, no hay nada que recostear: sus
+    # propias señales ya devolvieron el inventario.
+    #
+    # Preguntar si la venta EXISTE no sirve como guarda, y ese fue el bug.
+    # Django manda todos los `pre_delete` primero, luego borra, y hasta el
+    # final los `post_delete`; los hijos se borran antes que el padre, así que
+    # cuando llega el `post_delete` de un extra la venta todavía está en la
+    # base. La guarda dejaba pasar, se volvía a costear, y los `ConsumoCapa`
+    # recién insertados quedaban colgando de una venta que desaparecía un
+    # instante después. En Postgres las llaves foráneas son DEFERRABLE, así que
+    # el error salía hasta el COMMIT y la pantalla solo decía «error 500».
+    #
+    # `_pendiente` sí lo sabe: lo llenó el `pre_delete` de la venta, que corre
+    # antes que cualquier `post_delete`.
+    if objeto.venta_id in _pendiente:
+        return
     venta = Venta.objects.filter(pk=objeto.venta_id).first()
-    if not venta:          # se está borrando la venta entera: ya se maneja allá
+    if not venta:          # ya no está: nada que recostear
         return
     costeo.costear_venta(venta)
     ingredientes, fecha = _ingredientes_y_fecha(venta)
