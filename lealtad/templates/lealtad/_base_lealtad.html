@@ -92,6 +92,7 @@ resto del sitio: bloques con borde negro y sombra dura.
     <a href="{% url 'lealtad_clientes' %}" class="{% if seccion == 'clientes' %}act{% endif %}">👥 Clientes</a>
     {% if user.is_superuser %}
       <a href="{% url 'lealtad_premios' %}" class="{% if seccion == 'premios' %}act{% endif %}">🎁 Premios y niveles</a>
+      <a href="{% url 'lealtad_descuentos' %}" class="{% if seccion == 'descuentos' %}act{% endif %}">🏷️ Descuentos</a>
       <a href="{% url 'lealtad_mensajes' %}" class="{% if seccion == 'mensajes' %}act{% endif %}">📨 Mensajes</a>
       <a href="{% url 'lealtad_marketing' %}" class="{% if seccion == 'marketing' %}act{% endif %}">📊 Marketing</a>
       <a href="{% url 'lealtad_metricas' %}" class="{% if seccion == 'metricas' %}act{% endif %}">📈 Métricas</a>

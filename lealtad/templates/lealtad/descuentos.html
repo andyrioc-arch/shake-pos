@@ -1,0 +1,177 @@
+{% extends "lealtad/_base_lealtad.html" %}
+{% block title %}Descuentos{% endblock %}
+{% block extra_head %}{{ block.super }}
+<style>
+  .est { font-size:11px; font-weight:800; padding:2px 9px; border-radius:6px;
+         text-transform:uppercase; letter-spacing:.4px; white-space:nowrap; }
+  .est.vigente     { background:#e7f3ff; color:#1478cc; border:1px solid #1478cc; }
+  .est.programado  { background:#fff6d6; color:#7a5c00; border:1px solid #b98d00; }
+  .est.vencido     { background:#f1f1f1; color:#666;    border:1px solid #bbb; }
+  .est.desactivado { background:#ffe6f1; color:#c81a63; border:1px solid #c81a63; }
+  .pct { font-size:17px; font-weight:800; }
+  .acciones { display:flex; gap:6px; align-items:center; justify-content:center; }
+  .acciones form { margin:0; }
+  /* `.btn` fija su propio `display`, que le gana al atributo `hidden` del
+     navegador: sin esta regla el botón de cancelar se ve siempre, también
+     cuando no se está editando nada. */
+  [hidden] { display:none !important; }
+</style>
+{% endblock %}
+{% block lealtad %}
+<h1>🏷️ Descuentos por cliente</h1>
+<p class="muted">
+  Descuentos pactados con un cliente concreto y su vigencia. Al teclear su
+  celular en la caja, el descuento aparece solo: nadie tiene que acordarse.
+  {% if vigentes %}Hoy hay {{ vigentes }} vigente{{ vigentes|pluralize }}.{% endif %}
+</p>
+
+<div class="blk">
+  <h2>➕ Nuevo descuento</h2>
+  <form method="post" action="{% url 'lealtad_descuento_guardar' %}" class="formrow"
+        id="form-descuento">
+    {% csrf_token %}
+    <input type="hidden" name="pk" id="f-pk">
+    <div class="campo">
+      <label for="cliente">Cliente (celular o código)</label>
+      <input class="inp" id="cliente" name="cliente" required
+             placeholder="55 1234 5678" style="width:180px">
+    </div>
+    <div class="campo">
+      <label for="porcentaje">Descuento (%)</label>
+      <input class="inp" id="porcentaje" name="porcentaje" type="number"
+             step="0.01" min="0.01" max="100" required style="width:110px"
+             placeholder="15">
+    </div>
+    <div class="campo">
+      <label for="descripcion">Por qué</label>
+      <input class="inp" id="descripcion" name="descripcion" maxlength="200"
+             placeholder="Convenio gimnasio, empleado…" style="width:260px">
+    </div>
+    <div class="campo">
+      <label for="desde">Desde</label>
+      <input class="inp" id="desde" name="desde" type="date">
+    </div>
+    <div class="campo">
+      <label for="hasta">Hasta <span style="text-transform:none;font-weight:500">(opcional)</span></label>
+      <input class="inp" id="hasta" name="hasta" type="date">
+    </div>
+    <div class="campo">
+      <label>&nbsp;</label>
+      <label style="font-size:13px;text-transform:none;color:#000;font-weight:600">
+        <input type="checkbox" name="activo" id="f-activo" value="1" checked> Activo
+      </label>
+    </div>
+    <button class="btn pri" type="submit">Guardar</button>
+    <button class="btn ghost" type="button" id="f-cancelar" hidden>Cancelar</button>
+  </form>
+  <p class="muted" style="padding:10px 16px;font-size:12px;margin:0">
+    El cliente tiene que existir en el programa. Si es nuevo, dalo de alta en
+    Clientes y vuelve aquí: el descuento se aplica por celular, que es lo único
+    que el mostrador puede teclear sin equivocarse.
+    Dejar «Hasta» vacío es un descuento sin vencimiento.
+  </p>
+</div>
+
+<div class="blk">
+  <h2>📋 Todos los descuentos <span class="sub">{{ descuentos|length }}</span></h2>
+  <table class="t">
+    <thead><tr>
+      <th class="izq">Cliente</th><th>Descuento</th><th class="izq">Por qué</th>
+      <th class="izq">Vigencia</th><th class="cen">Estado</th><th class="cen"></th>
+    </tr></thead>
+    <tbody>
+      {% for d in descuentos %}
+      <tr>
+        <td class="izq">
+          <a href="{% url 'lealtad_cliente' d.cliente.pk %}"><b>{{ d.cliente.nombre|default:"Sin nombre" }}</b></a>
+          <br><span class="muted" style="font-size:12px">{{ d.cliente.telefono_display }}</span>
+        </td>
+        <td><span class="pct">{{ d.porcentaje|floatformat:"-2" }}%</span></td>
+        <td class="izq">{{ d.descripcion|default:"—" }}</td>
+        <td class="izq">
+          {{ d.desde|date:"d/m/Y" }} →
+          {% if d.hasta %}{{ d.hasta|date:"d/m/Y" }}{% else %}<span class="muted">sin vencimiento</span>{% endif %}
+        </td>
+        <td class="cen"><span class="est {{ d.estado }}">{{ d.estado }}</span></td>
+        <td class="cen acciones">
+          <button class="btn sm" type="button" data-editar="{{ d.pk }}">Editar</button>
+          <form method="post" action="{% url 'lealtad_descuento_eliminar' d.pk %}"
+                onsubmit="return confirm('¿Eliminar el descuento de {{ d.cliente.nombre_corto|escapejs }}?')">
+            {% csrf_token %}
+            <button class="btn del" type="submit">Eliminar</button>
+          </form>
+        </td>
+      </tr>
+      {% comment %}
+        Los datos para editar viajan en la fila y no en el JS: así no hay una
+        segunda copia del descuento que se pueda desfasar de la tabla.
+      {% endcomment %}
+      <tr class="datos-edicion" hidden
+          data-pk="{{ d.pk }}"
+          {% comment %}
+            `stringformat:"s"` y no el valor a secas: así el número no pasa por
+            la localización, que en otro idioma pondría coma decimal y el
+            <input type="number"> lo recibiría vacío.
+          {% endcomment %}
+          data-porcentaje="{{ d.porcentaje|stringformat:'s' }}"
+          data-descripcion="{{ d.descripcion }}"
+          data-desde="{{ d.desde|date:'Y-m-d' }}"
+          data-hasta="{% if d.hasta %}{{ d.hasta|date:'Y-m-d' }}{% endif %}"
+          data-activo="{% if d.activo %}1{% endif %}"
+          data-cliente="{{ d.cliente.nombre|default:d.cliente.telefono_display }}"></tr>
+      {% empty %}
+      <tr><td colspan="6" style="text-align:center;color:#999;padding:22px;">
+        Todavía no hay descuentos pactados.
+      </td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+  // Editar: sube los datos de la fila al formulario de arriba y lo convierte
+  // en «guardar cambios». Al editar NO se puede cambiar de cliente —la vista
+  // ignora ese campo— así que se muestra bloqueado en vez de dejar creer que
+  // se puede reasignar el descuento a otra persona.
+  (function () {
+    const form = document.getElementById("form-descuento");
+    const pk = document.getElementById("f-pk");
+    const cliente = document.getElementById("cliente");
+    const cancelar = document.getElementById("f-cancelar");
+    const enviar = form.querySelector('button[type="submit"]');
+    const titulo = form.closest(".blk").querySelector("h2");
+    const tituloOriginal = titulo.textContent;
+
+    function limpiar() {
+      form.reset();
+      pk.value = "";
+      cliente.readOnly = false;
+      cancelar.hidden = true;
+      enviar.textContent = "Guardar";
+      titulo.textContent = tituloOriginal;
+    }
+
+    document.querySelectorAll("[data-editar]").forEach(function (boton) {
+      boton.addEventListener("click", function () {
+        const fila = document.querySelector(
+          '.datos-edicion[data-pk="' + boton.dataset.editar + '"]');
+        if (!fila) { return; }
+        pk.value = fila.dataset.pk;
+        cliente.value = fila.dataset.cliente;
+        cliente.readOnly = true;
+        document.getElementById("porcentaje").value = fila.dataset.porcentaje;
+        document.getElementById("descripcion").value = fila.dataset.descripcion;
+        document.getElementById("desde").value = fila.dataset.desde;
+        document.getElementById("hasta").value = fila.dataset.hasta;
+        document.getElementById("f-activo").checked = !!fila.dataset.activo;
+        cancelar.hidden = false;
+        enviar.textContent = "Guardar cambios";
+        titulo.textContent = "✏️ Editando el descuento de " + fila.dataset.cliente;
+        form.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+    });
+
+    cancelar.addEventListener("click", limpiar);
+  })();
+</script>
+{% endblock %}

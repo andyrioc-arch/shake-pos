@@ -344,6 +344,97 @@ class Cliente(models.Model):
             return Decimal("0")
         return self.gasto_historico / self.visitas
 
+    # ── Descuentos ────────────────────────────────────────────────────────
+    @property
+    def descuento_vigente(self):
+        """El descuento que hoy le toca, o None.
+
+        Si tiene varios encimados gana el de mayor porcentaje. Tiene que haber
+        una regla y no un «el que salga»: dos descuentos vigentes a la vez son
+        normales —uno de convenio y uno de temporada— y sin criterio el mismo
+        cliente pagaría distinto según el orden en que se dieron de alta. Se
+        elige el mayor porque es el que el cliente va a reclamar.
+        """
+        return self.descuentos.vigentes().order_by("-porcentaje", "-id").first()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DESCUENTOS POR CLIENTE
+# ══════════════════════════════════════════════════════════════════════════════
+
+class DescuentoClienteQuerySet(models.QuerySet):
+    def vigentes(self, fecha=None):
+        """Los que hoy aplican: activos, ya empezados y sin vencer.
+
+        `hasta` vacío es «sin vencimiento», no «vencido»: un convenio suele no
+        tener fecha de fin, y tratarlo como caducado dejaría al cliente pagando
+        completo sin que nadie tocara nada.
+        """
+        fecha = fecha or timezone.localdate()
+        return self.filter(activo=True, desde__lte=fecha).filter(
+            models.Q(hasta__isnull=True) | models.Q(hasta__gte=fecha))
+
+
+class DescuentoCliente(models.Model):
+    """Un descuento pactado con un cliente concreto, con su vigencia.
+
+    Cuelga de `Cliente` y no de un nombre suelto porque el mostrador identifica
+    al cliente por su celular, que es lo único que se puede teclear sin
+    equivocarse. Un descuento a nombre de «Juan» no se puede aplicar: hay tres
+    Juanes y el cajero no sabe cuál.
+    """
+
+    cliente = models.ForeignKey(
+        Cliente, on_delete=models.CASCADE, related_name="descuentos")
+    porcentaje = models.DecimalField(
+        "Descuento (%)", max_digits=5, decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01")),
+                    MaxValueValidator(Decimal("100"))],
+        help_text="15 = 15% de descuento sobre el total.")
+    descripcion = models.CharField(
+        "Por qué", max_length=200, blank=True,
+        help_text="Convenio, empleado, cortesía de temporada…")
+    desde = models.DateField("Desde", default=timezone.localdate)
+    hasta = models.DateField(
+        "Hasta", null=True, blank=True,
+        help_text="Vacío = sin vencimiento.")
+    activo = models.BooleanField(default=True)
+    creado = models.DateTimeField(auto_now_add=True)
+
+    objects = DescuentoClienteQuerySet.as_manager()
+
+    class Meta:
+        verbose_name = "Descuento de cliente"
+        verbose_name_plural = "Descuentos de clientes"
+        ordering = ["-desde", "-id"]
+        indexes = [models.Index(fields=["activo", "desde", "hasta"])]
+
+    def __str__(self):
+        return f"{self.cliente.nombre_corto} · {self.porcentaje}%"
+
+    def esta_vigente(self, fecha=None):
+        fecha = fecha or timezone.localdate()
+        return (self.activo and self.desde <= fecha
+                and (self.hasta is None or self.hasta >= fecha))
+
+    @property
+    def estado(self):
+        """Para la pantalla: por qué no aplica, cuando no aplica.
+
+        Quién decide si aplica es `esta_vigente()`, y esto solo explica el «no».
+        Repetir aquí las tres comparaciones dejaría dos definiciones de vigente
+        que hay que mantener iguales a mano, y el día que una cambie la
+        pantalla diría «vigente» sobre un descuento que la caja ya no aplica.
+        """
+        if self.esta_vigente():
+            return "vigente"
+        hoy = timezone.localdate()
+        if not self.activo:
+            return "desactivado"
+        if self.desde > hoy:
+            return "programado"
+        return "vencido"
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PREMIOS

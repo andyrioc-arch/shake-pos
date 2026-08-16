@@ -4,8 +4,8 @@ from django.utils.safestring import mark_safe
 
 from .models import (
     Automatizacion, Campana, Canje, Cliente, Compra, ConfiguracionPrograma,
-    Mensaje, MovimientoPuntos, Nivel, PaseWallet, Plantilla, Premio,
-    PromocionPuntos,
+    DescuentoCliente, Mensaje, MovimientoPuntos, Nivel, PaseWallet, Plantilla,
+    Premio, PromocionPuntos,
 )
 
 
@@ -152,6 +152,16 @@ class CanjeAdmin(admin.ModelAdmin):
     search_fields = ("codigo", "cliente__telefono", "cliente__nombre")
     autocomplete_fields = ("cliente", "premio")
     readonly_fields = ("codigo", "creado", "puntos_usados")
+
+
+@admin.register(DescuentoCliente)
+class DescuentoClienteAdmin(admin.ModelAdmin):
+    list_display = ("cliente", "porcentaje", "descripcion", "desde", "hasta",
+                    "activo")
+    list_filter = ("activo", "desde")
+    search_fields = ("cliente__nombre", "cliente__telefono", "descripcion")
+    autocomplete_fields = ("cliente",)
+    list_editable = ("activo",)
 
 
 @admin.register(PromocionPuntos)

@@ -19,8 +19,9 @@ from inventario.models import Receta
 from inventario.views import _qr_svg
 from . import automatizaciones, mensajeria, metricas, servicios, wallet
 from .models import (
-    Automatizacion, Campana, Canje, Cliente, ConfiguracionPrograma, Mensaje,
-    Nivel, Plantilla, Premio, PromocionPuntos, TelefonoInvalido, resuelve_id,
+    Automatizacion, Campana, Canje, Cliente, ConfiguracionPrograma,
+    DescuentoCliente, Mensaje, Nivel, Plantilla, Premio, PromocionPuntos,
+    TelefonoInvalido, resuelve_id,
 )
 
 solo_super = user_passes_test(lambda u: u.is_superuser, login_url='/')
@@ -317,6 +318,7 @@ def buscar(request):
     if not cliente:
         return JsonResponse({"encontrado": False, "necesita_nombre": True})
     nivel = cliente.nivel
+    descuento = cliente.descuento_vigente
     return JsonResponse({
         "encontrado": True,
         "id": cliente.pk,
@@ -326,8 +328,99 @@ def buscar(request):
         "puntos": cliente.puntos_saldo,
         "nivel": str(nivel) if nivel else "",
         "premios": [p.nombre for p in cliente.premios_disponibles()],
+        # El descuento pactado, para que el mostrador no dependa de que alguien
+        # se acuerde. Va como número y como texto: el número lo aplica la caja,
+        # el texto lo lee el cajero.
+        "descuento": (str(descuento.porcentaje) if descuento else None),
+        "descuento_motivo": (descuento.descripcion if descuento else ""),
         "url": cliente.get_absolute_url(),
     })
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DESCUENTOS POR CLIENTE
+# ══════════════════════════════════════════════════════════════════════════════
+
+@login_required
+@solo_super
+def descuentos(request):
+    """Los descuentos pactados, con su vigencia. Solo el dueño: es dinero."""
+    filas = (DescuentoCliente.objects.select_related("cliente")
+             .order_by("-activo", "-desde", "-id"))
+    return render(request, "lealtad/descuentos.html", {
+        "active": "lealtad",
+        "seccion": "descuentos",
+        "descuentos": filas,
+        "vigentes": sum(1 for d in filas if d.estado == "vigente"),
+    })
+
+
+@require_POST
+@login_required
+@solo_super
+def descuento_guardar(request):
+    pk = request.POST.get("pk")
+    descuento = resuelve_id(DescuentoCliente, pk) if pk else DescuentoCliente()
+    if pk and not descuento:
+        messages.error(request, "Ese descuento ya no existe.")
+        return redirect("lealtad_descuentos")
+
+    # El cliente se busca por celular o código, igual que en la caja: es lo
+    # único que identifica a alguien sin ambigüedad.
+    if not descuento.pk:
+        cliente = servicios.buscar_cliente(request.POST.get("cliente"))
+        if not cliente:
+            messages.error(
+                request,
+                "No encontré a ese cliente. Búscalo por su celular o su "
+                "código, y si es nuevo dalo de alta primero.")
+            return redirect("lealtad_descuentos")
+        descuento.cliente = cliente
+
+    # `is_finite()` antes de comparar: `Decimal("NaN")` se construye sin
+    # quejarse y revienta con InvalidOperation en cuanto se compara con `<`,
+    # que sería un 500 en vez de este mensaje. Misma guarda que `api._monto`.
+    porcentaje = _decimal(request.POST.get("porcentaje"))
+    if porcentaje is not None and not porcentaje.is_finite():
+        porcentaje = None
+    if porcentaje is None or not (Decimal("0") < porcentaje <= Decimal("100")):
+        messages.error(request, "El descuento debe estar entre 0 y 100%.")
+        return redirect("lealtad_descuentos")
+
+    desde = _fecha(request.POST.get("desde")) or timezone.localdate()
+    hasta = _fecha(request.POST.get("hasta"))
+    # Una vigencia al revés no se guarda: el descuento se vería en la lista y
+    # no aplicaría nunca, que es la peor de las dos formas de fallar.
+    if hasta and hasta < desde:
+        messages.error(request, "La fecha de fin no puede ser antes de la de inicio.")
+        return redirect("lealtad_descuentos")
+
+    descuento.porcentaje = porcentaje
+    descuento.descripcion = request.POST.get("descripcion", "").strip()[:200]
+    descuento.desde = desde
+    descuento.hasta = hasta
+    descuento.activo = bool(request.POST.get("activo"))
+    descuento.save()
+
+    _log(request, descuento, CHANGE if pk else ADDITION,
+         "Editó un descuento" if pk else "Creó un descuento")
+    messages.success(
+        request,
+        f"Descuento de {descuento.porcentaje}% guardado para "
+        f"{descuento.cliente.nombre_corto}.")
+    return redirect("lealtad_descuentos")
+
+
+@require_POST
+@login_required
+@solo_super
+def descuento_eliminar(request, pk):
+    descuento = get_object_or_404(DescuentoCliente, pk=pk)
+    _log(request, descuento, DELETION, "Eliminó un descuento")
+    nombre = descuento.cliente.nombre_corto
+    descuento.delete()
+    messages.success(request, f"Descuento de {nombre} eliminado.")
+    return redirect("lealtad_descuentos")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
