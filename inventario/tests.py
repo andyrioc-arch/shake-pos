@@ -1181,3 +1181,135 @@ class LaNotaConDescuentoCuadraTests(TestCase):
                                  cantidad=1, descuento_pct=Decimal("10"), nota=nota)
         with self.assertNumQueries(9):
             self.client.get(nota.get_absolute_url())
+
+
+class CapturaDeComprasTests(TestCase):
+    """La captura que dejó 24 compras 1360 veces más baratas de lo real.
+
+    El error no se ve en el ticket del proveedor: se ve en el costo por unidad
+    de receta, y solo comparándolo contra la compra anterior.
+    """
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        self.andy = User.objects.create_superuser("andy", "a@x.mx", "x")
+        self.client.force_login(self.andy)
+        self.hoy = date.today()
+        # Una bolsa de 1360 g, como las blueberries de producción.
+        self.ing = Ingrediente.objects.create(
+            nombre="Blueberries", unidad_compra="bolsa",
+            cantidad_por_unidad=1360, unidad_receta="g",
+            costo_unidad_compra=Decimal("178.54"))
+
+    def _comprar(self, cantidad, monto="178.54"):
+        from django.urls import reverse
+        return self.client.post(reverse("inventario_compra_agregar"), {
+            "ingrediente": self.ing.pk, "cantidad": cantidad,
+            "costo_total": monto, "fecha": self.hoy.isoformat(),
+        }, follow=True)
+
+    def _avisos(self, resp):
+        return [str(m) for m in resp.context["messages"]]
+
+    # ── La capa ─────────────────────────────────────────────────────────────
+    def test_un_paquete_deja_la_capa_del_tamaño_del_paquete(self):
+        self._comprar("1")
+        compra = Compra.objects.get()
+        self.assertEqual(compra.cantidad_receta, Decimal("1360.0000"))
+        self.assertEqual(compra.saldo_receta, Decimal("1360.0000"))
+        self.assertEqual(
+            compra.costo_unitario_capa.quantize(Decimal("0.0001")),
+            Decimal("0.1313"))
+
+    def test_el_aviso_dice_en_qué_se_convirtió(self):
+        """El mensaje trae el costo por gramo, no solo lo que se pagó."""
+        resp = self._comprar("1")
+        self.assertTrue(any("por g" in m and "1,360 g" in m
+                            for m in self._avisos(resp)))
+
+    # ── La red de atrás ─────────────────────────────────────────────────────
+    def test_la_primera_compra_no_tiene_con_qué_compararse(self):
+        resp = self._comprar("1")
+        self.assertFalse(any("Ojo" in m for m in self._avisos(resp)))
+
+    def test_capturar_gramos_en_vez_de_paquetes_dispara_el_aviso(self):
+        """El error real de agosto: 1360 donde iba 1."""
+        self._comprar("1")
+        resp = self._comprar("1360")
+        avisos = self._avisos(resp)
+        self.assertTrue(any("Ojo" in m and "más barato" in m for m in avisos))
+        self.assertTrue(any("número de paquetes" in m for m in avisos))
+
+    def test_el_aviso_no_llama_anterior_a_una_compra_posterior(self):
+        """Capturar la factura atrasada es un flujo normal aquí.
+
+        La referencia sigue siendo el precio más reciente —es la mejor vara—
+        pero llamarla «la anterior» sería mentir en el único mensaje que
+        existe para cazar un error de captura.
+        """
+        from datetime import timedelta
+        from django.urls import reverse
+        self._comprar("1")                       # la de hoy
+        resp = self.client.post(reverse("inventario_compra_agregar"), {
+            "ingrediente": self.ing.pk, "cantidad": "1360",
+            "costo_total": "178.54",
+            "fecha": (self.hoy - timedelta(days=7)).isoformat(),
+        }, follow=True)                          # la factura atrasada
+        avisos = self._avisos(resp)
+        self.assertTrue(any("Ojo" in m for m in avisos))
+        self.assertFalse(any("compra anterior" in m for m in avisos))
+        self.assertTrue(any("más reciente" in m and
+                            self.hoy.strftime("%d/%m/%Y") in m
+                            for m in avisos))
+
+    def test_tambien_avisa_al_revés(self):
+        """Capturar 1 donde iban 1360 deja la capa carísima."""
+        self._comprar("1360")
+        resp = self._comprar("1")
+        self.assertTrue(any("Ojo" in m and "más caro" in m
+                            for m in self._avisos(resp)))
+
+    def test_una_subida_de_precio_normal_no_hace_ruido(self):
+        """Un proveedor que sube 30% no puede generar un aviso.
+
+        Si avisa por todo, se aprende a ignorarlo y deja de servir.
+        """
+        self._comprar("1", "178.54")
+        resp = self._comprar("1", "232.10")
+        self.assertFalse(any("Ojo" in m for m in self._avisos(resp)))
+
+    def test_el_aviso_no_impide_registrar_la_compra(self):
+        """Un precio puede subir de verdad; negarse sería peor."""
+        self._comprar("1")
+        self._comprar("1360")
+        self.assertEqual(Compra.objects.count(), 2)
+
+    def test_la_compra_anterior_es_la_mas_reciente_no_la_primera(self):
+        """Se compara contra la última, no contra la primera del histórico."""
+        from datetime import timedelta
+        from django.urls import reverse
+        self._comprar("1")
+        self.client.post(reverse("inventario_compra_agregar"), {
+            "ingrediente": self.ing.pk, "cantidad": "1",
+            "costo_total": "180.00",
+            "fecha": (self.hoy + timedelta(days=1)).isoformat()})
+        resp = self._comprar("1", "179.00")
+        self.assertFalse(any("Ojo" in m for m in self._avisos(resp)))
+
+    # ── Lo que la pantalla necesita ────────────────────────────────────────
+    def test_el_panel_publica_la_referencia_de_cada_ingrediente(self):
+        from django.urls import reverse
+        self._comprar("1")
+        resp = self.client.get(reverse("panel_inventario"))
+        self.assertIn(self.ing.pk, resp.context["referencias_compra"])
+        self.assertAlmostEqual(
+            resp.context["referencias_compra"][self.ing.pk], 0.13128, places=4)
+
+    def test_el_cajero_no_recibe_las_referencias(self):
+        """Son costos: misma puerta que el resto del dinero."""
+        from django.contrib.auth.models import User
+        from django.urls import reverse
+        User.objects.create_user("caja", "c@x.mx", "x", is_staff=True)
+        self.client.login(username="caja", password="x")
+        resp = self.client.get(reverse("panel_inventario"))
+        self.assertEqual(resp.context["referencias_compra"], {})
