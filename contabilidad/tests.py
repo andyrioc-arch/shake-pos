@@ -706,3 +706,65 @@ class JerarquiaDeCuentasTests(TestCase):
         self.assertEqual(filas["↳ Cortesías y promociones"], 50)
         self.assertEqual(filas["Total mercadotecnia"], 350)
         self.assertEqual(filas["Total gastos operativos"], 350)
+
+
+class PeriodoFueraDeRangoTests(TestCase):
+    """Un periodo imposible en la URL no puede tumbar la pantalla.
+
+    El mes viajaba entero hasta el diccionario que le pone nombre (KeyError) y
+    el año hasta la fecha con que se consulta el periodo (ValueError). Un mes
+    de diez cifras ni siquiera llegaba tan lejos: `_shift` normaliza de doce en
+    doce, así que quemaba la petición contando antes de reventar.
+    """
+
+    MALOS = [
+        ("mes cero", 2026, 0),
+        ("mes trece", 2026, 13),
+        ("mes negativo", 2026, -1),
+        ("anio cero", 0, 6),
+        ("anio de cinco cifras", 99999, 6),
+        ("anio de veinte cifras", 10 ** 20, 6),
+        ("mes de diez cifras", 2026, 10 ** 9),
+    ]
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        posting.crear_catalogo()
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+    def test_la_pantalla_aguanta(self):
+        for caso, anio, mes in self.MALOS:
+            with self.subTest(caso=caso):
+                resp = self.client.get(f"/contabilidad/?anio={anio}&mes={mes}")
+                self.assertEqual(resp.status_code, 200)
+
+    def test_las_cuatro_descargas_aguantan(self):
+        from django.urls import reverse
+        for reporte in ("resultados", "balance", "flujo", "balanza"):
+            for caso, anio, mes in self.MALOS:
+                with self.subTest(reporte=reporte, caso=caso):
+                    url = reverse("exportar_estado", args=[reporte])
+                    resp = self.client.get(f"{url}?anio={anio}&mes={mes}")
+                    self.assertEqual(resp.status_code, 200)
+
+    def test_un_periodo_bueno_si_se_respeta(self):
+        resp = self.client.get("/contabilidad/?anio=2026&mes=8")
+        self.assertContains(resp, "Agosto 2026")
+
+    def test_un_periodo_viejo_del_desplegable_si_se_honra(self):
+        """El desplegable no puede ofrecer un mes que la pantalla luego cambie.
+
+        La lista de periodos sale de las fechas de los asientos, y `gasto_registrar`
+        acepta cualquier fecha. Si la lectura se acotara al rango del negocio,
+        elegir «Mayo 2019» devolvería agosto sin decir por qué.
+        """
+        for fecha in ("2019-05-10", "2026-08-10"):
+            self.client.post("/contabilidad/gasto/registrar/", {
+                "fecha": fecha, "categoria": "renta",
+                "descripcion": "Renta", "monto": "100"})
+
+        resp = self.client.get("/contabilidad/?anio=2019&mes=5")
+        self.assertIn((2019, 5),
+                      [(p["anio"], p["mes"]) for p in resp.context["periodos"]])
+        self.assertEqual((resp.context["anio"], resp.context["mes"]), (2019, 5))

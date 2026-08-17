@@ -8,6 +8,7 @@ from django.db.models import Sum
 from inventario.models import Venta, Compra, Receta
 from contabilidad import posting as cont
 from contabilidad.models import Cuenta, Movimiento
+from presupuesto.models import periodo_consultable
 from .models import (
     CostoFijo, InversionInicial, MovimientoEfectivo, PronosticoFlujoCuenta, MESES,
 )
@@ -89,7 +90,11 @@ def periodos_flujo():
     s = set(cont.periodos_disponibles())
     for p in PronosticoFlujoCuenta.objects.values_list("anio", "mes"):
         s.add(p)
-    return sorted(s, reverse=True)
+    # Un pronóstico guardado antes de que la captura validara el mes se omite
+    # en vez de tumbar el panel: esta lista es la que le da su nombre a cada
+    # periodo, y también el periodo por omisión cuando no hay querystring. Los
+    # periodos que vienen de asientos reales pasan aunque sean de años viejos.
+    return sorted((p for p in s if periodo_consultable(*p)), reverse=True)
 
 
 def inversion_desglose():

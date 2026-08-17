@@ -10,7 +10,7 @@ from django.views.decorators.http import require_POST
 
 from decimal import Decimal, InvalidOperation
 
-from presupuesto.models import MESES
+from presupuesto.models import MESES, periodo_consultable
 from . import export, posting
 from .models import Movimiento, CategoriaGasto
 
@@ -33,14 +33,26 @@ def _shift(anio, mes, delta):
 
 
 def _periodo(request):
+    # Un periodo que no se pueda ni nombrar se trata igual que uno ausente: se
+    # cae al que se muestra por omisión. Acotarlo aquí, y no en cada uso,
+    # protege a la vez el nombre del mes, la fecha con que se consulta y el
+    # bucle de `_shift`, que avanza de doce en doce.
+    #
+    # El rango es el ancho a propósito: el desplegable de periodos se arma con
+    # las fechas de los asientos, así que negarse a mostrar un año viejo dejaría
+    # una opción en pantalla que la pantalla misma se niega a honrar.
     try:
-        return int(request.GET["anio"]), int(request.GET["mes"])
+        anio, mes = int(request.GET["anio"]), int(request.GET["mes"])
     except (KeyError, TypeError, ValueError):
-        periodos = posting.periodos_disponibles()
-        if periodos:
-            return periodos[0]
-        hoy = localdate()
-        return hoy.year, hoy.month
+        pass
+    else:
+        if periodo_consultable(anio, mes):
+            return anio, mes
+    periodos = posting.periodos_disponibles()
+    if periodos:
+        return periodos[0]
+    hoy = localdate()
+    return hoy.year, hoy.month
 
 
 @login_required
