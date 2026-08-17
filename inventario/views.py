@@ -611,28 +611,83 @@ def _crear_producto(p, fecha, metodo="efectivo", es_cortesia=False,
 def compra_agregar(request):
     """Registra una compra de stock. Solo superusuario (expone costos).
 
-    Se guarda tal cual lo que se pagó: la unidad comprada y el monto total. El
-    costo unitario ya no se deriva ni se guarda, y la compra NO toca el costo
-    del catálogo: ése es un estimado para calcular márgenes aproximados, y el
-    costo real de cada venta sale de las compras por FIFO.
+    Se guarda tal cual lo que se pagó: cuántos paquetes, de qué tamaño, y el
+    monto total. El costo unitario ni se deriva ni se guarda.
+
+    La compra NO toca el COSTO del catálogo —ése es un estimado para márgenes
+    aproximados, y el costo real de cada venta sale de las compras por FIFO—
+    pero sí pone al día el TAMAÑO del paquete, que es un hecho de esta compra y
+    cambia de una a otra. Son dos campos distintos y solo se mueve el segundo.
     """
     ingrediente = Ingrediente.objects.filter(pk=request.POST.get("ingrediente")).first()
     cantidad = _to_decimal(request.POST.get("cantidad"), permite_cero=False)
     costo_total = _to_decimal(request.POST.get("costo_total"))
     fecha = _fecha(request.POST.get("fecha"))
 
+    # El contenido del paquete es opcional a propósito: la pantalla siempre lo
+    # manda, pero el admin, el seed y la API no lo conocen. Ausente significa
+    # «la presentación de siempre»; presente pero imposible sí es un error, o
+    # un cero silencioso dejaría la capa sin nada dentro.
+    crudo_contenido = (request.POST.get("contenido_paquete") or "").strip()
+    contenido = (_to_decimal(crudo_contenido, permite_cero=False)
+                 if crudo_contenido else None)
+
     if not ingrediente:
         messages.error(request, "Selecciona un ingrediente válido.")
     elif cantidad is None:
         messages.error(request, "La cantidad comprada debe ser mayor a 0.")
+    elif crudo_contenido and (
+            contenido is None
+            # La columna guarda dos decimales, así que 0.004 pasaría el «mayor
+            # a 0» y se guardaría como 0.00: el cero silencioso que deja la
+            # capa sin nada dentro y ninguna venta costeable.
+            or contenido.quantize(Decimal("0.01")) <= 0):
+        messages.error(
+            request, "El contenido de cada paquete debe ser mayor a 0.")
     elif costo_total is None:
         messages.error(request, "El costo total ($) es inválido.")
     else:
-        compra = Compra.objects.create(
-            fecha=fecha, ingrediente=ingrediente, cantidad=cantidad,
-            monto_total=costo_total,
-            proveedor=request.POST.get("proveedor", "").strip(),
-        )
+        # La presentación se captura en cada compra, porque cambia: la misma
+        # crema de cacahuate viene de 790 g esta semana y de 1 kg la siguiente.
+        # Si cambió, el catálogo se pone al día para que la próxima captura ya
+        # lo proponga bien.
+        #
+        # Se toca el TAMAÑO del paquete y nada más. El costo del catálogo sigue
+        # sin tocarse: es un aproximado para márgenes, y el costo real de cada
+        # venta sale de las compras por FIFO. Ésa es la regla de Andy.
+        anterior = ingrediente.cantidad_por_unidad
+        # Un empaque cambia de 790 g a 1 kg, no de 1,360 g a 3. Un salto así no
+        # es un cambio de presentación: son los dos campos invertidos, y ése es
+        # el único error que la previsualización NO puede ver, porque mide
+        # costo ÷ (paquetes × contenido) y el producto no cambia al voltearlos.
+        # La capa sale perfecta, la alarma calla y el verificador sale sano.
+        # Lo único que sí se mueve es el tamaño, así que es lo que se vigila.
+        presentacion_cambio = (
+            contenido is not None
+            and contenido != anterior
+            and _presentacion_plausible(contenido, anterior))
+        presentacion_rara = (
+            contenido is not None
+            and contenido != anterior
+            and not presentacion_cambio)
+        # Juntas o ninguna: si la compra falla después de mover el catálogo, la
+        # presentación se queda cambiada sin que exista la compra que lo
+        # justificaba, y la siguiente captura propondría un tamaño inventado.
+        # La capa se congela con lo que se capturó, cambie o no el catálogo.
+        # Así el tamaño de esta compra no depende de si el catálogo aceptó el
+        # valor nuevo, y el orden de las dos escrituras deja de importar.
+        contenido_efectivo = contenido if contenido is not None else anterior
+        with transaction.atomic():
+            if presentacion_cambio:
+                ingrediente.cantidad_por_unidad = contenido
+                ingrediente.save(update_fields=["cantidad_por_unidad"])
+
+            compra = Compra.objects.create(
+                fecha=fecha, ingrediente=ingrediente, cantidad=cantidad,
+                cantidad_receta=cantidad * contenido_efectivo,
+                monto_total=costo_total,
+                proveedor=request.POST.get("proveedor", "").strip(),
+            )
         # El recosteo de las ventas que esta capa puede surtir lo dispara la
         # señal de Compra, para que valga igual desde el admin o el shell.
         _log(request, compra, ADDITION, "Registró compra de stock")
@@ -642,10 +697,49 @@ def compra_agregar(request):
             f"{ingrediente.unidad_receta} de {ingrediente} a "
             f"${compra.costo_unitario_capa:,.4f} por "
             f"{ingrediente.unidad_receta} (${costo_total:,.2f} en total).")
+        if presentacion_cambio:
+            # Se dice, no se hace callado: cambiar la presentación mueve el
+            # costo estimado del catálogo, que es lo que leen el panel y la
+            # alarma de margen. Las compras de antes no se mueven: cada una
+            # congeló lo suyo.
+            messages.info(
+                request,
+                f"{ingrediente} pasó de {_cantidad(anterior)} a "
+                f"{_cantidad(contenido)} {ingrediente.unidad_receta} por "
+                f"{ingrediente.unidad_compra}. La próxima compra ya lo "
+                f"propone así.")
+        elif presentacion_rara:
+            messages.warning(
+                request,
+                f"Guardé la compra pero NO cambié la presentación: pasar de "
+                f"{_cantidad(anterior)} a {_cantidad(contenido)} "
+                f"{ingrediente.unidad_receta} por "
+                f"{ingrediente.unidad_compra} no parece un empaque distinto, "
+                f"sino los dos campos al revés. Si de verdad cambió, ajústalo "
+                f"en el catálogo del ingrediente.")
         aviso = _capa_fuera_de_rango(compra)
         if aviso:
             messages.warning(request, aviso)
     return redirect("panel_inventario")
+
+
+# Cuánto puede cambiar el tamaño de un empaque antes de que deje de parecer un
+# empaque distinto. Diez es holgado: de un frasco de 250 g a un cubetón de 2 kg
+# van 8 veces. Invertir los campos se equivoca por factores de cientos.
+FACTOR_PRESENTACION = 10
+
+
+def _presentacion_plausible(nuevo, anterior):
+    """¿El tamaño nuevo puede ser otro empaque, o son los campos al revés?"""
+    if not anterior or anterior <= 0:
+        return True          # sin referencia no hay nada contra qué dudar
+    mayor, menor = max(nuevo, anterior), min(nuevo, anterior)
+    return mayor <= menor * FACTOR_PRESENTACION
+
+
+def _cantidad(d):
+    """Entera si lo es, con decimales si no. Un aviso que redondea, miente."""
+    return f"{d:,.0f}" if d == d.to_integral_value() else f"{d:,.2f}"
 
 
 # Cuántas veces se puede alejar una compra del precio anterior antes de avisar.

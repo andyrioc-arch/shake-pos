@@ -84,10 +84,20 @@ class Ingrediente(models.Model):
 
     @property
     def total_comprado(self):
-        """Total comprado en unidades de receta."""
-        agg = self.compras.aggregate(total=models.Sum("cantidad"))
-        comprado = agg["total"] or Decimal("0")
-        return comprado * self.cantidad_por_unidad
+        """Total comprado en unidades de receta.
+
+        Suma lo que cada compra CONGELÓ, no el número de paquetes por el tamaño
+        de hoy. Es la misma razón por la que existe `Compra.cantidad_receta`:
+        corregir la presentación de un ingrediente no puede cambiar lo que
+        trajeron las compras de antes. Recalculándolo, cambiar el catálogo de
+        790 a 1000 g reescribía el stock de todo el histórico hacia atrás,
+        mientras cada capa seguía diciendo 790.
+
+        No hace falta prever capas sin congelar: `cantidad_receta` es NOT NULL
+        desde `0011_la_compra_sin_huecos`, así que toda compra trae su dato.
+        """
+        agg = self.compras.aggregate(total=models.Sum("cantidad_receta"))
+        return agg["total"] or Decimal("0")
 
     @property
     def total_consumido(self):

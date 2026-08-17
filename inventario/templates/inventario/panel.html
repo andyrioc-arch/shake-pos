@@ -333,16 +333,24 @@
           {% endcomment %}
           <div><label id="compra-cant-label">Cantidad comprada</label>
             <input type="number" name="cantidad" id="compra-cant" step="0.01" min="0.01" placeholder="1" required></div>
+          {% comment %}
+            Sin `required`: lo llena el JS, y si el script no corriera el
+            navegador bloquearía el envío de un campo que el usuario no sabe
+            qué lleva. La vista ya trata el campo ausente como «la presentación
+            de siempre».
+          {% endcomment %}
+          <div><label id="compra-cpu-label">Contenido de cada paquete</label>
+            <input type="number" name="contenido_paquete" id="compra-cpu" step="0.01" min="0.01"></div>
+        </div>
+        <div class="row2">
           <div><label>Costo total ($)</label>
             <input type="number" name="costo_total" id="compra-total" step="0.01" min="0" placeholder="0.00" required></div>
-        </div>
-        <div class="costo-unit" id="compra-unit">Elige un ingrediente para ver cómo queda.</div>
-        <div class="row2">
           <div><label>Proveedor — opcional</label>
             <input type="text" name="proveedor" placeholder="Proveedor"></div>
-          <div><label>Fecha</label>
-            <input type="date" name="fecha" value="{{ hoy }}"></div>
         </div>
+        <div class="costo-unit" id="compra-unit">Elige un ingrediente para ver cómo queda.</div>
+        <div><label>Fecha</label>
+          <input type="date" name="fecha" value="{{ hoy }}"></div>
         <button class="btn-reg compra" type="submit">Registrar compra</button>
       </div>
     </form>
@@ -770,6 +778,8 @@
     const total = document.getElementById("compra-total");
     const out = document.getElementById("compra-unit");
     const etiqueta = document.getElementById("compra-cant-label");
+    const cpuIn = document.getElementById("compra-cpu");
+    const cpuLabel = document.getElementById("compra-cpu-label");
     if (!ing || !out) return;
     const nodo = document.getElementById("referencias-data");
     const REF = nodo ? JSON.parse(nodo.textContent) : {};
@@ -785,26 +795,52 @@
     // precio bueno de la leche y uno mil veces menor se ven igual, "$0.00".
     const porUnidad = function (n) { return dinero(n, n < 1 ? 4 : 2); };
 
+    // «¿Cuántos frasco compraste?» se lee mal. Se pluraliza solo lo que acaba
+    // en vocal —frasco, caja, pieza, litro— y se dejan quietas las
+    // abreviaturas, que no llevan plural: kg, g, ml.
+    const plural = function (u) {
+      return /[aeiou]$/i.test(u) ? u + "s" : u;
+    };
+
+    // Al elegir ingrediente se propone la presentación del catálogo, que es la
+    // de la última compra. Se propone, no se impone: si esta vez vino de 1 kg,
+    // Andy escribe 1000 aquí y no tiene que ir a editar el ingrediente.
+    function proponerPresentacion() {
+      const opt = ing.options[ing.selectedIndex];
+      const cpu = opt ? (opt.dataset.cpu || "") : "";
+      cpuIn.value = parseFloat(cpu) > 0 ? String(parseFloat(cpu)) : "";
+    }
+
     function calc() {
       const opt = ing.options[ing.selectedIndex];
-      const cpu = opt ? parseFloat(opt.dataset.cpu || "0") : 0;
+      const cpu = parseFloat(cpuIn.value || "0");
       const ur = opt ? (opt.dataset.ur || "unidad") : "unidad";
       const unidad = opt ? (opt.dataset.unidad || "unidad") : "unidad";
 
-      // Cuando el paquete es de una sola unidad de receta, decir «¿cuántos de
-      // 1 pz (pz)?» estorba más de lo que aclara: ahí no hay ambigüedad que
-      // deshacer.
+      // La pregunta repite EN VIVO el contenido que se acaba de teclear. Si
+      // los dos campos se capturan al revés, la pregunta se lee absurda
+      // —«¿cuántas bolsas de 3 g compraste?»— y ése es el único error que la
+      // comparación de costos no puede ver, porque no mueve el costo por
+      // unidad de receta.
       etiqueta.textContent =
-        cpu > 1 ? "¿Cuántos paquetes de " + numero(cpu) + " " + ur + " compraste?"
-        : cpu > 0 ? "¿Cuántos " + unidad + " compraste?"
-        : "Cantidad comprada";
+        !(opt && opt.value) ? "Cantidad comprada"
+        : cpu > 0 ? "¿Cuántos " + plural(unidad) + " de " + numero(cpu) + " " +
+                    ur + " compraste?"
+        : "¿Cuántos " + plural(unidad) + " compraste?";
+      cpuLabel.textContent =
+        opt && opt.value ? "Contenido de cada " + unidad + " (" + ur + ")"
+        : "Contenido de cada paquete";
 
       const c = parseFloat(cant.value || "0");
       const t = parseFloat(total.value || "0");
-      if (!(opt && opt.value) || !(c > 0) || !(t > 0)) {
+      // `cpu > 0` también: el contenido lo teclea el usuario y queda vacío
+      // medio segundo cada vez que borra el valor propuesto. Sin esta guarda
+      // se dividía entre cero y el recuadro enseñaba «$∞ por g» con la alarma
+      // encendida — una alarma falsa en el único sitio que da las verdaderas.
+      if (!(opt && opt.value) || !(c > 0) || !(t > 0) || !(cpu > 0)) {
         out.className = "costo-unit";
         out.textContent = opt && opt.value
-          ? "Captura cantidad y costo para ver cómo queda."
+          ? "Captura cantidad, contenido y costo para ver cómo queda."
           : "Elige un ingrediente para ver cómo queda.";
         return;
       }
@@ -838,9 +874,14 @@
       out.className = clase;
       out.innerHTML = html;
     }
-    [ing, cant, total].forEach(function (el) {
-      el.addEventListener("input", calc); el.addEventListener("change", calc);
+    // El `change` del ingrediente propone la presentación ANTES de calcular;
+    // teclear en cualquier campo solo recalcula, para no pisar lo que Andy
+    // acaba de escribir en el contenido.
+    ing.addEventListener("change", function () { proponerPresentacion(); calc(); });
+    [ing, cant, total, cpuIn].forEach(function (el) {
+      el.addEventListener("input", calc);
     });
+    proponerPresentacion();
     calc();
   })();
 

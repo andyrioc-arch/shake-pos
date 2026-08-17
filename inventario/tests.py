@@ -1548,3 +1548,143 @@ class MermaSinConsultaPorIngredienteTests(TestCase):
         self.assertEqual(ing.merma_total, Decimal("250"))
         self.assertEqual(
             Ingrediente.mermas_por_ingrediente()[ing.pk], Decimal("250"))
+
+
+class PresentacionEnLaCompraTests(TestCase):
+    """El tamaño del paquete se captura en cada compra, no se va a editar aparte.
+
+    Andy compra la misma crema de cacahuate de 790 g esta semana y de 1 kg la
+    siguiente. Antes había que ir a editar el ingrediente, y como no se hacía,
+    la capa quedaba con el tamaño equivocado.
+    """
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+        self.ing = Ingrediente.objects.create(
+            nombre="Crema de cacahuate", unidad_compra="frasco",
+            cantidad_por_unidad=Decimal("790"), unidad_receta="g",
+            costo_unidad_compra=Decimal("100.00"))
+
+    def _comprar(self, cantidad, costo, **extra):
+        from django.urls import reverse
+        datos = {"ingrediente": self.ing.pk, "cantidad": cantidad,
+                 "costo_total": costo, "fecha": date(2026, 8, 16).isoformat()}
+        datos.update(extra)
+        resp = self.client.post(reverse("inventario_compra_agregar"), datos,
+                                follow=True)
+        return resp
+
+    def test_el_contenido_capturado_manda_sobre_el_catalogo(self):
+        self._comprar("1", "250", contenido_paquete="1000")
+        compra = Compra.objects.latest("id")
+        self.assertEqual(compra.cantidad_receta, Decimal("1000"))
+
+    def test_el_catalogo_se_pone_al_dia(self):
+        self._comprar("1", "250", contenido_paquete="1000")
+        self.ing.refresh_from_db()
+        self.assertEqual(self.ing.cantidad_por_unidad, Decimal("1000"))
+
+    def test_el_costo_del_catalogo_sigue_sin_tocarse(self):
+        """La regla de Andy: el catálogo es un aproximado y no entra a contabilidad.
+
+        Se mueve el tamaño del paquete, que es un hecho de la compra. El costo
+        no, aunque el costo por unidad de receta cambie como consecuencia.
+        """
+        self._comprar("1", "250", contenido_paquete="1000")
+        self.ing.refresh_from_db()
+        self.assertEqual(self.ing.costo_unidad_compra, Decimal("100.00"))
+
+    def test_una_compra_vieja_no_se_mueve_al_cambiar_la_presentacion(self):
+        """Cada capa congela lo suyo. Es la regla que sostiene el costeo FIFO."""
+        self._comprar("1", "200")                       # 790 g, la de siempre
+        vieja = Compra.objects.latest("id")
+        self._comprar("1", "250", contenido_paquete="1000")
+
+        vieja.refresh_from_db()
+        self.assertEqual(vieja.cantidad_receta, Decimal("790"))
+        # Y el stock total suma lo congelado, no los paquetes por el tamaño de
+        # hoy: 790 + 1000, no 2 × 1000.
+        self.assertEqual(self.ing.total_comprado, Decimal("1790"))
+
+    def test_sin_contenido_se_usa_la_presentacion_de_siempre(self):
+        """El admin, el seed y la API no mandan el campo; no pueden romperse."""
+        self._comprar("2", "200")
+        self.assertEqual(Compra.objects.latest("id").cantidad_receta,
+                         Decimal("1580"))
+        self.ing.refresh_from_db()
+        self.assertEqual(self.ing.cantidad_por_unidad, Decimal("790"))
+
+    def test_un_contenido_imposible_se_rechaza(self):
+        for malo in ("0", "-5", "abc", "NaN", "Infinity"):
+            with self.subTest(contenido=malo):
+                antes = Compra.objects.count()
+                resp = self._comprar("1", "200", contenido_paquete=malo)
+                self.assertEqual(Compra.objects.count(), antes)
+                self.assertEqual(resp.status_code, 200)
+
+    def test_el_cambio_de_presentacion_se_avisa(self):
+        resp = self._comprar("1", "250", contenido_paquete="1000")
+        avisos = [str(m) for m in resp.context["messages"]]
+        self.assertTrue(any("790" in a and "1,000" in a for a in avisos), avisos)
+
+    def test_si_la_compra_falla_el_catalogo_no_se_queda_cambiado(self):
+        """Juntas o ninguna: un catálogo movido sin su compra propone un tamaño
+        que nadie compró."""
+        from unittest.mock import patch
+        with patch("inventario.views.Compra.objects.create",
+                   side_effect=RuntimeError("truena al guardar")):
+            with self.assertRaises(RuntimeError):
+                self._comprar("1", "250", contenido_paquete="1000")
+
+        self.ing.refresh_from_db()
+        self.assertEqual(self.ing.cantidad_por_unidad, Decimal("790"))
+
+    def test_los_campos_al_reves_no_envenenan_el_catalogo(self):
+        """El error que NINGUNA comparación de costos puede ver.
+
+        La previsualización mide costo ÷ (paquetes × contenido), y ese cociente
+        no cambia al voltear los dos campos: la capa sale perfecta, la alarma
+        calla y `recostear --verificar` sale sano. Lo único que se mueve es el
+        tamaño del paquete, así que es lo que se vigila.
+        """
+        # 3 frascos de 790 g, capturados al revés: 790 frascos de 3 g.
+        resp = self._comprar("790", "300", contenido_paquete="3")
+
+        self.ing.refresh_from_db()
+        self.assertEqual(self.ing.cantidad_por_unidad, Decimal("790"))
+
+        avisos = [str(m) for m in resp.context["messages"]]
+        self.assertTrue(any("al revés" in a for a in avisos), avisos)
+
+    def test_la_capa_se_congela_con_lo_capturado_aunque_el_catalogo_no_cambie(self):
+        """Rechazar la presentación no puede falsear lo que trajo la compra."""
+        self._comprar("790", "300", contenido_paquete="3")
+        self.assertEqual(Compra.objects.latest("id").cantidad_receta,
+                         Decimal("2370"))          # 790 × 3, lo capturado
+
+    def test_un_cambio_de_empaque_creible_si_pasa(self):
+        """790 g a 1 kg es un empaque distinto; 790 g a 3 no lo es."""
+        self._comprar("1", "250", contenido_paquete="1000")
+        self.ing.refresh_from_db()
+        self.assertEqual(self.ing.cantidad_por_unidad, Decimal("1000"))
+
+    def test_un_contenido_que_se_redondea_a_cero_se_rechaza(self):
+        """La columna guarda dos decimales: 0.004 pasaría el «mayor a 0».
+
+        Y un catálogo en cero deja toda compra futura como capa vacía, así que
+        ninguna venta de ese ingrediente se vuelve a poder costear.
+        """
+        antes = Compra.objects.count()
+        self._comprar("1", "200", contenido_paquete="0.004")
+        self.assertEqual(Compra.objects.count(), antes)
+        self.ing.refresh_from_db()
+        self.assertEqual(self.ing.cantidad_por_unidad, Decimal("790"))
+
+    def test_el_aviso_no_redondea_una_presentacion_fraccionaria(self):
+        self.ing.cantidad_por_unidad = Decimal("0.50")
+        self.ing.save(update_fields=["cantidad_por_unidad"])
+        resp = self._comprar("1", "10", contenido_paquete="1.5")
+        avisos = [str(m) for m in resp.context["messages"]]
+        self.assertTrue(any("0.50" in a and "1.50" in a for a in avisos), avisos)
