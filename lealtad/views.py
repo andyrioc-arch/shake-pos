@@ -357,7 +357,11 @@ def buscar(request):
     porcentaje para cobrar bien. Cerrar esta puerta rompe el cobro, así que se
     queda abierta y se deja anotado por qué.
     """
-    cliente = servicios.buscar_cliente(request.GET.get("q"))
+    # Por `id` cuando la caja lo eligió de la lista, por `q` cuando se tecleó
+    # el celular o el código. Las dos vías desembocan en el mismo cliente y en
+    # la misma respuesta, así que la pantalla solo tiene una cosa que pintar.
+    cliente = (resuelve_id(Cliente, request.GET.get("id"))
+               or servicios.buscar_cliente(request.GET.get("q")))
     if not cliente:
         return JsonResponse({"encontrado": False, "necesita_nombre": True})
     nivel = cliente.nivel

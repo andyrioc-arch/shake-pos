@@ -1,0 +1,132 @@
+{% comment %}
+  Buscador de clientes por nombre, compartido por la pantalla de descuentos y
+  la caja. Se teclea el nombre, que es lo que uno recuerda, y lo que queda
+  guardado es el cliente concreto que se eligió: el nombre no identifica a
+  nadie —hay tres Juanes— y el celular sí, pero nadie se lo sabe de memoria.
+
+  Se incluye una sola vez por página. Se engancha solo a los campos con
+  `data-buscador-cliente`, y cada pantalla decide qué hacer al elegir
+  escuchando el evento `cliente-elegido`.
+
+  Atributos que espera en el input:
+    data-buscador-cliente  — presencia basta
+    data-destino           — id del <input hidden> donde deja el id del cliente
+    data-lista             — id del <ul> donde pinta las sugerencias
+    data-vacio             — qué decir cuando no hay nadie con ese nombre
+{% endcomment %}
+<style>
+  .campo.buscador, .buscador-cliente { position:relative; }
+  ul.sugerencias { position:absolute; top:100%; left:0; z-index:30; margin:2px 0 0;
+         padding:0; list-style:none; width:min(300px, 92vw); max-height:230px;
+         overflow-y:auto; background:#fff; border:2px solid #000;
+         border-radius:8px; box-shadow:3px 3px 0 #000; }
+  ul.sugerencias li { padding:8px 11px; cursor:pointer; font-size:13px;
+         border-bottom:1px solid #eee; }
+  ul.sugerencias li:last-child { border-bottom:0; }
+  ul.sugerencias li:hover, ul.sugerencias li.marcada { background:#ffd900; }
+  ul.sugerencias li .quien { font-weight:700; }
+  /* El celular y el código van en cada renglón porque son lo único que
+     distingue a dos clientes con el mismo nombre. */
+  ul.sugerencias li .cual { color:#666; font-size:12px; }
+  ul.sugerencias li.nada { color:#777; cursor:default; }
+  ul.sugerencias li.nada:hover { background:#fff; }
+</style>
+<script>
+  (function () {
+    const URL_SUGERENCIAS = "{% url 'lealtad_clientes_sugerencias' %}";
+
+    document.querySelectorAll("[data-buscador-cliente]").forEach(function (caja) {
+      const oculto = document.getElementById(caja.dataset.destino);
+      const lista = document.getElementById(caja.dataset.lista);
+      if (!oculto || !lista) return;
+      const vacio = caja.dataset.vacio || "Nadie con ese nombre.";
+
+      let consulta = 0;        // descarta respuestas rezagadas que llegan tarde
+      let temporizador = null;
+      let marcada = -1;
+
+      function cerrar() { lista.hidden = true; lista.innerHTML = ""; marcada = -1; }
+
+      // Escribir invalida al cliente ya elegido: si no se vuelve a elegir de
+      // la lista, el formulario viaja sin id. Nunca se queda con un id que no
+      // corresponde a lo que se está leyendo en pantalla.
+      function olvidar() { oculto.value = ""; }
+
+      function elegir(c) {
+        oculto.value = c.id;
+        caja.value = c.nombre;
+        cerrar();
+        caja.dispatchEvent(new CustomEvent("cliente-elegido", {
+          bubbles: true, detail: c,
+        }));
+      }
+
+      function pintar(clientes) {
+        lista.innerHTML = "";
+        if (!clientes.length) {
+          const li = document.createElement("li");
+          li.className = "nada";
+          li.textContent = vacio;
+          lista.appendChild(li);
+          lista.hidden = false;
+          return;
+        }
+        clientes.forEach(function (c) {
+          const li = document.createElement("li");
+          const quien = document.createElement("span");
+          quien.className = "quien";
+          quien.textContent = c.nombre;
+          const cual = document.createElement("span");
+          cual.className = "cual";
+          cual.textContent = " · " + c.telefono + " · " + c.codigo;
+          li.append(quien, cual);
+          // `mousedown` y no `click`: el `blur` del campo cierra la lista y
+          // con `click` el renglón desaparece antes de recibirlo.
+          li.addEventListener("mousedown", function (e) {
+            e.preventDefault(); elegir(c);
+          });
+          lista.appendChild(li);
+        });
+        lista.hidden = false;
+      }
+
+      function consultar() {
+        const q = caja.value.trim();
+        if (q.length < 2) { cerrar(); return; }
+        const mia = ++consulta;
+        fetch(URL_SUGERENCIAS + "?q=" + encodeURIComponent(q))
+          .then(function (r) { return r.json(); })
+          .then(function (d) { if (mia === consulta) pintar(d.clientes || []); })
+          .catch(cerrar);
+      }
+
+      caja.addEventListener("input", function () {
+        olvidar();
+        clearTimeout(temporizador);
+        temporizador = setTimeout(consultar, 250);
+      });
+
+      // Teclado: bajar, subir, elegir, cerrar. El mostrador se captura
+      // tecleando, y soltar el teclado para tomar el ratón cuesta.
+      caja.addEventListener("keydown", function (e) {
+        const opciones = [...lista.querySelectorAll("li:not(.nada)")];
+        if (lista.hidden || !opciones.length) return;
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          marcada = (marcada + (e.key === "ArrowDown" ? 1 : -1) + opciones.length)
+                    % opciones.length;
+          opciones.forEach(function (li, i) {
+            li.classList.toggle("marcada", i === marcada);
+          });
+        } else if (e.key === "Enter" && marcada >= 0) {
+          e.preventDefault();
+          opciones[marcada].dispatchEvent(new MouseEvent("mousedown"));
+        } else if (e.key === "Escape") {
+          cerrar();
+        }
+      });
+
+      caja.addEventListener("blur", function () { setTimeout(cerrar, 120); });
+    });
+  })();
+</script>
