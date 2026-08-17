@@ -23,8 +23,13 @@
   <div class="kpi blue">
     <div class="lbl">Visitas</div>
     <div class="val">{{ cliente.visitas }}</div>
-    <div class="pie">ticket promedio ${{ cliente.ticket_promedio|floatformat:0|intcomma }}</div>
+    <div class="pie">
+      {% if es_super %}ticket promedio ${{ cliente.ticket_promedio|floatformat:0|intcomma }}
+      {% elif cliente.dias_sin_comprar is not None %}hace {{ cliente.dias_sin_comprar }} día(s)
+      {% else %}sin compras aún{% endif %}
+    </div>
   </div>
+  {% if es_super %}
   <div class="kpi yellow">
     <div class="lbl">Gasto acumulado</div>
     <div class="val">${{ cliente.gasto_historico|floatformat:0|intcomma }}</div>
@@ -34,6 +39,7 @@
       {% else %}sin compras aún{% endif %}
     </div>
   </div>
+  {% endif %}
 </div>
 
 <!-- ── CANJEAR ──────────────────────────────────────────────────────────── -->
@@ -41,7 +47,12 @@
   <h2>🎁 Canjear un premio
     <span class="sub">se descuentan los puntos al momento</span></h2>
   <table class="t">
-    <thead><tr><th class="izq">Premio</th><th>Cuesta</th><th>Te cuesta</th>
+    {% comment %}
+      «Te cuesta» es el costo del insumo: eso es del dueño. «Valor» es lo que
+      el cliente cree que se lleva, y el cajero lo necesita para explicarlo.
+    {% endcomment %}
+    <thead><tr><th class="izq">Premio</th><th>Cuesta</th>
+      {% if es_super %}<th>Te cuesta</th>{% endif %}
       <th>Valor</th><th class="cen">Acción</th></tr></thead>
     <tbody>
       {% for item in catalogo %}
@@ -50,7 +61,7 @@
           {% if item.premio.descripcion %}<div class="muted" style="font-size:12px">{{ item.premio.descripcion }}</div>{% endif %}
         </td>
         <td>{{ item.premio.puntos_requeridos }} pts</td>
-        <td>${{ item.premio.costo_estimado|floatformat:0|intcomma }}</td>
+        {% if es_super %}<td>${{ item.premio.costo_estimado|floatformat:0|intcomma }}</td>{% endif %}
         <td>${{ item.premio.valor_percibido|floatformat:0|intcomma }}</td>
         <td class="cen">
           {% if item.puede %}
@@ -67,7 +78,8 @@
         </td>
       </tr>
       {% empty %}
-      <tr><td colspan="5" class="nada">No hay premios activos.</td></tr>
+      <tr><td colspan="{% if es_super %}5{% else %}4{% endif %}" class="nada">
+        No hay premios activos.</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -180,20 +192,29 @@
 <div class="blk">
   <h2>🧾 Sus compras</h2>
   <table class="t">
-    <thead><tr><th class="izq">Fecha</th><th>Monto</th><th>Puntos</th>
+    {% comment %}
+      El monto de cada compra va detrás de la misma puerta que el «Gasto
+      acumulado» de arriba. Esconder el total y dejar los sumandos en la misma
+      pantalla no esconde nada: se suman y sale el mismo número.
+      Lo demás se queda, que es lo que el cajero necesita para aclararle a un
+      cliente por qué tiene los puntos que tiene.
+    {% endcomment %}
+    <thead><tr><th class="izq">Fecha</th>{% if es_super %}<th>Monto</th>{% endif %}
+      <th>Puntos</th>
       <th class="izq">Origen</th><th class="izq">Nota</th></tr></thead>
     <tbody>
       {% for c in compras %}
       <tr>
         <td class="izq">{{ c.fecha|date:"d/m/Y" }}</td>
-        <td>${{ c.monto|floatformat:2|intcomma }}</td>
+        {% if es_super %}<td>${{ c.monto|floatformat:2|intcomma }}</td>{% endif %}
         <td>+{{ c.puntos_ganados }}{% if c.multiplicador > 1 %}
           <span class="tag on">{{ c.multiplicador|floatformat:0 }}×</span>{% endif %}</td>
         <td class="izq">{{ c.get_origen_display }}</td>
         <td class="izq">{% if c.nota %}<a href="{{ c.nota.get_absolute_url }}" target="_blank">{{ c.nota.folio }}</a>{% else %}{{ c.ticket|default:"—" }}{% endif %}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="5" class="nada">Todavía no tiene compras registradas.</td></tr>
+      <tr><td colspan="{% if es_super %}5{% else %}4{% endif %}" class="nada">
+        Todavía no tiene compras registradas.</td></tr>
       {% endfor %}
     </tbody>
   </table>

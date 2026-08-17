@@ -1534,3 +1534,140 @@ class DescuentoEnLaBusquedaTests(TestCase):
             cliente=self.cliente, porcentaje=Decimal("15"),
             desde=hoy - timedelta(days=30), hasta=hoy - timedelta(days=1))
         self.assertIsNone(self._buscar()["descuento"])
+
+
+class DineroDelProgramaTests(TestCase):
+    """Lo que el cajero puede ver del programa y lo que no.
+
+    La regla: se cierra la puerta donde la pantalla entera es dinero, y se
+    esconde el dato donde el cajero necesita entrar a trabajar. Cerrar
+    `/lealtad/` no era opción: es de donde busca clientes y entrega canjes.
+    """
+
+    def setUp(self):
+        self.andy = User.objects.create_superuser("andy", "a@x.mx", "x")
+        self.cajero = User.objects.create_user("caja", "c@x.mx", "x",
+                                               is_staff=True)
+        self.cliente, _ = servicios.alta_cliente("9991234567", nombre="Andrea")
+        self.cliente.gasto_historico = Decimal("4321")
+        self.cliente.visitas = 7
+        self.cliente.save()
+        # Con receta ligada, para que el premio tenga costo y valor de verdad.
+        Premio.objects.create(nombre="Shake gratis", puntos_requeridos=100,
+                              tipo=Premio.Tipo.PRODUCTO, receta=crea_receta())
+
+        self.c_andy = self.client_class()
+        self.c_andy.force_login(self.andy)
+        self.c_caja = self.client_class()
+        self.c_caja.force_login(self.cajero)
+
+    # ── Puertas cerradas ──────────────────────────────────────────────────
+
+    def test_el_cajero_no_entra_a_metricas_ni_a_marketing(self):
+        """Son pantallas de puro dinero: LTV, margen de miembros, utilidad."""
+        for nombre in ("lealtad_metricas", "lealtad_marketing"):
+            with self.subTest(vista=nombre):
+                url = reverse(nombre)
+                resp = self.c_caja.get(url)
+                self.assertEqual(resp.status_code, 302)
+                self.assertEqual(resp["Location"], f"/?next={url}")
+                self.assertEqual(self.c_andy.get(url).status_code, 200)
+
+    # ── Puertas abiertas, datos escondidos ────────────────────────────────
+
+    def test_el_panel_esconde_margen_y_utilidad_pero_deja_pasar(self):
+        url = reverse("lealtad_panel")
+        del_cajero = self.c_caja.get(url)
+        self.assertEqual(del_cajero.status_code, 200)
+
+        for texto in ("¿El programa cabe en tu margen?",
+                      "Margen bruto que dejaron",
+                      "Utilidad neta después de premios",
+                      "Costo de los premios entregados",
+                      "Gasto promedio"):
+            with self.subTest(texto=texto):
+                self.assertNotContains(del_cajero, texto)
+                self.assertContains(self.c_andy.get(url), texto)
+
+        # Lo que sí necesita para trabajar sigue ahí.
+        self.assertContains(del_cajero, "Tus mejores clientes")
+        self.assertContains(del_cajero, "Puntos vivos")
+
+    def test_la_lista_de_clientes_esconde_el_gasto(self):
+        url = reverse("lealtad_clientes")
+        del_cajero = self.c_caja.get(url)
+        self.assertEqual(del_cajero.status_code, 200)
+        self.assertNotContains(del_cajero, "4,321")
+        self.assertContains(self.c_andy.get(url), "4,321")
+        # Sigue sirviendo para lo suyo: encontrar al cliente.
+        self.assertContains(del_cajero, "Andrea")
+
+    def test_la_ficha_esconde_el_costo_del_premio_y_el_gasto(self):
+        url = reverse("lealtad_cliente", args=[self.cliente.pk])
+        del_cajero = self.c_caja.get(url)
+        self.assertEqual(del_cajero.status_code, 200)
+
+        self.assertNotContains(del_cajero, "Te cuesta")
+        self.assertNotContains(del_cajero, "Gasto acumulado")
+        self.assertNotContains(del_cajero, "ticket promedio")
+
+        del_dueno = self.c_andy.get(url)
+        self.assertContains(del_dueno, "Te cuesta")
+        self.assertContains(del_dueno, "Gasto acumulado")
+
+        # El valor percibido se queda: es lo que el cliente cree que se lleva,
+        # y el cajero lo necesita para explicárselo.
+        self.assertContains(del_cajero, "Shake gratis")
+        self.assertContains(del_cajero, "Canjear")
+
+    # ── La excepción, anotada a propósito ─────────────────────────────────
+
+    def test_la_ficha_esconde_tambien_el_monto_de_cada_compra(self):
+        """Esconder el total y dejar los sumandos no esconde nada.
+
+        El «Gasto acumulado» de arriba y las compras de abajo están en la MISMA
+        pantalla: si se tapa uno y se dejan los otros, se suman y sale el mismo
+        número. Lo que se queda es lo que el cajero necesita para aclarar
+        puntos: la fecha, los puntos y el folio de la nota.
+        """
+        from lealtad.models import Compra
+        for monto in (Decimal("1234.50"), Decimal("3086.50")):
+            Compra.objects.create(cliente=self.cliente, monto=monto,
+                                  puntos_ganados=10,
+                                  fecha=timezone.localdate())
+
+        url = reverse("lealtad_cliente", args=[self.cliente.pk])
+        del_cajero = self.c_caja.get(url)
+        self.assertNotContains(del_cajero, "1,234.50")
+        self.assertNotContains(del_cajero, "3,086.50")
+        self.assertContains(del_cajero, "Sus compras")
+        self.assertContains(del_cajero, "+10")
+
+        self.assertContains(self.c_andy.get(url), "1,234.50")
+
+    def test_al_cajero_no_se_le_calcula_lo_que_no_va_a_ver(self):
+        """Lo que la plantilla tira, la vista no debería ir a buscarlo.
+
+        `resumen_retorno` recorre los canjes pidiéndole el costo a cada uno, y
+        el costeo dentro del request ya es el riesgo abierto del proyecto.
+        """
+        from django.test.utils import CaptureQueriesContext
+        from django.db import connection
+
+        url = reverse("lealtad_panel")
+
+        def consultas(cliente):
+            with CaptureQueriesContext(connection) as cqc:
+                cliente.get(url)
+            return len(cqc)
+
+        self.assertLess(consultas(self.c_caja), consultas(self.c_andy))
+
+    def test_la_caja_sigue_viendo_el_descuento_pactado(self):
+        """Cerrar esto rompe el cobro: el cajero necesita el porcentaje."""
+        DescuentoCliente.objects.create(
+            cliente=self.cliente, porcentaje=Decimal("15"),
+            descripcion="Convenio", activo=True)
+        datos = self.c_caja.get(
+            f"{reverse('lealtad_buscar')}?q=9991234567").json()
+        self.assertEqual(datos["descuento"], "15.00")

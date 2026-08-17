@@ -25,15 +25,17 @@
       · {{ clientes.inactivos }} inactivos
     </div>
   </div>
+  {% if es_super %}
   <div class="kpi yellow">
     <div class="lbl">Gasto promedio</div>
     <div class="val">${{ clientes.gasto_promedio|floatformat:0|intcomma }}</div>
     <div class="pie">{{ clientes.visitas_promedio|floatformat:1 }} visitas por cliente</div>
   </div>
+  {% endif %}
   <div class="kpi purple">
     <div class="lbl">Puntos vivos</div>
     <div class="val">{{ puntos.pasivo|intcomma }}</div>
-    <div class="pie">te costarían ${{ puntos.costo_pasivo|floatformat:0|intcomma }}</div>
+    <div class="pie">{% if es_super %}te costarían ${{ puntos.costo_pasivo|floatformat:0|intcomma }}{% else %}emitidos y sin canjear{% endif %}</div>
   </div>
   <div class="kpi orange">
     <div class="lbl">Tasa de canje</div>
@@ -45,6 +47,12 @@
 </div>
 
 <!-- ── MARGEN ───────────────────────────────────────────────────────────── -->
+{% comment %}
+  Margen, costo de premios y utilidad neta: son del dueño, como en el panel de
+  inventario. La puerta se queda abierta porque el cajero entra aquí a buscar
+  clientes y a entregar canjes.
+{% endcomment %}
+{% if es_super %}
 <div class="blk">
   <h2>🎯 ¿El programa cabe en tu margen?
     <span class="sub">objetivo: no más del 5%</span></h2>
@@ -76,6 +84,7 @@
     </tr>
   </table>
 </div>
+{% endif %}
 
 <!-- ── CANJES PENDIENTES ────────────────────────────────────────────────── -->
 {% if canjes_pendientes %}
@@ -133,7 +142,8 @@
   <h2>👑 Tus mejores clientes</h2>
   <table class="t">
     <thead><tr><th class="izq">Cliente</th><th class="izq">Nivel</th><th>Visitas</th>
-      <th>Gasto</th><th>Ticket prom.</th><th>Puntos</th><th>Última compra</th></tr></thead>
+      {% if es_super %}<th>Gasto</th><th>Ticket prom.</th>{% endif %}
+      <th>Puntos</th><th>Última compra</th></tr></thead>
     <tbody>
       {% for c in top %}
       <tr>
@@ -141,13 +151,15 @@
           {{ c.nombre_corto }} · {{ c.telefono_display }}</a></td>
         <td class="izq">{{ c.nivel|default:"—" }}</td>
         <td>{{ c.visitas }}</td>
+        {% if es_super %}
         <td>${{ c.gasto_historico|floatformat:0|intcomma }}</td>
         <td>${{ c.ticket_promedio|floatformat:0|intcomma }}</td>
+        {% endif %}
         <td>{{ c.puntos_saldo }}</td>
         <td>{{ c.ultima_compra|date:"d/m/Y"|default:"—" }}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="7" class="nada">
+      <tr><td colspan="{% if es_super %}7{% else %}5{% endif %}" class="nada">
         Aún no hay compras ligadas a un cliente. Captura el celular al registrar
         una venta y aquí aparecerán.</td></tr>
       {% endfor %}
