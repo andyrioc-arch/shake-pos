@@ -1671,3 +1671,80 @@ class DineroDelProgramaTests(TestCase):
         datos = self.c_caja.get(
             f"{reverse('lealtad_buscar')}?q=9991234567").json()
         self.assertEqual(datos["descuento"], "15.00")
+
+
+class BuscadorPorNombreTests(TestCase):
+    """Se teclea el nombre, se guarda el cliente.
+
+    El nombre no identifica a nadie: no es único, puede repetirse y puede estar
+    vacío. Por eso el buscador SUGIERE y quien elige es la persona, con el
+    celular delante para distinguir a dos que se llaman igual.
+    """
+
+    def setUp(self):
+        self.andy = User.objects.create_superuser("andy", "a@x.mx", "x")
+        self.client.force_login(self.andy)
+        self.ana, _ = servicios.alta_cliente("9991111111", nombre="Ana Pérez")
+        self.otra, _ = servicios.alta_cliente("9992222222", nombre="Ana Pérez")
+        self.juan, _ = servicios.alta_cliente("9993333333", nombre="Juan López")
+
+    def _sugerir(self, q):
+        return self.client.get(
+            f"{reverse('lealtad_clientes_sugerencias')}?q={q}").json()["clientes"]
+
+    def test_encuentra_sin_acentos_y_sin_mayusculas(self):
+        """Postgres compara icontains sin mayúsculas pero SÍ con acentos."""
+        for escrito in ("perez", "PEREZ", "Pérez", "pérez"):
+            with self.subTest(escrito=escrito):
+                nombres = [c["nombre"] for c in self._sugerir(escrito)]
+                self.assertEqual(len(nombres), 2, escrito)
+
+    def test_dos_clientes_con_el_mismo_nombre_se_distinguen(self):
+        sugeridos = self._sugerir("Ana")
+        self.assertEqual(len(sugeridos), 2)
+        self.assertNotEqual(sugeridos[0]["telefono"], sugeridos[1]["telefono"])
+        self.assertNotEqual(sugeridos[0]["id"], sugeridos[1]["id"])
+
+    def test_con_una_sola_letra_no_sugiere_el_padron_entero(self):
+        self.assertEqual(self._sugerir("a"), [])
+
+    def test_no_publica_dinero(self):
+        """Identidad y nada más: para el dinero está `buscar`, que resuelve a uno."""
+        crudo = self.client.get(
+            f"{reverse('lealtad_clientes_sugerencias')}?q=Ana").content.decode()
+        for prohibido in ("descuento", "gasto", "puntos", "ltv"):
+            self.assertNotIn(prohibido, crudo.lower())
+
+    def test_el_descuento_se_guarda_al_cliente_elegido(self):
+        self.client.post(reverse("lealtad_descuento_guardar"), {
+            "cliente": "Ana Pérez", "cliente_id": self.otra.pk,
+            "porcentaje": "15", "descripcion": "Convenio", "activo": "1"})
+        d = DescuentoCliente.objects.get()
+        self.assertEqual(d.cliente, self.otra)
+
+    def test_el_celular_tecleado_sigue_funcionando(self):
+        """Es como se hacía antes y como llega desde cualquier otro sitio."""
+        self.client.post(reverse("lealtad_descuento_guardar"), {
+            "cliente": "9993333333", "porcentaje": "10", "activo": "1"})
+        self.assertEqual(DescuentoCliente.objects.get().cliente, self.juan)
+
+    def test_un_nombre_sin_elegir_de_la_lista_no_guarda_nada(self):
+        """Un nombre suelto es ambiguo por definición: hay dos Ana Pérez."""
+        self.client.post(reverse("lealtad_descuento_guardar"), {
+            "cliente": "Ana Pérez", "porcentaje": "15", "activo": "1"})
+        self.assertEqual(DescuentoCliente.objects.count(), 0)
+
+    def test_un_id_inventado_no_guarda_nada(self):
+        self.client.post(reverse("lealtad_descuento_guardar"), {
+            "cliente": "Ana", "cliente_id": "999999",
+            "porcentaje": "15", "activo": "1"})
+        self.assertEqual(DescuentoCliente.objects.count(), 0)
+
+    def test_el_cajero_no_puede_sugerir_clientes_del_panel_de_descuentos(self):
+        """La puerta de descuentos sigue siendo del dueño."""
+        cajero = User.objects.create_user("caja", "c@x.mx", "x", is_staff=True)
+        self.client.force_login(cajero)
+        url = reverse("lealtad_descuento_guardar")
+        resp = self.client.post(url)
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], f"/?next={url}")
