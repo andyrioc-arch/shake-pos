@@ -23,38 +23,48 @@ P10, la gráfica de qué se vende más, el enlace del libro a la nota, y la nota
 con hitos y PDF) y **P11 en dos tandas** (PR #4 y #5). Con eso el plan de
 costeo queda cerrado.
 
+**El 16 de agosto se publicaron siete cambios más** (PR #8 a #14): el arreglo
+del error 500 al borrar ventas, el test del día completo, los pedidos
+pendientes con nombre, los descuentos por cliente, el descuento en la caja, la
+captura de compras a prueba de errores de unidad, y la merma por conteo físico.
+Migraciones hasta `inventario.0015` y `lealtad.0004`. **De la lista de Andy no
+queda nada.** 390 tests. El detalle está en [HANDOFF.md](HANDOFF.md).
+
 | Pieza | Dónde |
 |---|---|
 | App | Vercel, proyecto `shake-pos` (cuenta personal de Rubén, plan Hobby) |
 | Base | Supabase, proyecto `shake-pos`, ref `xrimahsxtkfdhenigito`, Postgres 17, us-east-1, **plan Pro con respaldos diarios** |
 | Repo | `github.com/andyrioc-arch/shake-pos` |
 
-**Los datos transaccionales de producción son de PRUEBA** (10 compras, 8 ventas,
-2 clientes, 1 canje). Lo único real es el catálogo —19 recetas, 30
-ingredientes— y los 3 costos fijos. Ningún número histórico es un contrato que
-haya que preservar.
+**Producción arrancó en limpio el 16 de agosto**: 24 compras reales, 0 ventas,
+0 clientes. Andy borró las ventas de prueba en cuanto el PR #8 se lo permitió.
+Lo que se registre de aquí en adelante es real.
 
-## Estado del costeo tras publicar
+## Estado del costeo
 
-Verificado contra producción el 13 de agosto de 2026, después de migrar,
-desplegar y correr `sincronizar_contabilidad` + `recostear --todo`:
+Medido en producción el 16 de agosto, después de corregir las 24 compras:
 
 ```
-balanza cuadra     True
-balance cuadra     True
-saldo inventario   487.81      ← positivo; antes esta cuenta se hundía
-ventas             8
-sin costear        0
-incompletas        8           ← las 8, por los insumos sin capturar
-consumo sin capa   3573
+compras                     24
+real coincide con catálogo  24   ← las 24; antes no coincidía ninguna
+capas mal calculadas         0
+saldos que no cuadran        0
+ventas / consumos            0
+cuentas del catálogo        15   ← con la 507 Merma
 ```
 
-**Las 8 ventas están incompletas, así que ninguna reconoce ingreso: la cuenta
-401 sigue en cero.** Es el comportamiento correcto, no una falla —el ingreso y
-su costo entran juntos o no entran—, y se destapa capturando las compras que
-faltan, no tocando código.
+**Las 24 compras estaban capturadas 1360 veces más baratas de lo real**: en
+`cantidad` iba el tamaño del paquete (1360) en vez del número de paquetes (1),
+así que la capa de blueberries creía tener 1,849,600 g por $178.54. Se corrigió
+en la base antes de que ninguna venta se costeara con esos precios.
 
-El plan completo está en [DISENO-COSTEO.md](DISENO-COSTEO.md) y la foto previa
+**Nada en el sistema lo avisaba.** `recostear --verificar` salía sano —sus tres
+igualdades son de consistencia interna, y basura consistente las cumple— y la
+alarma de margen solo mira las caídas, mientras que ese error sube el margen. La
+única defensa es la previsualización de la captura, que enseña el costo por
+unidad de receta contra el de la compra anterior.
+
+El plan de costeo está en [DISENO-COSTEO.md](DISENO-COSTEO.md) y la foto previa
 en [BASELINE-COSTEO.md](BASELINE-COSTEO.md).
 
 **Un paso por rama.** El bloque P0–P6 fue grande porque el diseño no lo dejaba
@@ -134,7 +144,31 @@ varias líneas, `{% comment %}`. Hay un test que recorre todas las plantillas.
 **Una propiedad dentro de un bucle de plantilla se evalúa en cada vuelta**, y
 si consulta la base, se nota: el costo de la última compra llevó el catálogo de
 61 a 251 consultas. Lo que recorra el catálogo se resuelve en la vista y se
-pasa ya calculado.
+pasa ya calculado. Volvió a pasar con las mermas (23 consultas de más en el
+panel) y con el descuento de la nota (20 consultas donde bastaban 9).
+
+**`Decimal` acepta «NaN» e «Infinity» y revienta al COMPARARLOS**, no al
+construirlos: `Decimal("NaN") < 0` lanza `InvalidOperation` en vez de devolver
+`False`. Todo lo que lea un número de un formulario necesita `is_finite()` antes
+de compararlo. `lealtad/api._monto` e `inventario.views._to_decimal` ya lo
+hacen; cualquier lector nuevo tiene que copiarlo o es un 500 con el cliente
+enfrente.
+
+**Preguntar si algo existe no sirve como guarda dentro de un borrado en
+cascada.** Django manda todos los `pre_delete` primero, luego borra, y hasta el
+final los `post_delete`; los hijos se borran antes que el padre, así que cuando
+llega el `post_delete` de un hijo el padre todavía está en la base. Hay que
+preguntarle a `_pendiente`, que lo llenó el `pre_delete` del padre. Costó un
+error 500 al borrar cualquier venta con extras, y en Postgres salía hasta el
+`COMMIT` porque las llaves foráneas son `DEFERRABLE`.
+
+**El formulario de compras pide PAQUETES, no contenido.** `unidad_compra` es
+idéntica a `unidad_receta` en 29 de los 30 ingredientes, así que la etiqueta
+«Blueberries (g)» invita a escribir gramos — y así se capturaron las 24 compras
+de agosto, cada una 1360 veces más barata. La pantalla ahora dice el tamaño del
+paquete y enseña el costo por unidad de receta antes de guardar, con el de la
+compra anterior al lado. **Esa comparación es la única defensa**: ningún
+invariante del costeo caza un error de unidad.
 
 ## Publicar
 
@@ -279,26 +313,29 @@ ventas de verdad.
 
 ## Pendiente
 
-- **Faltan las compras reales de diez insumos, y ya bloquean el reporte.**
-  Medido en producción el 13 de agosto: las 8 ventas están incompletas, así que
-  ninguna reconoce ingreso y la 401 sigue en cero. Es a propósito —el ingreso y
-  su costo entran juntos o no entran— pero significa que el Estado de
-  Resultados lo destapan los tickets, no un despliegue. La lista está en
-  BASELINE-COSTEO.md y lo captura Andy.
-- Sin despliegue automático (punto único de falla): Vercel no pudo conectar el
-  repo por ser de otra cuenta.
-- El premio "Latte gratis" no tiene receta ligada. Lo hace Andy.
-- Quedan **P7, P9, P10 y P11** del plan de costeo, más lo que Andy ve y aún no
-  existe: enlace del libro a la nota, alarma de margen, gráfica de productos,
-  PDF de la nota, aviso de premio y cambio de nivel en la nota, y costo
-  consolidado por producto. P8 se cayó del plan; el desglose de cuentas lo
-  cerró P6.
-- Tres asuntos menores anotados en la revisión de P3 y no atendidos: editar una
-  compra ya consumida no reajusta su capa, el recosteo masivo corre dentro del
-  request, y hay un residuo de un centavo cuando muchas ventas cruzan las mismas
-  capas.
-- **44 hallazgos de una auditoría** previa sin atender. De ellos, el
-  desbordamiento de `CharField` ya se cerró para `Cliente.nombre` y
-  `Cliente.notas`; siguen abiertos el `select_for_update` con join nullable, el
-  posible deadlock entre `canjear()` y `expirar_puntos()`, y las consultas N+1
-  de los paneles.
+Nada de la lista de Andy. Lo abierto es deuda, por orden de peso:
+
+1. **El costeo corre dentro del request.** ~480 consultas en la primera venta
+   del día y ~1000 en la séptima, porque cada venta recuesta las anteriores. Con
+   SQLite no se nota; contra el pooler y con volumen real, sí. Es el riesgo
+   operativo más serio que queda.
+2. **`?mes=13` da 500** en contabilidad, finanzas y presupuesto (`KeyError` en
+   `contabilidad/views.py:63`). Tres líneas.
+3. **RLS apagado en las 48 tablas de Supabase.** Este sistema no usa la Data
+   API —Django habla Postgres directo por el pooler— así que apagarla en
+   Settings → API cierra la puerta sin tocar una tabla.
+4. **El cajero ve los paneles de lealtad** por URL directa: el menú los esconde,
+   las URLs responden 200 y publican margen de miembros, LTV y utilidad neta.
+5. **Una receta desactivada desaparece del carrito en silencio** y el cliente
+   paga de menos. Fijado en el test E2E como hallazgo, no como diseño.
+6. **No hay corte de caja**: `sincronizar_movimiento` postea toda venta a la 101
+   sin mirar `metodo_pago`, así que lo cobrado con tarjeta figura como efectivo.
+7. Sin despliegue automático: Vercel no pudo conectar el repo por ser de otra
+   cuenta. Cada publicación es manual.
+8. El premio «Latte gratis» no tiene receta ligada. Lo hace Andy.
+9. Tres asuntos de la revisión de P3: editar una compra ya consumida no reajusta
+   su capa, el recosteo masivo corre dentro del request, y el residuo de un
+   centavo cuando muchas ventas cruzan las mismas capas.
+10. **44 hallazgos de una auditoría** previa. Siguen abiertos el
+    `select_for_update` con join nullable, el posible deadlock entre `canjear()`
+    y `expirar_puntos()`, y las consultas N+1 de los paneles.
