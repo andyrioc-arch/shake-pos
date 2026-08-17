@@ -181,9 +181,15 @@ class Ingrediente(models.Model):
 
     @property
     def minimo_para_cinco(self):
-        """Mínimo necesario para 5 shakes de cada receta que lo use."""
+        """Mínimo para 5 shakes de cada receta ACTIVA que lo use.
+
+        Una receta desactivada ya no se vende, así que exigir stock para
+        surtirla mantiene el semáforo en rojo por algo que nadie va a pedir. El
+        rojo que no se puede apagar se aprende a ignorar, y entonces tampoco se
+        ve el que sí importa.
+        """
         total = Decimal("0")
-        for item in self.usos.all():
+        for item in self.usos.filter(receta__activa=True):
             total += item.cantidad * 5
         return total
 
