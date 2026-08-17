@@ -88,27 +88,40 @@ def _opcion_valida(valor, choices, defecto):
 @login_required
 def panel(request):
     cfg = ConfiguracionPrograma.get()
+    es_super = request.user.is_superuser
     ctx = {
         "active": "lealtad",
         "seccion": "panel",
         "cfg": cfg,
         "clientes": metricas.resumen_clientes(cfg),
         "puntos": metricas.resumen_puntos(),
-        "retorno": metricas.resumen_retorno(),
-        "marketing": metricas.resumen_marketing(),
+        # Margen y mensajería solo se pintan para el dueño, así que para el
+        # cajero ni se calculan: la plantilla tiraba el resultado. No es
+        # trabajo barato — `resumen_retorno` recorre los canjes uno por uno
+        # pidiéndole el costo a cada quien. Mismo patrón que la alarma de
+        # margen en `inventario/views.py`.
+        "retorno": metricas.resumen_retorno() if es_super else None,
+        "marketing": metricas.resumen_marketing() if es_super else None,
         "top": metricas.top_clientes(),
         "cerca": metricas.cerca_de_premio(),
         "canjes_pendientes": (Canje.objects
                               .filter(estado=Canje.Estado.PENDIENTE)
                               .select_related("cliente", "premio")[:10]),
         "promo": PromocionPuntos.vigente(),
-        "es_super": request.user.is_superuser,
+        "es_super": es_super,
     }
     return render(request, "lealtad/panel.html", ctx)
 
 
 @login_required
+@solo_super
 def panel_metricas(request):
+    """Solo el dueño: LTV, margen de miembros y utilidad neta.
+
+    Aquí sí se cierra la puerta, no se esconde el contenido: la pantalla entera
+    es dinero y el cajero no tiene nada que hacer en ella. El menú ya la
+    escondía, pero esconder no es proteger — la URL respondía 200.
+    """
     comportamiento = metricas.resumen_comportamiento()
     ctx = {
         "active": "lealtad",
@@ -128,7 +141,9 @@ def panel_metricas(request):
 
 
 @login_required
+@solo_super
 def panel_marketing(request):
+    """Solo el dueño: ventas atribuidas por campaña, en pesos."""
     # Acotado a 10 años: un timedelta gigante revienta con OverflowError.
     dias = _entero(request.GET.get("dias"), 30, minimo=0, maximo=3650)
     desde = timezone.localdate() - timedelta(days=dias) if dias else None
@@ -170,6 +185,7 @@ def clientes(request):
         "q": busqueda,
         "estado": filtro,
         "estados": Cliente.Estado.choices,
+        "es_super": request.user.is_superuser,
     }
     return render(request, "lealtad/clientes.html", ctx)
 
@@ -313,7 +329,13 @@ def cliente_ajustar(request, pk):
 
 @login_required
 def buscar(request):
-    """Busca un cliente por teléfono o código. Lo usa el formulario de venta."""
+    """Busca un cliente por teléfono o código. Lo usa el formulario de venta.
+
+    Excepción consciente a la regla de que el descuento es del dueño: el panel
+    que lo administra sí exige superusuario, pero aquí el cajero necesita el
+    porcentaje para cobrar bien. Cerrar esta puerta rompe el cobro, así que se
+    queda abierta y se deja anotado por qué.
+    """
     cliente = servicios.buscar_cliente(request.GET.get("q"))
     if not cliente:
         return JsonResponse({"encontrado": False, "necesita_nombre": True})

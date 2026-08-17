@@ -592,20 +592,27 @@ class DiaDeUsoTests(TestCase):
             self.c_publico.post(
                 reverse("inventario_venta_agregar")).status_code, 302)
 
-    def test_el_cajero_todavia_ve_los_paneles_de_lealtad(self):
-        """HALLAZGO fijado, no diseño.
+    def test_lo_que_el_cajero_ve_del_programa(self):
+        """El hallazgo de antes, ya cerrado y del derecho.
 
-        El subnav esconde estas tres páginas con `{% if user.is_superuser %}`,
-        pero las URLs responden 200 a cualquier sesión con login y publican
-        gasto promedio, margen de miembros, costo de premios y utilidad neta.
-        Se fija como está para que, el día que se cierre la puerta, este test
-        avise en vez de quedarse callado.
+        Este test fijaba lo contrario: el subnav escondía métricas y marketing,
+        pero las URLs respondían 200 a cualquier sesión y publicaban margen de
+        miembros, costo de premios y utilidad neta. Esconder no es proteger.
+
+        Ahora esas dos exigen dueño, porque son pantallas de puro dinero. El
+        panel general se queda abierto —de ahí el cajero busca clientes y
+        entrega canjes— con el dinero escondido dentro.
         """
-        for nombre in ("lealtad_panel", "lealtad_metricas",
-                       "lealtad_marketing"):
+        for nombre in ("lealtad_metricas", "lealtad_marketing"):
             with self.subTest(vista=nombre):
-                self.assertEqual(
-                    self.c_caja.get(reverse(nombre)).status_code, 200)
+                url = reverse(nombre)
+                resp = self.c_caja.get(url)
+                self.assertEqual(resp.status_code, 302)
+                self.assertEqual(resp["Location"], f"/?next={url}")
+
+        panel = self.c_caja.get(reverse("lealtad_panel"))
+        self.assertEqual(panel.status_code, 200)
+        self.assertNotContains(panel, "Utilidad neta después de premios")
 
     def test_el_cron_de_lealtad(self):
         """Sin él no caducan puntos, no expiran canjes y no sale un mensaje.
