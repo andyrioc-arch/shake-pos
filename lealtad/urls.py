@@ -20,6 +20,8 @@ panel_urls = [
     path("clientes/<int:pk>/ajustar/", views.cliente_ajustar,
          name="lealtad_cliente_ajustar"),
     path("buscar/", views.buscar, name="lealtad_buscar"),
+    path("clientes/sugerencias/", views.clientes_sugerencias,
+         name="lealtad_clientes_sugerencias"),
 
     path("canjes/<int:pk>/entregar/", views.canje_entregar,
          name="lealtad_canje_entregar"),

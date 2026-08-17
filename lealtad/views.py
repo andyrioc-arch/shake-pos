@@ -328,6 +328,27 @@ def cliente_ajustar(request, pk):
 
 
 @login_required
+def clientes_sugerencias(request):
+    """Sugiere clientes por nombre, para elegir de una lista.
+
+    Devuelve IDENTIDAD y nada más: nombre, celular y código. Ni puntos ni
+    descuento ni gasto — para eso está `buscar`, que resuelve a un cliente ya
+    elegido. Separarlos evita que teclear tres letras devuelva un listado del
+    padrón con el dinero de cada quien.
+
+    El celular viaja para distinguir a dos clientes con el mismo nombre, que es
+    el problema entero: sin él, elegir «Juan» no significa nada.
+    """
+    clientes = servicios.sugerir_clientes(request.GET.get("q"))
+    return JsonResponse({"clientes": [
+        {"id": c.pk,
+         "nombre": c.nombre or "Sin nombre",
+         "telefono": c.telefono_display,
+         "codigo": c.codigo}
+        for c in clientes]})
+
+
+@login_required
 def buscar(request):
     """Busca un cliente por teléfono o código. Lo usa el formulario de venta.
 
@@ -387,15 +408,22 @@ def descuento_guardar(request):
         messages.error(request, "Ese descuento ya no existe.")
         return redirect("lealtad_descuentos")
 
-    # El cliente se busca por celular o código, igual que en la caja: es lo
-    # único que identifica a alguien sin ambigüedad.
+    # El cliente se ELIGE de una lista, no se teclea. Se escribe el nombre, que
+    # es lo que uno recuerda, pero lo que viaja es el cliente concreto: el
+    # nombre no identifica a nadie —hay tres Juanes— y el celular sí, solo que
+    # nadie se lo sabe de memoria. Escribir por nombre y guardar por id resuelve
+    # las dos cosas a la vez.
+    #
+    # Se sigue aceptando el celular o el código tecleados, que es como se hacía
+    # antes y como llega desde cualquier otro sitio.
     if not descuento.pk:
-        cliente = servicios.buscar_cliente(request.POST.get("cliente"))
+        cliente = (resuelve_id(Cliente, request.POST.get("cliente_id"))
+                   or servicios.buscar_cliente(request.POST.get("cliente")))
         if not cliente:
             messages.error(
                 request,
-                "No encontré a ese cliente. Búscalo por su celular o su "
-                "código, y si es nuevo dalo de alta primero.")
+                "No encontré a ese cliente. Escribe su nombre y elígelo de la "
+                "lista; si es nuevo, dalo de alta en Clientes.")
             return redirect("lealtad_descuentos")
         descuento.cliente = cliente
 

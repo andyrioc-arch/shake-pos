@@ -5,6 +5,7 @@ la suma de sus movimientos: si algo se descuadra, `recalcular` lo reconstruye.
 """
 
 import secrets
+import unicodedata
 from datetime import timedelta
 from decimal import Decimal
 
@@ -56,6 +57,46 @@ def buscar_cliente(texto):
     if len(codigo) == 6:
         return Cliente.objects.filter(codigo=codigo).first()
     return None
+
+
+def _plegar(texto):
+    """Minúsculas y sin acentos, para que «Perez» encuentre a «Pérez».
+
+    El cotejo se hace aquí y no en la base porque Postgres compara `icontains`
+    sin distinguir mayúsculas pero SÍ acentos, así que «Jose» no encontraría a
+    «José» y el buscador quedaría a medias.
+    """
+    base = unicodedata.normalize("NFD", texto or "")
+    return "".join(c for c in base if not unicodedata.combining(c)).lower()
+
+
+def sugerir_clientes(texto, limite=8):
+    """Clientes cuyo nombre casa con lo tecleado. Sugiere, no identifica.
+
+    La diferencia con `buscar_cliente` es todo el punto: aquélla devuelve UNO y
+    lo da por bueno; ésta devuelve varios y quien elige es la persona. El
+    nombre no puede identificar —no es único, puede repetirse y puede estar
+    vacío— así que cada sugerencia viaja con el celular y el código, que es lo
+    que distingue a dos Juanes.
+
+    Se piden dos letras antes de sugerir nada: con una sola, la lista es el
+    padrón entero y no ayuda a decidir.
+
+    Recorre a los clientes por orden de última compra y corta al llegar al
+    límite, así que lo normal es mirar unos pocos. Con el padrón de hoy es una
+    consulta chica; el día que pase de unos miles, esto quiere una columna con
+    el nombre ya plegado y su índice.
+    """
+    q = _plegar((texto or "").strip())
+    if len(q) < 2:
+        return []
+    encontrados = []
+    for cliente in Cliente.objects.order_by("-ultima_compra", "-alta"):
+        if q in _plegar(cliente.nombre):
+            encontrados.append(cliente)
+            if len(encontrados) >= limite:
+                break
+    return encontrados
 
 
 @transaction.atomic
