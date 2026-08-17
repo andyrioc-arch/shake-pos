@@ -207,6 +207,14 @@ def panel_inventario(request):
             e.pk: {"nombre": e.nombre, "cargo": float(e.cargo)}
             for e in Extra.objects.filter(activo=True)
         },
+        # Con cuánto comparar lo que se está capturando. Sin una referencia, un
+        # costo por gramo no se puede juzgar a ojo: $0.0001 y $0.13 se ven
+        # igual de plausibles en la pantalla, y la diferencia entre los dos son
+        # las 24 compras que hubo que corregir a mano en agosto.
+        "referencias_compra": {
+            ing_id: float(unitario)
+            for ing_id, unitario in _costos_de_la_ultima_compra().items()
+        } if es_super else {},
     }
     return render(request, "inventario/panel.html", ctx)
 
@@ -624,9 +632,60 @@ def compra_agregar(request):
         _log(request, compra, ADDITION, "Registró compra de stock")
         messages.success(
             request,
-            f"Compra registrada: {cantidad} {ingrediente.unidad_compra} de "
-            f"{ingrediente} por ${costo_total:,.2f}.")
+            f"Compra registrada: {compra.cantidad_receta:,.0f} "
+            f"{ingrediente.unidad_receta} de {ingrediente} a "
+            f"${compra.costo_unitario_capa:,.4f} por "
+            f"{ingrediente.unidad_receta} (${costo_total:,.2f} en total).")
+        aviso = _capa_fuera_de_rango(compra)
+        if aviso:
+            messages.warning(request, aviso)
     return redirect("panel_inventario")
+
+
+# Cuántas veces se puede alejar una compra del precio anterior antes de avisar.
+# Diez es holgado a propósito: un proveedor que sube 30% no debe generar ruido,
+# y el error que importa —capturar gramos donde van paquetes— se equivoca por
+# factores de cientos o miles.
+FACTOR_ALARMA_COMPRA = 10
+
+
+def _capa_fuera_de_rango(compra):
+    """Avisa si el costo por unidad de receta se disparó contra la referencia.
+
+    Es la red de atrás: la pantalla ya lo enseña antes de guardar, pero una
+    compra puede entrar por el admin, por el shell o por una importación.
+    Avisa y no bloquea: un precio puede subir de verdad, y negarse a registrar
+    una compra real es peor que dejar un aviso.
+
+    La referencia es la compra MÁS RECIENTE del ingrediente, que no siempre es
+    una anterior: capturar la factura atrasada de la semana pasada es un flujo
+    normal aquí, y entonces la más reciente es posterior a la que se acaba de
+    guardar. El precio más nuevo sigue siendo la mejor vara —por eso se compara
+    contra ella— pero llamarla «la anterior» sería mentir en el único mensaje
+    que existe para cazar un error de captura.
+    """
+    referencia = (Compra.objects
+                  .filter(ingrediente_id=compra.ingrediente_id)
+                  .exclude(pk=compra.pk)
+                  .order_by("-fecha", "-id")
+                  .first())
+    if not referencia:
+        return None
+    previo = referencia.costo_unitario_capa
+    actual = compra.costo_unitario_capa
+    if not previo or not actual:
+        return None
+    veces = actual / previo
+    if Decimal(1) / FACTOR_ALARMA_COMPRA <= veces <= FACTOR_ALARMA_COMPRA:
+        return None
+    unidad = compra.ingrediente.unidad_receta
+    cuantas = veces if veces > 1 else Decimal(1) / veces
+    return (
+        f"Ojo: quedó a ${actual:,.4f} por {unidad}, y tu compra más reciente "
+        f"({referencia.fecha:%d/%m/%Y}) fue de ${previo:,.4f} — "
+        f"{cuantas:,.0f} veces {'más caro' if veces > 1 else 'más barato'}. "
+        f"Revisa la cantidad: suele ser que se capturó el contenido en "
+        f"{unidad} en vez del número de paquetes.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

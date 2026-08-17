@@ -132,8 +132,14 @@
   .cambio { margin-top:8px; font-size:15px; text-align:right; }
   .cambio strong { color:#1e9aff; }
   .cambio.neg strong { color:#fa5598; }
-  .costo-unit { font-size:13px; text-align:right; color:#444; }
-  .costo-unit strong { color:#1e9aff; }
+  .costo-unit { font-size:13px; text-align:right; color:#444; line-height:1.5; }
+  /* #1478cc y no el azul de marca: el vivo da 2.95:1 sobre blanco y aquí el
+     color carga un dato, no es cromo. */
+  .costo-unit strong { color:#1478cc; }
+  .costo-unit .ref { color:#777; }
+  .costo-unit.alarma { background:#fff6d6; border:2px solid #b98d00;
+                       border-radius:8px; padding:8px 10px; text-align:left; }
+  .costo-unit.alarma strong { color:#7a5c00; }
   .cortesia-box { border:2px dashed #8700ff; border-radius:8px; padding:10px 12px; margin:10px 0; background:#f3ecff; }
   .cortesia-check { font-weight:800; font-size:13px; cursor:pointer; display:flex; align-items:center; gap:6px; }
   #cortesia-motivo-box, #lealtad-nombre-box { margin-top:8px; }
@@ -305,19 +311,29 @@
           <select name="ingrediente" id="compra-ing" required>
             <option value="">— Elige un ingrediente —</option>
             {% for i in ingredientes_lista %}
-              <option value="{{ i.pk }}" data-unidad="{{ i.unidad_compra }}">{{ i.nombre }} ({{ i.unidad_compra }})</option>
+              <option value="{{ i.pk }}"
+                      data-unidad="{{ i.unidad_compra }}"
+                      data-ur="{{ i.unidad_receta }}"
+                      data-cpu="{{ i.cantidad_por_unidad|stringformat:'s' }}">{{ i.nombre }}</option>
             {% empty %}
               <option value="" disabled>No hay ingredientes</option>
             {% endfor %}
           </select>
         </div>
         <div class="row2">
-          <div><label>Cantidad comprada</label>
-            <input type="number" name="cantidad" id="compra-cant" step="0.01" min="0.01" placeholder="0.00" required></div>
+          {% comment %}
+            La etiqueta dice el tamaño del paquete y se arma sola con el
+            ingrediente elegido. Antes decía «Cantidad comprada» junto a
+            «Blueberries (g)», y eso invita a escribir gramos: se capturaron
+            así las 24 compras de agosto y cada capa quedó 1360 veces más
+            barata de lo real.
+          {% endcomment %}
+          <div><label id="compra-cant-label">Cantidad comprada</label>
+            <input type="number" name="cantidad" id="compra-cant" step="0.01" min="0.01" placeholder="1" required></div>
           <div><label>Costo total ($)</label>
             <input type="number" name="costo_total" id="compra-total" step="0.01" min="0" placeholder="0.00" required></div>
         </div>
-        <div class="costo-unit" id="compra-unit">Costo unitario: <strong>—</strong></div>
+        <div class="costo-unit" id="compra-unit">Elige un ingrediente para ver cómo queda.</div>
         <div class="row2">
           <div><label>Proveedor — opcional</label>
             <input type="text" name="proveedor" placeholder="Proveedor"></div>
@@ -513,6 +529,7 @@
 
 {{ productos_map|json_script:"productos-data" }}
 {{ addons_map|json_script:"addons-data" }}
+{{ referencias_compra|json_script:"referencias-data" }}
 <script>
   (function () {
     const PRODUCTOS = JSON.parse(document.getElementById("productos-data").textContent);
@@ -709,28 +726,90 @@
     actualizarCambio();
   })();
 
-  // Compra: calcula el costo unitario (total ÷ cantidad) en vivo.
+  // Compra: enseña en qué se convierte lo capturado ANTES de guardarlo.
+  //
+  // El número que importa es el costo por unidad de receta, porque es el que
+  // va a costear cada venta. Un error de unidad —escribir 1360 gramos donde
+  // van 1 paquete— es invisible en el ticket del proveedor y salta a la vista
+  // aquí: "$0.0001 por g" contra "$0.13 por g" de la compra anterior.
   (function () {
     const ing = document.getElementById("compra-ing");
     const cant = document.getElementById("compra-cant");
     const total = document.getElementById("compra-total");
     const out = document.getElementById("compra-unit");
+    const etiqueta = document.getElementById("compra-cant-label");
     if (!ing || !out) return;
-    const fmt = function (n) { return "$" + n.toLocaleString("es-MX", {minimumFractionDigits:2, maximumFractionDigits:2}); };
+    const nodo = document.getElementById("referencias-data");
+    const REF = nodo ? JSON.parse(nodo.textContent) : {};
+
+    const dinero = function (n, dec) {
+      return "$" + n.toLocaleString("es-MX",
+        {minimumFractionDigits: dec, maximumFractionDigits: dec});
+    };
+    const numero = function (n) {
+      return n.toLocaleString("es-MX", {maximumFractionDigits: 2});
+    };
+    // Los costos por unidad de receta son céntimos: con dos decimales, el
+    // precio bueno de la leche y uno mil veces menor se ven igual, "$0.00".
+    const porUnidad = function (n) { return dinero(n, n < 1 ? 4 : 2); };
+
     function calc() {
+      const opt = ing.options[ing.selectedIndex];
+      const cpu = opt ? parseFloat(opt.dataset.cpu || "0") : 0;
+      const ur = opt ? (opt.dataset.ur || "unidad") : "unidad";
+      const unidad = opt ? (opt.dataset.unidad || "unidad") : "unidad";
+
+      // Cuando el paquete es de una sola unidad de receta, decir «¿cuántos de
+      // 1 pz (pz)?» estorba más de lo que aclara: ahí no hay ambigüedad que
+      // deshacer.
+      etiqueta.textContent =
+        cpu > 1 ? "¿Cuántos paquetes de " + numero(cpu) + " " + ur + " compraste?"
+        : cpu > 0 ? "¿Cuántos " + unidad + " compraste?"
+        : "Cantidad comprada";
+
       const c = parseFloat(cant.value || "0");
       const t = parseFloat(total.value || "0");
-      const opt = ing.options[ing.selectedIndex];
-      const unidad = opt ? (opt.dataset.unidad || "unidad") : "unidad";
-      if (c > 0 && t >= 0) {
-        out.innerHTML = "Costo unitario: <strong>" + fmt(t / c) + " / " + unidad + "</strong>";
-      } else {
-        out.innerHTML = "Costo unitario: <strong>—</strong>";
+      if (!(opt && opt.value) || !(c > 0) || !(t > 0)) {
+        out.className = "costo-unit";
+        out.textContent = opt && opt.value
+          ? "Captura cantidad y costo para ver cómo queda."
+          : "Elige un ingrediente para ver cómo queda.";
+        return;
       }
+
+      const unidadesReceta = c * cpu;
+      const porUR = t / unidadesReceta;
+      let html = "Entra como <strong>" + numero(unidadesReceta) + " " + ur +
+                 "</strong> a <strong>" + porUnidad(porUR) + " por " + ur +
+                 "</strong> · " + dinero(t / c, 2) + " cada " + unidad;
+
+      // La comparación contra la compra anterior es lo que convierte un número
+      // abstracto en un juicio: nadie sabe si $0.0001 por gramo está bien,
+      // pero cualquiera ve que es mil veces menos que la vez pasada.
+      const ref = REF[opt.value];
+      let clase = "costo-unit";
+      if (ref > 0) {
+        const veces = porUR / ref;
+        html += "<br><span class='ref'>Tu última compra: " + porUnidad(ref) +
+                " por " + ur + "</span>";
+        if (veces >= 10 || veces <= 0.1) {
+          clase = "costo-unit alarma";
+          // Redondeado: «965 veces» se lee de un golpe y «965.08 veces» no, y
+          // aquí la magnitud es todo el mensaje.
+          const cuantas = Math.round(veces >= 10 ? veces : 1 / veces);
+          html += "<br><strong>⚠️ Está " + numero(cuantas) + " veces " +
+                  (veces >= 10 ? "más caro" : "más barato") +
+                  " que la vez pasada. Revisa la cantidad: suele ser que se " +
+                  "capturaron " + ur + " en vez de paquetes.</strong>";
+        }
+      }
+      out.className = clase;
+      out.innerHTML = html;
     }
     [ing, cant, total].forEach(function (el) {
       el.addEventListener("input", calc); el.addEventListener("change", calc);
     });
+    calc();
   })();
 
   // Lealtad: al teclear el celular, muestra quién es y cuántos puntos tiene.
