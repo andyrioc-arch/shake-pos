@@ -4,9 +4,33 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from reversion.admin import VersionAdmin
 from .models import (
-    ConfiguracionAlarmas, Ingrediente, Receta, RecetaIngrediente, Compra, Venta,
-    Extra, VentaSustitucion, VentaExtra, Nota,
+    AjusteInventario, ConfiguracionAlarmas, Ingrediente, Receta,
+    RecetaIngrediente, Compra, Venta, Extra, VentaSustitucion, VentaExtra, Nota,
 )
+
+
+@admin.register(AjusteInventario)
+class AjusteInventarioAdmin(admin.ModelAdmin):
+    list_display = ("fecha", "ingrediente", "cantidad_calculada",
+                    "cantidad_real", "diferencia", "costo", "motivo")
+    list_filter = ("fecha", "ingrediente")
+    search_fields = ("ingrediente__nombre", "motivo")
+    readonly_fields = ("cantidad_calculada", "costo", "costo_incompleto",
+                       "creado")
+
+    def has_add_permission(self, request):
+        """Un conteo se captura en el panel, no aquí.
+
+        `cantidad_calculada` la congela el sistema al momento de contar y no es
+        editable, así que un alta desde el admin nacería sin ella. Y el dato es
+        la mitad del registro: sin qué calculaba el sistema, la merma no se
+        puede explicar ni auditar.
+        """
+        return False
+
+    @admin.display(description="Diferencia")
+    def diferencia(self, obj):
+        return obj.diferencia
 
 
 @admin.register(Nota)

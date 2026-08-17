@@ -1313,3 +1313,238 @@ class CapturaDeComprasTests(TestCase):
         self.client.login(username="caja", password="x")
         resp = self.client.get(reverse("panel_inventario"))
         self.assertEqual(resp.context["referencias_compra"], {})
+
+
+class MermaTests(TestCase):
+    """El conteo físico: lo que falta sale del inventario y se vuelve gasto."""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        from contabilidad import posting
+        posting.crear_catalogo()
+        self.andy = User.objects.create_superuser("andy", "a@x.mx", "x")
+        self.client.force_login(self.andy)
+        self.hoy = date.today()
+        self.ing = Ingrediente.objects.create(
+            nombre="Fresas", unidad_compra="bolsa", cantidad_por_unidad=1000,
+            unidad_receta="g", costo_unidad_compra=Decimal("100.00"))
+        # 1000 g a $0.10 el gramo.
+        Compra.objects.create(fecha=self.hoy, ingrediente=self.ing,
+                              cantidad=Decimal("1"), monto_total=Decimal("100"))
+
+    def _contar(self, real, **extra):
+        from django.urls import reverse
+        datos = {"ingrediente": self.ing.pk, "cantidad_real": str(real),
+                 "fecha": self.hoy.isoformat(), "motivo": "Se echó a perder"}
+        datos.update(extra)
+        return self.client.post(
+            reverse("inventario_merma_registrar"), datos, follow=True)
+
+    def _avisos(self, resp):
+        return [str(m) for m in resp.context["messages"]]
+
+    def _ajuste(self):
+        from inventario.models import AjusteInventario
+        return AjusteInventario.objects.get()
+
+    # ── Lo que sale del inventario ──────────────────────────────────────────
+    def test_contar_de_menos_registra_la_merma_y_la_cuesta(self):
+        self._contar("800")
+        a = self._ajuste()
+        self.assertEqual(a.cantidad_calculada, Decimal("1000.0000"))
+        self.assertEqual(a.merma, Decimal("200.0000"))
+        self.assertEqual(a.costo, Decimal("20.00"))    # 200 g × $0.10
+        self.assertFalse(a.costo_incompleto)
+
+    def test_la_merma_consume_la_capa(self):
+        """No basta con anotar el gasto: el inventario tiene que bajar."""
+        self._contar("800")
+        capa = Compra.objects.get()
+        self.assertEqual(capa.saldo_receta, Decimal("800.0000"))
+
+    def test_despues_del_conteo_el_stock_es_lo_que_se_contó(self):
+        self._contar("800")
+        self.ing.refresh_from_db()
+        self.assertEqual(self.ing.stock_disponible, Decimal("800"))
+
+    def test_el_asiento_va_de_merma_contra_inventario(self):
+        from contabilidad.models import Asiento
+        self._contar("800")
+        asiento = Asiento.objects.get(referencia=f"Merma #{self._ajuste().pk}")
+        lineas = sorted((l.cuenta.codigo, l.debe, l.haber)
+                        for l in asiento.movimientos.all())
+        self.assertEqual(lineas, [
+            ("115", Decimal("0.00"), Decimal("20.00")),
+            ("507", Decimal("20.00"), Decimal("0.00")),
+        ])
+
+    def test_la_merma_no_mueve_efectivo(self):
+        """Perder mercancía no saca dinero de la caja."""
+        from contabilidad import posting
+        self._contar("800")
+        flujo = posting.flujo_efectivo(self.hoy.year, self.hoy.month)
+        self.assertEqual(flujo["salidas"], Decimal("100"))   # solo la compra
+
+    def test_la_merma_entra_al_estado_de_resultados_como_gasto(self):
+        from contabilidad import posting
+        self._contar("800")
+        er = posting.estado_resultados(self.hoy.year, self.hoy.month)
+        codigos = {g["codigo"] for g in er["gastos"]}
+        self.assertIn("507", codigos)
+        self.assertEqual(er["total_gastos"], Decimal("20"))
+
+    def test_la_balanza_y_el_balance_siguen_cuadrando(self):
+        from contabilidad import posting
+        self._contar("800")
+        self.assertTrue(
+            posting.balanza_comprobacion(self.hoy.year, self.hoy.month)["cuadra"])
+        self.assertTrue(
+            posting.balance_general(self.hoy.year, self.hoy.month)["cuadra"])
+
+    # ── Lo que NO hace ──────────────────────────────────────────────────────
+    def test_contar_de_más_no_da_de_alta_inventario(self):
+        """Sobrar significa que falta capturar una compra, no que apareció.
+
+        Darle entrada obligaría a inventarle un precio, que es justo lo que el
+        costeo entero existe para no hacer.
+        """
+        from contabilidad.models import Asiento
+        antes = Asiento.objects.count()
+        resp = self._contar("1200")
+        a = self._ajuste()
+        self.assertEqual(a.sobrante, Decimal("200.0000"))
+        self.assertFalse(a.es_merma)
+        self.assertIsNone(a.costo)
+        self.assertEqual(Asiento.objects.count(), antes)
+        self.ing.refresh_from_db()
+        self.assertEqual(self.ing.stock_disponible, Decimal("1000"))
+        self.assertTrue(any("falta capturar una compra" in m
+                            for m in self._avisos(resp)))
+
+    def test_un_conteo_que_cuadra_no_registra_nada(self):
+        self._contar("1000")
+        a = self._ajuste()
+        self.assertFalse(a.es_merma)
+        self.assertEqual(a.costo, None)
+
+    def test_no_se_inventa_costo_si_faltan_capas(self):
+        """Perder algo que ninguna capa de esa fecha respalda no se cuesta.
+
+        Es el caso real: se cuenta el lunes y la única compra que respalda ese
+        stock está fechada el miércoles. El FIFO solo mira capas anteriores al
+        movimiento, así que no hay de dónde sacar el costo — y se deja
+        constancia en vez de inventarlo con el catálogo.
+        """
+        from datetime import timedelta
+        from contabilidad.models import Asiento
+        ayer = self.hoy - timedelta(days=1)
+        resp = self._contar("800", fecha=ayer.isoformat())
+        a = self._ajuste()
+        self.assertEqual(a.merma, Decimal("200.0000"))
+        self.assertTrue(a.costo_incompleto)
+        self.assertEqual(a.costo, Decimal("0.00"))
+        self.assertFalse(
+            Asiento.objects.filter(referencia=f"Merma #{a.pk}").exists())
+        self.assertTrue(any("todavía no entra al gasto" in m
+                            for m in self._avisos(resp)))
+
+    # ── Deshacer y rehacer ──────────────────────────────────────────────────
+    def test_borrar_la_merma_le_devuelve_el_saldo_a_la_capa(self):
+        self._contar("800")
+        self._ajuste().delete()
+        self.assertEqual(Compra.objects.get().saldo_receta, Decimal("1000.0000"))
+        self.ing.refresh_from_db()
+        self.assertEqual(self.ing.stock_disponible, Decimal("1000"))
+
+    def test_una_compra_atrasada_recupera_una_merma_incompleta(self):
+        """La misma red que tienen las ventas: en cuanto llega, entra sola."""
+        from datetime import timedelta
+        ayer = self.hoy - timedelta(days=1)
+        self._contar("800", fecha=ayer.isoformat())
+        self.assertTrue(self._ajuste().costo_incompleto)
+
+        # Aparece la factura del proveedor, fechada antes del conteo.
+        Compra.objects.create(fecha=ayer - timedelta(days=1),
+                              ingrediente=self.ing, cantidad=Decimal("1"),
+                              monto_total=Decimal("60"))
+        a = self._ajuste()
+        self.assertFalse(a.costo_incompleto)
+        self.assertEqual(a.costo, Decimal("12.00"))    # 200 g × $0.06
+
+    def test_recostear_todo_no_cambia_una_merma_sana(self):
+        from io import StringIO
+        from django.core.management import call_command
+        self._contar("800")
+        antes = (self._ajuste().costo, Compra.objects.get().saldo_receta)
+        call_command("recostear", "--todo", stdout=StringIO())
+        self.assertEqual(
+            (self._ajuste().costo, Compra.objects.get().saldo_receta), antes)
+
+    def test_el_auditor_sigue_sano_con_mermas(self):
+        """El invariante de las capas cuenta la merma junto con las ventas."""
+        from io import StringIO
+        from django.core.management import call_command
+        self._contar("800")
+        salida = StringIO()
+        call_command("recostear", "--verificar", stdout=salida)
+        self.assertIn("sano", salida.getvalue().lower())
+
+    def test_el_cajero_no_puede_registrar_conteos(self):
+        from django.contrib.auth.models import User
+        from django.urls import reverse
+        User.objects.create_user("caja", "c@x.mx", "x", is_staff=True)
+        self.client.login(username="caja", password="x")
+        url = reverse("inventario_merma_registrar")
+        resp = self.client.post(url, {"ingrediente": self.ing.pk,
+                                      "cantidad_real": "800"})
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], f"/?next={url}")
+
+
+class MermaSinConsultaPorIngredienteTests(TestCase):
+    """El panel no puede pagar una consulta por ingrediente para las mermas.
+
+    Es la pantalla que el cajero tiene abierta todo el día, y cada consulta es
+    un viaje al pooler. Es la misma lección que dejó el costo de la última
+    compra, que llevó el catálogo de 61 a 251 consultas.
+    """
+
+    def test_las_mermas_del_catalogo_salen_de_una_sola_consulta(self):
+        from django.contrib.auth.models import User
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        from django.urls import reverse
+
+        cajero = User.objects.create_user("caja", "c@x.mx", "x", is_staff=True)
+        self.client.force_login(cajero)
+        for n in range(20):
+            Ingrediente.objects.create(
+                nombre=f"Ing {n}", unidad_compra="kg", cantidad_por_unidad=1000,
+                unidad_receta="g", costo_unidad_compra=Decimal("10"))
+
+        with CaptureQueriesContext(connection) as ctx:
+            self.client.get(reverse("panel_inventario"))
+        consultas = [q["sql"] for q in ctx.captured_queries
+                     if "inventario_ajusteinventario" in q["sql"]]
+        self.assertEqual(len(consultas), 1, consultas)
+
+    def test_el_mapa_y_la_propiedad_dicen_lo_mismo(self):
+        """Las dos vías tienen que dar el número idéntico, o una miente."""
+        from inventario.models import AjusteInventario
+        ing = Ingrediente.objects.create(
+            nombre="Fresas", unidad_compra="kg", cantidad_por_unidad=1000,
+            unidad_receta="g", costo_unidad_compra=Decimal("100"))
+        hoy = date.today()
+        AjusteInventario.objects.create(
+            fecha=hoy, ingrediente=ing, cantidad_calculada=Decimal("1000"),
+            cantidad_real=Decimal("800"))                 # merma de 200
+        AjusteInventario.objects.create(
+            fecha=hoy, ingrediente=ing, cantidad_calculada=Decimal("800"),
+            cantidad_real=Decimal("950"))                 # sobrante: no cuenta
+        AjusteInventario.objects.create(
+            fecha=hoy, ingrediente=ing, cantidad_calculada=Decimal("950"),
+            cantidad_real=Decimal("900"))                 # merma de 50
+
+        self.assertEqual(ing.merma_total, Decimal("250"))
+        self.assertEqual(
+            Ingrediente.mermas_por_ingrediente()[ing.pk], Decimal("250"))

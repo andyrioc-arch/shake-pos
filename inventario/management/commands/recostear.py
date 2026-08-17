@@ -17,7 +17,7 @@ from django.db.models import Sum
 from contabilidad import posting
 from contabilidad.models import Movimiento
 from inventario import costeo
-from inventario.models import Compra, Venta
+from inventario.models import AjusteInventario, Compra, Venta
 
 
 class Command(BaseCommand):
@@ -92,6 +92,19 @@ class Command(BaseCommand):
             if esperado != venta.costo_fifo:
                 problemas.append(
                     f"venta {venta.id}: guardado {venta.costo_fifo}, "
+                    f"sus capas suman {esperado}")
+
+        # 1b. Lo mismo para las mermas: consumen las mismas capas y por las
+        #     mismas reglas, así que la igualdad tiene que valer igual. Sin
+        #     esta comprobación, una merma mal costeada sería la única salida
+        #     de inventario que el auditor no mira.
+        for ajuste in AjusteInventario.objects.exclude(costo__isnull=True):
+            suma = (ajuste.consumos.aggregate(t=Sum("importe"))["t"]
+                    or Decimal("0"))
+            esperado = suma.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            if esperado != ajuste.costo:
+                problemas.append(
+                    f"merma {ajuste.id}: guardado {ajuste.costo}, "
                     f"sus capas suman {esperado}")
 
         # 2. Ninguna capa puede deber más de lo que trajo, ni menos que cero.

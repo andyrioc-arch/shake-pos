@@ -91,6 +91,9 @@
   .btn-reg.venta:hover { background:#fa5598; color:#fff; }
   .btn-reg.compra { background:#1e9aff; color:#fff; }
   .btn-reg.compra:hover { background:#0d80e0; }
+  .card-form.merma h3 { background:#000; }
+  .btn-reg.merma { background:#8700ff; color:#fff; }
+  .btn-reg.merma:hover { background:#6b00cc; }
   .msg { padding:10px 14px; border:2px solid #000; border-radius:8px; margin:10px 0; font-size:13px; font-weight:600; }
   .msg.success { background:#e7f3ff; }
   .msg.error { background:#ffe6f1; }
@@ -341,6 +344,35 @@
             <input type="date" name="fecha" value="{{ hoy }}"></div>
         </div>
         <button class="btn-reg compra" type="submit">Registrar compra</button>
+      </div>
+    </form>
+
+    <!-- Conteo físico: lo que hay de verdad contra lo que el sistema calculaba -->
+    <form class="card-form merma" method="post" action="{% url 'inventario_merma_registrar' %}">
+      {% csrf_token %}
+      <h3>⚖️ Conteo de inventario</h3>
+      <div class="body">
+        <div>
+          <label>Ingrediente</label>
+          <select name="ingrediente" id="merma-ing" required>
+            <option value="">— Elige un ingrediente —</option>
+            {% for i in ingredientes_lista %}
+              <option value="{{ i.pk }}"
+                      data-ur="{{ i.unidad_receta }}"
+                      data-stock="{{ i.stock_disponible|stringformat:'s' }}">{{ i.nombre }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="row2">
+          <div><label id="merma-real-label">¿Cuánto hay de verdad?</label>
+            <input type="number" name="cantidad_real" id="merma-real" step="0.01" min="0" placeholder="0.00" required></div>
+          <div><label>Fecha</label>
+            <input type="date" name="fecha" value="{{ hoy }}"></div>
+        </div>
+        <div class="costo-unit" id="merma-dif">Elige un ingrediente para ver la diferencia.</div>
+        <div><label>Motivo — opcional</label>
+          <input type="text" name="motivo" maxlength="200" placeholder="Se echó a perder, se derramó…"></div>
+        <button class="btn-reg merma" type="submit">Registrar conteo</button>
       </div>
     </form>
     {% endif %}
@@ -807,6 +839,63 @@
       out.innerHTML = html;
     }
     [ing, cant, total].forEach(function (el) {
+      el.addEventListener("input", calc); el.addEventListener("change", calc);
+    });
+    calc();
+  })();
+
+  // Conteo físico: enseña la diferencia contra lo calculado antes de guardar.
+  (function () {
+    const ing = document.getElementById("merma-ing");
+    const real = document.getElementById("merma-real");
+    const etiqueta = document.getElementById("merma-real-label");
+    const out = document.getElementById("merma-dif");
+    if (!ing || !real) return;
+    const numero = function (n) {
+      return n.toLocaleString("es-MX", {maximumFractionDigits: 2});
+    };
+
+    function calc() {
+      const opt = ing.options[ing.selectedIndex];
+      if (!(opt && opt.value)) {
+        etiqueta.textContent = "¿Cuánto hay de verdad?";
+        out.className = "costo-unit";
+        out.textContent = "Elige un ingrediente para ver la diferencia.";
+        return;
+      }
+      const ur = opt.dataset.ur || "unidad";
+      const calculado = parseFloat(opt.dataset.stock || "0");
+      etiqueta.textContent = "¿Cuántos " + ur + " hay de verdad?";
+
+      if (real.value === "") {
+        out.className = "costo-unit";
+        out.innerHTML = "El sistema calcula <strong>" + numero(calculado) +
+                        " " + ur + "</strong>. Captura lo que contaste.";
+        return;
+      }
+      const contado = parseFloat(real.value || "0");
+      const dif = contado - calculado;
+      let html = "El sistema calcula <strong>" + numero(calculado) + " " + ur +
+                 "</strong> · contaste <strong>" + numero(contado) + " " + ur +
+                 "</strong>";
+      if (Math.abs(dif) < 0.005) {
+        out.className = "costo-unit";
+        out.innerHTML = html + "<br>Cuadra. No se registra ninguna merma.";
+      } else if (dif < 0) {
+        out.className = "costo-unit";
+        out.innerHTML = html + "<br><strong>Faltan " + numero(-dif) + " " + ur +
+          "</strong>: se registran como merma y salen del inventario.";
+      } else {
+        // Sobrar no es una ganancia: es una compra sin capturar. Se avisa aquí
+        // para que no se registre el conteo esperando que el stock suba.
+        out.className = "costo-unit alarma";
+        out.innerHTML = html + "<br><strong>⚠️ Sobran " + numero(dif) + " " + ur +
+          ". No se va a dar de alta:</strong> que aparezca mercancía significa " +
+          "que falta capturar una compra, y darle entrada obligaría a " +
+          "inventarle un precio. Captura la compra y el stock cuadra solo.";
+      }
+    }
+    [ing, real].forEach(function (el) {
       el.addEventListener("input", calc); el.addEventListener("change", calc);
     });
     calc();

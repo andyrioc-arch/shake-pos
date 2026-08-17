@@ -33,6 +33,7 @@ CATALOGO = [
     ("504", "Mercadotecnia", Cuenta.Tipo.GASTO),
     ("505", "Sueldos", Cuenta.Tipo.GASTO),
     ("506", "Cortesías y promociones", Cuenta.Tipo.GASTO),
+    ("507", "Merma de inventario", Cuenta.Tipo.GASTO),
     ("509", "Otros gastos", Cuenta.Tipo.GASTO),
 ]
 
@@ -50,6 +51,7 @@ CTA_COSTO_VENTAS = "501"
 CTA_INVENTARIO = "115"         # activo: mercancía comprada aún no vendida
 CTA_GASTOS_POR_COMPROBAR = "116"   # activo: gasto pagado aún no reconocido
 CTA_CORTESIAS = "506"          # gasto: costo de productos regalados (activaciones)
+CTA_MERMA = "507"              # gasto: inventario perdido (caducado, tirado, derramado)
 
 # Cuenta de gasto por categoría (claves base; las nuevas usan CategoriaGasto).
 GASTO_A_CUENTA = {
@@ -230,6 +232,37 @@ def sincronizar_venta(venta):
     mov.refresh_from_db()
     sincronizar_movimiento(mov)
     return mov
+
+
+@transaction.atomic
+def sincronizar_ajuste(ajuste):
+    """El asiento de una merma: sale del inventario y se vuelve gasto.
+
+    DEBE 507 Merma · HABER 115 Inventario. Sin asiento de flujo, como la
+    cortesía: perder mercancía no mueve efectivo.
+
+    No pasa por `Movimiento` a propósito. Ese modelo es el libro de lo que se
+    cobró y se pagó —tiene `venta`, `compra` y una cuenta puente por cada uno—
+    y una merma no es ninguna de las tres: no hubo contraparte ni dinero. Se
+    postea directo, que es lo que ya hace el reconocimiento de la cortesía.
+    """
+    from inventario.models import AjusteInventario   # noqa: F401 (claridad)
+
+    referencia = f"Merma #{ajuste.pk}"
+    # Un sobrante no postea nada: dar de alta inventario que nadie compró
+    # obligaría a inventarle un precio. Y un costo incompleto tampoco, por la
+    # misma regla que difiere las ventas: no se reconoce lo que no se sabe.
+    if not ajuste.es_merma or ajuste.costo_incompleto or not ajuste.costo:
+        Asiento.objects.filter(referencia=referencia, automatico=True).delete()
+        return None
+
+    cero = Decimal("0")
+    return _reemplaza_asiento(
+        referencia, ajuste.fecha,
+        f"Merma: {ajuste.ingrediente} × {ajuste.merma:,.2f} "
+        f"{ajuste.ingrediente.unidad_receta}",
+        [(CTA_MERMA, ajuste.costo, cero),
+         (CTA_INVENTARIO, cero, ajuste.costo)])
 
 
 @transaction.atomic
