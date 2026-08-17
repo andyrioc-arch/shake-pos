@@ -9,6 +9,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
+from presupuesto.models import periodo_capturable, periodo_consultable
+
 from . import calculos
 from .models import InversionInicial, PronosticoFlujoCuenta
 
@@ -28,14 +30,21 @@ def _shift(anio, mes, delta):
 
 
 def _periodo_flujo(request):
+    # Ojo con MESES de aquí arriba: es una LISTA, así que un mes negativo no
+    # truena, devuelve el mes contado desde el final. Acotar el rango es lo
+    # único que evita que el panel diga «Diciembre» sobre datos de la nada.
     try:
-        return int(request.GET["fanio"]), int(request.GET["fmes"])
+        anio, mes = int(request.GET["fanio"]), int(request.GET["fmes"])
     except (KeyError, TypeError, ValueError):
-        periodos = calculos.periodos_flujo()
-        if periodos:
-            return periodos[0]
-        hoy = localdate()
-        return hoy.year, hoy.month
+        pass
+    else:
+        if periodo_consultable(anio, mes):
+            return anio, mes
+    periodos = calculos.periodos_flujo()
+    if periodos:
+        return periodos[0]
+    hoy = localdate()
+    return hoy.year, hoy.month
 
 
 def _dec(valor):
@@ -126,9 +135,15 @@ def panel_financiero(request):
 @login_required
 @solo_super
 def pronostico_guardar(request):
+    # Lo que pase de aquí se escribe. Una fila con el mes fuera de rango deja
+    # el panel en 500 para todos, con querystring o sin ella, hasta que alguien
+    # la borre a mano de la base.
     try:
         anio, mes = int(request.POST["anio"]), int(request.POST["mes"])
-    except (KeyError, ValueError):
+        valido = periodo_capturable(anio, mes)
+    except (KeyError, TypeError, ValueError):
+        valido = False
+    if not valido:
         messages.error(request, "Periodo inválido.")
         return redirect("panel_financiero")
 

@@ -119,3 +119,77 @@ class PanelPresupuestoViewTests(TestCase):
         self.client.logout()
         resp = self.client.get("/presupuesto/")
         self.assertEqual(resp.status_code, 302)
+
+
+class PeriodoFueraDeRangoTests(TestCase):
+    """Un periodo imposible no entra ni por la URL ni por el formulario.
+
+    Por la URL revienta la pantalla y ya. Por el formulario es peor: se GUARDA
+    —los validadores del modelo solo corren en full_clean(), y aquí se escribe
+    con update_or_create— y a partir de ahí la portada revienta para todos, sin
+    querystring de por medio, hasta que alguien borre la fila a mano.
+    """
+
+    MALOS = [
+        ("mes cero", 2026, 0),
+        ("mes trece", 2026, 13),
+        ("mes negativo", 2026, -1),
+        ("anio cero", 0, 6),
+        ("anio de cinco cifras", 99999, 6),
+        ("anio de veinte cifras", 10 ** 20, 6),
+        ("mes de diez cifras", 2026, 10 ** 9),
+    ]
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        posting.crear_catalogo()
+        self.user = User.objects.create_superuser("admin", "a@a.com", "pass")
+        self.client.force_login(self.user)
+
+    def test_el_panel_aguanta_la_url(self):
+        for caso, anio, mes in self.MALOS:
+            with self.subTest(caso=caso):
+                resp = self.client.get(f"/presupuesto/?anio={anio}&mes={mes}")
+                self.assertEqual(resp.status_code, 200)
+
+    def test_el_formulario_no_guarda_un_periodo_imposible(self):
+        from django.urls import reverse
+        for caso, anio, mes in self.MALOS:
+            with self.subTest(caso=caso):
+                resp = self.client.post(
+                    reverse("presupuesto_venta_guardar"),
+                    {"anio": anio, "mes": mes, "monto": "1000"})
+                self.assertEqual(resp.status_code, 302)
+        self.assertEqual(PresupuestoVenta.objects.count(), 0)
+
+    def test_la_portada_sobrevive_a_una_fila_ya_envenenada(self):
+        """Validar la entrada no limpia lo que se guardó antes de validarla."""
+        PresupuestoVenta.objects.create(
+            anio=2026, mes=13, monto=Decimal("1000"))
+        PresupuestoGasto.objects.create(
+            anio=2026, mes=13, categoria="insumos", monto=Decimal("500"))
+
+        self.assertEqual(self.client.get("/").status_code, 200)
+        self.assertEqual(self.client.get("/presupuesto/").status_code, 200)
+
+    def test_un_periodo_bueno_si_se_guarda(self):
+        from django.urls import reverse
+        self.client.post(reverse("presupuesto_venta_guardar"),
+                         {"anio": 2026, "mes": 8, "monto": "1000"})
+        self.assertEqual(
+            PresupuestoVenta.objects.get(anio=2026, mes=8).monto,
+            Decimal("1000"))
+
+    def test_una_venta_vieja_sigue_contando(self):
+        """Acotar el periodo es para lo que se CAPTURA, no para lo que ya pasó.
+
+        Una venta con fecha rara sigue siendo dinero cobrado: si desaparece del
+        comparativo, desaparece también de los totales que lee la portada.
+        """
+        rec = Receta.objects.create(nombre="Shake", precio_venta=Decimal("100.00"))
+        Venta.objects.create(fecha=date(2019, 5, 1), receta=rec, cantidad=3)
+
+        periodos = [f["periodo"] for f in comparativo.comparativo_ventas()]
+        self.assertIn("Mayo 2019", periodos)
+        self.assertEqual(comparativo.resumen()["tot_real_ventas"],
+                         Decimal("300.00"))

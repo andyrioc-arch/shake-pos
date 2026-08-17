@@ -12,7 +12,9 @@ from django.views.decorators.http import require_POST
 
 from contabilidad.models import CategoriaGasto, Cuenta
 from . import comparativo
-from .models import MESES, PresupuestoGasto, PresupuestoVenta
+from .models import (
+    MESES, PresupuestoGasto, PresupuestoVenta,
+    periodo_capturable, periodo_consultable)
 
 MES_NOMBRE = dict(MESES)
 
@@ -31,11 +33,17 @@ def _log(request, obj, flag, mensaje):
 
 
 def _periodo_post(request):
-    """(anio, mes) del POST, o (None, None) si vienen ausentes/inválidos."""
+    """(anio, mes) del POST, o (None, None) si vienen ausentes/inválidos.
+
+    Aquí el rango no es cosmética: lo que pase por esta puerta se ESCRIBE. Un
+    mes fuera de 1..12 se guarda callado y después revienta la portada, que lee
+    esas mismas filas para nombrar el periodo.
+    """
     try:
-        return int(request.POST["anio"]), int(request.POST["mes"])
+        anio, mes = int(request.POST["anio"]), int(request.POST["mes"])
     except (KeyError, TypeError, ValueError):
         return None, None
+    return (anio, mes) if periodo_capturable(anio, mes) else (None, None)
 
 
 def _shift(anio, mes, delta):
@@ -53,13 +61,17 @@ def _shift(anio, mes, delta):
 def _periodo_de(request):
     """Mes/año seleccionado (GET); por defecto, el más reciente con datos o el actual."""
     try:
-        return int(request.GET["anio"]), int(request.GET["mes"])
+        anio, mes = int(request.GET["anio"]), int(request.GET["mes"])
     except (KeyError, TypeError, ValueError):
-        periodos = comparativo.periodos_disponibles()
-        if periodos:
-            return periodos[0]
-        hoy = localdate()
-        return hoy.year, hoy.month
+        pass
+    else:
+        if periodo_consultable(anio, mes):
+            return anio, mes
+    periodos = comparativo.periodos_disponibles()
+    if periodos:
+        return periodos[0]
+    hoy = localdate()
+    return hoy.year, hoy.month
 
 
 def _volver(anio, mes):

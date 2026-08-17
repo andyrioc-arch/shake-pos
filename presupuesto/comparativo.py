@@ -4,7 +4,8 @@ from decimal import Decimal
 
 from inventario.models import Venta, Compra
 from contabilidad.models import Movimiento, CategoriaGasto
-from .models import PresupuestoVenta, PresupuestoGasto, MESES
+from .models import (
+    PresupuestoVenta, PresupuestoGasto, MESES, periodo_consultable)
 
 MES_NOMBRE = dict(MESES)
 
@@ -49,7 +50,13 @@ def comparativo_ventas():
     # Une periodos presupuestados y periodos con ventas reales
     periodos = set((p.anio, p.mes) for p in PresupuestoVenta.objects.all())
     periodos |= set(reales.keys())
+    # Lo real trae un periodo sano, porque sale de una fecha. Lo presupuestado
+    # no: se guardó con lo que llegó por el formulario. Se omite lo que no se
+    # puede ni nombrar, no lo que cae fuera del rango del negocio: una venta de
+    # 2019 es rara, pero es dinero y tiene que seguir sumando.
     for (anio, mes) in sorted(periodos, reverse=True):
+        if not periodo_consultable(anio, mes):
+            continue
         pv = PresupuestoVenta.objects.filter(anio=anio, mes=mes).first()
         meta = pv.monto if pv else Decimal("0")
         real = reales.get((anio, mes), Decimal("0"))
@@ -72,6 +79,8 @@ def comparativo_gastos():
     )
     claves |= set(reales.keys())
     for (anio, mes, cat) in sorted(claves, reverse=True):
+        if not periodo_consultable(anio, mes):
+            continue
         pg = PresupuestoGasto.objects.filter(
             anio=anio, mes=mes, categoria=cat
         ).first()
@@ -94,7 +103,10 @@ def periodos_disponibles():
     s |= set((p.anio, p.mes) for p in PresupuestoGasto.objects.all())
     s |= set(ventas_reales_por_periodo().keys())
     s |= set((a, m) for (a, m, c) in gastos_reales_por_periodo_categoria())
-    return sorted(s, reverse=True)
+    # Una fila guardada antes de que la captura validara el mes no puede tumbar
+    # la pantalla: esta lista alimenta al que nombra cada periodo, y la portada
+    # la lee. Se omite en vez de reventar.
+    return sorted((p for p in s if periodo_consultable(*p)), reverse=True)
 
 
 def detalle_mes(anio, mes):

@@ -1,4 +1,6 @@
 from decimal import Decimal
+
+from presupuesto.models import ANIO_MIN, ANIO_MAX
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
 
@@ -13,7 +15,8 @@ class PronosticoFlujoCuenta(models.Model):
     """Pronóstico de flujo por mes y por cuenta contable (mismo catálogo)."""
 
     anio = models.PositiveIntegerField(
-        "Año", validators=[MinValueValidator(2020), MaxValueValidator(2100)]
+        "Año",
+        validators=[MinValueValidator(ANIO_MIN), MaxValueValidator(ANIO_MAX)]
     )
     mes = models.PositiveSmallIntegerField("Mes", choices=MESES)
     cuenta = models.ForeignKey(

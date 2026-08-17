@@ -1,7 +1,8 @@
 from decimal import Decimal
 from datetime import date
 from django.test import TestCase
-from finanzas.models import CostoFijo, InversionInicial, MovimientoEfectivo
+from finanzas.models import (
+    CostoFijo, InversionInicial, MovimientoEfectivo, PronosticoFlujoCuenta)
 from finanzas import calculos
 from inventario.models import (
     Extra, Ingrediente, Receta, RecetaIngrediente, Venta, VentaExtra, Compra)
@@ -359,3 +360,66 @@ class SinConsultasPorVentaTests(TestCase):
 
         # 5 ingredientes en la receta y aun así: 1 receta + 1 join.
         self.assertEqual(self._consultas(leer), 2)
+
+
+class PeriodoFueraDeRangoTests(TestCase):
+    """Un periodo imposible no entra ni por la URL ni por el formulario.
+
+    Aquí MESES es una LISTA, no un diccionario: un mes de más da IndexError,
+    pero uno NEGATIVO no truena — devuelve el mes contado desde el final, así
+    que el panel decía «Diciembre» sobre una consulta que no traía nada.
+    """
+
+    MALOS = [
+        ("mes cero", 2026, 0),
+        ("mes trece", 2026, 13),
+        ("mes negativo", 2026, -1),
+        ("anio cero", 0, 6),
+        ("anio de cinco cifras", 99999, 6),
+        ("anio de veinte cifras", 10 ** 20, 6),
+        ("mes de diez cifras", 2026, 10 ** 9),
+    ]
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        from contabilidad import posting
+        posting.crear_catalogo()
+        self.user = User.objects.create_superuser("admin", "a@a.com", "pass")
+        self.client.force_login(self.user)
+        self.cuenta = calculos.cuentas_flujo()[0]
+
+    def test_el_panel_aguanta_la_url(self):
+        for caso, anio, mes in self.MALOS:
+            with self.subTest(caso=caso):
+                resp = self.client.get(f"/finanzas/?fanio={anio}&fmes={mes}")
+                self.assertEqual(resp.status_code, 200)
+
+    def test_un_mes_negativo_ya_no_se_hace_pasar_por_diciembre(self):
+        resp = self.client.get("/finanzas/?fanio=2026&fmes=-1")
+        self.assertNotContains(resp, "Diciembre 2026")
+
+    def test_el_formulario_no_guarda_un_periodo_imposible(self):
+        from django.urls import reverse
+        for caso, anio, mes in self.MALOS:
+            with self.subTest(caso=caso):
+                resp = self.client.post(
+                    reverse("pronostico_guardar"),
+                    {"anio": anio, "mes": mes,
+                     f"cuenta_{self.cuenta.id}": "1000"})
+                self.assertEqual(resp.status_code, 302)
+        self.assertEqual(PronosticoFlujoCuenta.objects.count(), 0)
+
+    def test_el_panel_sobrevive_a_una_fila_ya_envenenada(self):
+        """Validar la entrada no limpia lo que se guardó antes de validarla."""
+        PronosticoFlujoCuenta.objects.create(
+            anio=2026, mes=13, cuenta=self.cuenta, monto=Decimal("1000"))
+        self.assertEqual(self.client.get("/finanzas/").status_code, 200)
+
+    def test_un_periodo_bueno_si_se_guarda(self):
+        from django.urls import reverse
+        self.client.post(reverse("pronostico_guardar"),
+                         {"anio": 2026, "mes": 8,
+                          f"cuenta_{self.cuenta.id}": "1000"})
+        self.assertEqual(
+            PronosticoFlujoCuenta.objects.get(anio=2026, mes=8).monto,
+            Decimal("1000"))
