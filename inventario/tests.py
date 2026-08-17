@@ -927,3 +927,257 @@ class PedidosPendientesTests(TestCase):
         resp = self.client.get(reverse("panel_pedidos"))
         self.assertEqual(resp.status_code, 302)
         self.assertIn("/login/", resp["Location"])
+
+
+class DescuentoEnLaVentaTests(TestCase):
+    """El descuento baja lo que se cobra. Nunca lo que costó."""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        from contabilidad import posting
+        posting.crear_catalogo()
+        self.andy = User.objects.create_superuser("andy", "a@x.mx", "x")
+        self.client.force_login(self.andy)
+        self.hoy = date.today()
+        self.leche = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("30.00"))
+        self.rec = Receta.objects.create(
+            nombre="Shake", emoji="🍓", precio_venta=Decimal("100.00"))
+        RecetaIngrediente.objects.create(
+            receta=self.rec, ingrediente=self.leche, cantidad=200)
+        Compra.objects.create(fecha=self.hoy, ingrediente=self.leche,
+                              cantidad=Decimal("2"), monto_total=Decimal("60"))
+
+    def _vender(self, pct="", cantidad=1, **extra):
+        import json
+        from django.urls import reverse
+        datos = {
+            "productos_json": json.dumps(
+                [{"receta": self.rec.pk, "cantidad": cantidad}]),
+            "metodo_pago": "efectivo", "pago_con": "1000",
+            "nombre_cliente": "Andrea", "descuento_pct": pct,
+            "fecha": self.hoy.isoformat(),
+        }
+        datos.update(extra)
+        return self.client.post(reverse("inventario_venta_agregar"), datos)
+
+    # ── Lo que cobra ────────────────────────────────────────────────────────
+    def test_sin_descuento_cobra_el_precio_de_lista(self):
+        self._vender()
+        v = Venta.objects.get()
+        self.assertEqual(v.descuento_pct, Decimal("0"))
+        self.assertEqual(v.ingreso, Decimal("100.00"))
+        self.assertEqual(v.ingreso_lista, Decimal("100.00"))
+
+    def test_con_descuento_baja_el_ingreso(self):
+        self._vender("15")
+        v = Venta.objects.get()
+        self.assertEqual(v.ingreso_lista, Decimal("100.00"))
+        self.assertEqual(v.descuento_monto, Decimal("15.00"))
+        self.assertEqual(v.ingreso, Decimal("85.00"))
+
+    def test_el_descuento_no_toca_el_costo(self):
+        """La regla que sostiene todo: se rebaja lo cobrado, no lo que costó."""
+        self._vender("50")
+        v = Venta.objects.get()
+        self.assertEqual(v.costo_fifo, Decimal("6.00"))   # 200 ml × 0.03
+        self.assertEqual(v.ganancia, Decimal("44.00"))    # 50 − 6
+
+    def test_del_100_por_ciento_cobra_cero_pero_no_es_cortesia(self):
+        """Regalar y descontar al 100% no son lo mismo en los libros.
+
+        La cortesía va contra 506; el descuento se queda en el ingreso.
+        """
+        self._vender("100")
+        v = Venta.objects.get()
+        self.assertEqual(v.ingreso, Decimal("0.00"))
+        self.assertFalse(v.es_cortesia)
+        self.assertEqual(v.costo_fifo, Decimal("6.00"))
+
+    def test_se_redondea_una_sola_vez(self):
+        """3 × 100 × 33.33% deja fracciones de centavo en cada parte."""
+        self._vender("33.33", cantidad=3)
+        v = Venta.objects.get()
+        self.assertEqual(v.ingreso, Decimal("200.01"))
+        self.assertEqual(Nota.objects.get().total, Decimal("200.01"))
+
+    # ── Lo que rechaza ──────────────────────────────────────────────────────
+    def test_un_descuento_imposible_se_ignora_y_no_tumba_la_venta(self):
+        for malo in ("101", "-5", "abc", "NaN", "Infinity", "1e400"):
+            with self.subTest(pct=malo):
+                Venta.objects.all().delete()
+                Nota.objects.all().delete()
+                self._vender(malo)
+                v = Venta.objects.get()
+                self.assertEqual(v.descuento_pct, Decimal("0"))
+                self.assertEqual(v.ingreso, Decimal("100.00"))
+
+    def test_una_cortesia_ignora_el_descuento(self):
+        self._vender("50", cortesia="1", motivo_cortesia="Activación",
+                     pago_con="")
+        v = Venta.objects.get()
+        self.assertEqual(v.descuento_pct, Decimal("0"))
+        self.assertEqual(v.ingreso, Decimal("0"))
+
+    def test_el_efectivo_se_compara_contra_lo_rebajado(self):
+        """Con 15% de descuento, $90 alcanzan para un shake de $100."""
+        resp = self._vender("15", pago_con="90")
+        self.assertEqual(Venta.objects.count(), 1)
+        self.assertEqual(Nota.objects.get().cambio, Decimal("5.00"))
+
+    # ── Lo que arrastra ─────────────────────────────────────────────────────
+    def test_la_contabilidad_registra_lo_cobrado(self):
+        from contabilidad import posting
+        from contabilidad.models import Movimiento
+        self._vender("15")
+        v = Venta.objects.get()
+        self.assertEqual(Movimiento.objects.get(venta=v).monto, Decimal("85.00"))
+        er = posting.estado_resultados(self.hoy.year, self.hoy.month)
+        self.assertEqual(er["total_ingresos"], Decimal("85"))
+        self.assertEqual(er["total_costo_ventas"], Decimal("6"))
+
+    def test_el_iva_se_calcula_sobre_lo_cobrado(self):
+        self._vender("15")
+        nota = Nota.objects.get()
+        self.assertEqual(nota.total, Decimal("85.00"))
+        self.assertEqual(nota.subtotal + nota.iva, nota.total)
+
+    def test_los_puntos_se_dan_por_lo_que_pago(self):
+        """No por el precio de lista: los puntos siguen al dinero."""
+        from lealtad.models import Cliente
+        self._vender("50", telefono_lealtad="9991234567")
+        # $100 con 50% = $50 cobrados ÷ $10 por punto
+        self.assertEqual(Cliente.objects.get().puntos_saldo, 5)
+
+    def test_la_nota_guarda_de_cuanto_era_y_cuanto_se_rebajo(self):
+        self._vender("15", cantidad=2)
+        nota = Nota.objects.get()
+        self.assertEqual(nota.total_lista, Decimal("200.00"))
+        self.assertEqual(nota.descuento_monto, Decimal("30.00"))
+        self.assertEqual(nota.descuento_pct, Decimal("15.00"))
+        self.assertTrue(nota.tiene_descuento)
+
+    def test_sin_descuento_la_nota_no_lo_menciona(self):
+        self._vender()
+        self.assertFalse(Nota.objects.get().tiene_descuento)
+
+    def test_el_comprobante_lo_muestra(self):
+        self._vender("15")
+        nota = Nota.objects.get()
+        resp = self.client.get(nota.get_absolute_url())
+        self.assertContains(resp, "Descuento (15%)")
+        self.assertContains(resp, "Precio de lista")
+
+    def test_el_pdf_no_se_rompe_con_descuento(self):
+        from django.urls import reverse
+        self._vender("15")
+        nota = Nota.objects.get()
+        resp = self.client.get(reverse("nota_pdf", args=[nota.token]))
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.content.startswith(b"%PDF-"))
+
+
+class ValoresImposiblesEnLaCajaTests(TestCase):
+    """`Decimal` acepta NaN e Infinity y revienta al compararlos.
+
+    Es un 500 con el cliente enfrente, y por `_to_decimal` pasan el efectivo
+    recibido y la captura de compras, no solo el descuento.
+    """
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        self.andy = User.objects.create_superuser("andy", "a@x.mx", "x")
+        self.client.force_login(self.andy)
+        self.ing = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("30.00"))
+        self.rec = Receta.objects.create(
+            nombre="Shake", precio_venta=Decimal("100.00"))
+        RecetaIngrediente.objects.create(
+            receta=self.rec, ingrediente=self.ing, cantidad=200)
+
+    def test_pago_con_no_finito_no_tumba_la_caja(self):
+        import json
+        from django.urls import reverse
+        for malo in ("NaN", "sNaN", "Infinity", "-Infinity"):
+            with self.subTest(pago_con=malo):
+                resp = self.client.post(reverse("inventario_venta_agregar"), {
+                    "productos_json": json.dumps(
+                        [{"receta": self.rec.pk, "cantidad": 1}]),
+                    "metodo_pago": "efectivo", "pago_con": malo,
+                    "nombre_cliente": "Andrea"})
+                self.assertEqual(resp.status_code, 302)
+                self.assertEqual(Venta.objects.count(), 0)
+
+    def test_una_compra_con_cantidad_no_finita_no_tumba_la_pagina(self):
+        from django.urls import reverse
+        for campo in ("cantidad", "costo_total"):
+            for malo in ("NaN", "Infinity"):
+                with self.subTest(campo=campo, valor=malo):
+                    datos = {"ingrediente": self.ing.pk, "cantidad": "1",
+                             "costo_total": "10"}
+                    datos[campo] = malo
+                    resp = self.client.post(
+                        reverse("inventario_compra_agregar"), datos)
+                    self.assertEqual(resp.status_code, 302)
+                    self.assertEqual(Compra.objects.count(), 0)
+
+
+class LaNotaConDescuentoCuadraTests(TestCase):
+    """El comprobante que ve el cliente tiene que sumar.
+
+    `lista − descuento = total`, con el descuento redondeado como lo imprime la
+    plantilla. Derivarlo de la resta y no de la suma de importes crudos es lo
+    único que lo garantiza: el total se redondea sobre el complemento, así que
+    dos redondeos independientes suben los dos y se gana un centavo.
+    """
+
+    def setUp(self):
+        self.ing = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("30.00"))
+
+    def _nota(self, precio, pct, cantidad=1):
+        rec = Receta.objects.create(
+            nombre=f"Shake {precio}-{pct}", precio_venta=Decimal(precio))
+        RecetaIngrediente.objects.create(
+            receta=rec, ingrediente=self.ing, cantidad=200)
+        nota = Nota.objects.create(fecha=date.today(), total=Decimal("0"))
+        venta = Venta.objects.create(
+            fecha=date.today(), receta=rec, cantidad=cantidad,
+            descuento_pct=Decimal(pct), nota=nota)
+        Nota.objects.filter(pk=nota.pk).update(total=venta.ingreso)
+        nota.refresh_from_db()
+        return nota
+
+    def test_la_resta_del_comprobante_da_el_total(self):
+        from django.template.defaultfilters import floatformat
+        # 12.35% deja media milésima justo en la frontera del redondeo.
+        for precio in ("10.00", "30.00", "50.00", "70.00", "95.00"):
+            for pct in ("12.35", "33.33", "15", "7.77"):
+                with self.subTest(precio=precio, pct=pct):
+                    nota = self._nota(precio, pct)
+                    mostrado = Decimal(floatformat(nota.descuento_monto, 2))
+                    self.assertEqual(nota.total_lista - mostrado, nota.total)
+
+    def test_una_cortesia_no_anuncia_un_descuento_que_nadie_dio(self):
+        """`total` es 0 y el de lista no: sin guarda saldría «100% de descuento»."""
+        rec = Receta.objects.create(nombre="Regalo", precio_venta=Decimal("50"))
+        RecetaIngrediente.objects.create(
+            receta=rec, ingrediente=self.ing, cantidad=200)
+        nota = Nota.objects.create(
+            fecha=date.today(), total=Decimal("0"), es_cortesia=True)
+        Venta.objects.create(fecha=date.today(), receta=rec, cantidad=1,
+                             es_cortesia=True, nota=nota)
+        self.assertFalse(nota.tiene_descuento)
+        self.assertEqual(nota.descuento_monto, Decimal("0"))
+
+    def test_el_comprobante_no_repite_la_misma_consulta(self):
+        """Es la página que abre el cliente desde el QR, contra el pooler."""
+        nota = self._nota("30.00", "10")
+        for _ in range(2):
+            Venta.objects.create(fecha=date.today(), receta=nota.lineas.first().receta,
+                                 cantidad=1, descuento_pct=Decimal("10"), nota=nota)
+        with self.assertNumQueries(9):
+            self.client.get(nota.get_absolute_url())

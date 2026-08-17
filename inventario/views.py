@@ -212,9 +212,19 @@ def panel_inventario(request):
 
 
 def _to_decimal(valor, permite_cero=True):
+    """Decimal de un campo del formulario, o None si no sirve.
+
+    Ojo con "NaN" e "Infinity": `Decimal` los construye sin quejarse y luego
+    revientan al compararlos —`NaN < 0` lanza InvalidOperation, no devuelve
+    False—. Sin el `is_finite()` esto es un 500 con el cliente enfrente, y por
+    aquí pasan el efectivo recibido y la captura de compras. Es la misma guarda
+    que `lealtad.api._monto`.
+    """
     try:
         d = Decimal(str(valor).replace(",", "").strip())
     except (InvalidOperation, AttributeError):
+        return None
+    if not d.is_finite():
         return None
     if d < 0 or (not permite_cero and d == 0):
         return None
@@ -233,6 +243,17 @@ def _fecha(valor):
         return date.fromisoformat(valor)
     except (TypeError, ValueError):
         return localdate()
+
+
+def _porcentaje(valor):
+    """Un porcentaje de 0 a 100, o cero si no se puede leer.
+
+    Un descuento imposible se ignora en vez de tumbar la venta: lo que no puede
+    pasar es que la caja se caiga con el cliente enfrente. Cobrar de más se
+    corrige; una venta que no entra, no.
+    """
+    d = _to_decimal(valor)
+    return Decimal("0") if d is None or d > 100 else d
 
 
 class _VentaError(Exception):
@@ -265,6 +286,11 @@ def venta_agregar(request):
     # campos para lo mismo en la misma pantalla se contestan distinto, y el
     # cliente acaba llamándose de dos formas según por dónde se le mire.
     nombre_cliente = request.POST.get("nombre_cliente", "").strip()[:80]
+    descuento = _porcentaje(request.POST.get("descuento_pct"))
+    # Una cortesía ya es gratis; encima un descuento no significa nada y solo
+    # dejaría el dato contradiciéndose con el importe en cero.
+    if es_cortesia:
+        descuento = Decimal("0")
     metodo = request.POST.get("metodo_pago", "efectivo")
     if metodo not in {c.value for c in Venta.MetodoPago}:
         metodo = "efectivo"
@@ -276,7 +302,8 @@ def venta_agregar(request):
         with transaction.atomic():
             with reversion.create_revision():
                 for p in productos:
-                    venta = _crear_producto(p, fecha, metodo, es_cortesia)
+                    venta = _crear_producto(p, fecha, metodo, es_cortesia,
+                                            descuento)
                     if venta:
                         creadas.append(venta)
                         total += venta.ingreso
@@ -511,7 +538,8 @@ def _lealtad_de_la_nota(nota, request, con_qr=True):
     }
 
 
-def _crear_producto(p, fecha, metodo="efectivo", es_cortesia=False):
+def _crear_producto(p, fecha, metodo="efectivo", es_cortesia=False,
+                    descuento=Decimal("0")):
     """Crea una línea de Venta (un producto) con sus sustituciones y add-ons."""
     if not isinstance(p, dict):
         return None
@@ -523,9 +551,13 @@ def _crear_producto(p, fecha, metodo="efectivo", es_cortesia=False):
     except (TypeError, ValueError):
         cantidad = 1
 
+    # El descuento se guarda en cada línea y no en la nota: todo lo que lee
+    # dinero —la contabilidad, el margen, la alarma, el presupuesto— pasa por
+    # `Venta.ingreso`, así que ponerlo aquí lo deja bien en los seis lugares a
+    # la vez. En la nota sería un total que ninguna línea respalda.
     venta = Venta.objects.create(
         fecha=fecha, receta=receta, cantidad=cantidad, metodo_pago=metodo,
-        es_cortesia=es_cortesia)
+        es_cortesia=es_cortesia, descuento_pct=descuento)
 
     # Sustituciones: cambiar un ingrediente de la receta por otro.
     for par in p.get("subs", []):

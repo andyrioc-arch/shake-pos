@@ -85,6 +85,10 @@
     </div>
 
     <div class="tots">
+      {% if nota.tiene_descuento %}
+      <div class="row"><span>Precio de lista</span><span>${{ nota.total_lista|floatformat:2 }}</span></div>
+      <div class="row"><span>Descuento ({{ nota.descuento_pct|floatformat:"-2" }}%)</span><span>−${{ nota.descuento_monto|floatformat:2 }}</span></div>
+      {% endif %}
       <div class="row"><span>Subtotal</span><span>${{ nota.subtotal|floatformat:2 }}</span></div>
       <div class="row"><span>IVA (16%)</span><span>${{ nota.iva|floatformat:2 }}</span></div>
       <div class="row big"><span>Total</span><span>${{ nota.total|floatformat:2 }}</span></div>
