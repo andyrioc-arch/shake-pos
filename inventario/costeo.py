@@ -148,6 +148,110 @@ def _resincroniza(venta):
     posting.sincronizar_venta(venta)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  MERMA
+# ══════════════════════════════════════════════════════════════════════════════
+
+@transaction.atomic
+def descostear_ajuste(ajuste):
+    """Deshace una merma y le devuelve a cada capa lo que le tomó.
+
+    Es la misma mitad que `descostear_venta` y por la misma razón: sin
+    devolver el saldo, borrar o recostear una merma quema inventario en
+    silencio.
+    """
+    devoluciones = {}
+    for compra_id, cantidad in (ConsumoCapa.objects
+                                .filter(ajuste=ajuste, compra__isnull=False)
+                                .values_list("compra_id", "cantidad_receta")):
+        devoluciones[compra_id] = devoluciones.get(compra_id, CERO) + cantidad
+
+    if devoluciones:
+        capas = list(_orden_capas(
+            Compra.objects.select_for_update().filter(pk__in=devoluciones)))
+        for capa in capas:
+            capa.saldo_receta = (capa.saldo_receta or CERO) + devoluciones[capa.pk]
+        Compra.objects.bulk_update(capas, ["saldo_receta"])
+
+    ConsumoCapa.objects.filter(ajuste=ajuste).delete()
+    type(ajuste).objects.filter(pk=ajuste.pk).update(
+        costo=None, costo_incompleto=False)
+    ajuste.costo = None
+    ajuste.costo_incompleto = False
+
+
+@transaction.atomic
+def costear_ajuste(ajuste, sincronizar=True):
+    """Saca la merma del inventario consumiendo capas por FIFO.
+
+    Se cuesta con las mismas reglas que una venta, y no por casualidad: lo que
+    se perdió costó lo que costó comprarlo. Las tres reglas valen igual —no se
+    inventa costo si faltan capas, y se redondea una sola vez al escribir—.
+
+    Idempotente: descuesta antes de volver a consumir.
+    """
+    descostear_ajuste(ajuste)
+
+    falta = ajuste.merma
+    if falta <= 0:
+        # Cuadró o sobró: no sale nada del inventario. Un sobrante NO se da de
+        # alta —habría que inventarle un precio a mercancía que nunca se
+        # compró—; se queda como constancia de que falta capturar una compra.
+        if sincronizar:
+            _resincroniza_ajuste(ajuste)
+        return CERO
+
+    total = CERO
+    incompleto = False
+    consumos = []
+    capas = list(_orden_capas(
+        Compra.objects.select_for_update()
+        .filter(ingrediente_id=ajuste.ingrediente_id, saldo_receta__gt=0,
+                fecha__lte=ajuste.fecha)))
+    tocadas = []
+    for capa in capas:
+        if falta <= 0:
+            break
+        toma = min(falta, capa.saldo_receta)
+        if toma <= 0:
+            continue
+        unitario = capa.costo_unitario_capa
+        consumos.append(ConsumoCapa(
+            ajuste=ajuste, compra=capa, ingrediente_id=ajuste.ingrediente_id,
+            cantidad_receta=toma, costo_unitario=unitario,
+            importe=toma * unitario))
+        capa.saldo_receta -= toma
+        tocadas.append(capa)
+        total += toma * unitario
+        falta -= toma
+    if tocadas:
+        Compra.objects.bulk_update(tocadas, ["saldo_receta"])
+
+    if falta > 0:
+        # Se perdió más de lo que ninguna compra respalda. Pasa cuando faltan
+        # facturas por capturar, y se deja constancia con importe cero en vez
+        # de costearlo con el catálogo.
+        incompleto = True
+        consumos.append(ConsumoCapa(
+            ajuste=ajuste, compra=None, ingrediente_id=ajuste.ingrediente_id,
+            cantidad_receta=falta, costo_unitario=CERO, importe=CERO))
+
+    ConsumoCapa.objects.bulk_create(consumos)
+
+    ajuste.costo = _redondea(total)
+    ajuste.costo_incompleto = incompleto
+    ajuste.save(update_fields=["costo", "costo_incompleto"])
+
+    if sincronizar:
+        _resincroniza_ajuste(ajuste)
+    return ajuste.costo
+
+
+def _resincroniza_ajuste(ajuste):
+    from contabilidad import posting
+    posting.sincronizar_ajuste(ajuste)
+
+
 def ventas_a_recostear(ingrediente_id, desde):
     """Ventas que hay que rehacer cuando entra una capa nueva con fecha `desde`.
 
@@ -185,8 +289,34 @@ def _replay(ventas):
     return len(ventas)
 
 
+def mermas_a_recostear(ingrediente_id, desde):
+    """Mermas de ese ingrediente que una capa nueva con fecha `desde` altera."""
+    from .models import AjusteInventario
+    return (AjusteInventario.objects
+            .filter(ingrediente_id=ingrediente_id, fecha__gte=desde)
+            .order_by("fecha", "id"))
+
+
+@transaction.atomic
+def _replay_mermas(ajustes):
+    ajustes = list(ajustes)
+    for ajuste in ajustes:
+        descostear_ajuste(ajuste)
+    for ajuste in ajustes:
+        costear_ajuste(ajuste)
+    return len(ajustes)
+
+
 def recostear_desde(ingrediente_id, desde):
-    """Rehace el costeo de lo que una capa nueva (o retirada) puede alterar."""
+    """Rehace el costeo de lo que una capa nueva (o retirada) puede alterar.
+
+    Las mermas van primero y por la misma razón que existen las dos mitades del
+    costeo: una merma incompleta —se perdió mercancía que ninguna compra
+    respaldaba— tiene que poder recuperarse cuando llegue la factura que
+    faltaba, igual que una venta. Si solo se recostearan las ventas, esa merma
+    se quedaría para siempre sin costo y su gasto nunca entraría al libro.
+    """
+    _replay_mermas(mermas_a_recostear(ingrediente_id, desde))
     return _replay(ventas_a_recostear(ingrediente_id, desde))
 
 
@@ -211,10 +341,18 @@ def abrir_capas_huerfanas():
 
 def recostear_todo(desde=None):
     """Rehace el costeo completo, en orden canónico. Para el comando y las pruebas."""
+    from .models import AjusteInventario
+
     abrir_capas_huerfanas()
+    # Las mermas primero: consumen las mismas capas y su fecha manda igual que
+    # la de una venta. Dejarlas fuera haría que `recostear --todo` devolviera
+    # su saldo a las capas y no lo volviera a tomar, inflando el inventario.
+    mermas = AjusteInventario.objects.all()
     ventas = Venta.objects.all()
     if desde:
+        mermas = mermas.filter(fecha__gte=desde)
         ventas = ventas.filter(fecha__gte=desde)
+    _replay_mermas(mermas.order_by("fecha", "id"))
     return _replay(ventas.order_by("fecha", "id"))
 
 

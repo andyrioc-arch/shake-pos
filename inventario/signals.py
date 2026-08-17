@@ -12,7 +12,7 @@ from django.db.models.signals import post_delete, post_save, pre_delete
 from django.dispatch import receiver
 
 from . import costeo
-from .models import Compra, Venta, VentaExtra, VentaSustitucion
+from .models import AjusteInventario, Compra, Venta, VentaExtra, VentaSustitucion
 
 # Campos que escribe el propio costeo. Guardarlos no debe volver a disparar el
 # costeo: sin esta guarda, cada venta se costearía en bucle.
@@ -144,3 +144,42 @@ def compra_borrada(sender, instance, **kwargs):
     for venta in Venta.objects.filter(pk__in=afectadas).order_by("fecha", "id"):
         costeo.costear_venta(venta)
     costeo.recostear_desde(instance.ingrediente_id, instance.fecha)
+
+
+# ── Mermas ────────────────────────────────────────────────────────────────────
+# Campos que escribe el propio costeo de la merma. Igual que con las ventas:
+# guardarlos no debe volver a disparar el costeo.
+CAMPOS_DE_COSTEO_MERMA = {"costo", "costo_incompleto"}
+
+
+@receiver(post_save, sender=AjusteInventario)
+def ajuste_guardado(sender, instance, update_fields=None, **kwargs):
+    """Una merma nueva o editada sale del inventario sola.
+
+    Vale desde el panel, desde el admin y desde el shell, como el costeo de
+    las ventas: la pantalla no puede ser el único camino que deje el
+    inventario bien.
+    """
+    if update_fields is not None and set(update_fields) <= CAMPOS_DE_COSTEO_MERMA:
+        return
+    costeo.costear_ajuste(instance)
+
+
+@receiver(pre_delete, sender=AjusteInventario)
+def ajuste_por_borrarse(sender, instance, **kwargs):
+    """Devuelve el inventario ANTES de que la cascada borre el rastro.
+
+    Tiene que ser `pre_delete` por lo mismo que en las ventas: `ConsumoCapa`
+    cuelga en cascada, y en `post_delete` ya no habría a qué capa devolverle
+    su saldo.
+    """
+    costeo.descostear_ajuste(instance)
+    _pendiente[("ajuste", instance.pk)] = (instance.ingrediente_id, instance.fecha)
+
+
+@receiver(post_delete, sender=AjusteInventario)
+def ajuste_borrado(sender, instance, **kwargs):
+    """Al liberar capas, las ventas posteriores pueden costar distinto."""
+    ingrediente_id, fecha = _pendiente.pop(
+        ("ajuste", instance.pk), (instance.ingrediente_id, instance.fecha))
+    costeo.recostear_desde(ingrediente_id, fecha)

@@ -17,8 +17,8 @@ from django.views.decorators.http import require_POST
 
 from .alarmas import alarmas_margen
 from .models import (
-    Compra, Extra, Ingrediente, Nota, Receta, RecetaIngrediente,
-    Venta, VentaExtra, VentaSustitucion,
+    AjusteInventario, Compra, Extra, Ingrediente, Nota, Receta,
+    RecetaIngrediente, Venta, VentaExtra, VentaSustitucion,
 )
 from presupuesto import comparativo
 
@@ -95,9 +95,15 @@ def panel_inventario(request):
     es_super = request.user.is_superuser
 
     # ── Stock y faltantes ────────────────────────────────────────────────
+    # Las mermas de todo el catálogo salen de una sola consulta y se le
+    # inyectan a cada ingrediente. Pedirlas dentro del bucle cuesta una
+    # consulta por ingrediente en la pantalla que el cajero tiene abierta todo
+    # el día; es la misma lección que dejó el costo de la última compra.
+    mermas = Ingrediente.mermas_por_ingrediente()
     ingredientes = []
     faltantes = 0
     for ing in Ingrediente.objects.all():
+        ing._merma_precargada = mermas.get(ing.pk, Decimal("0"))
         falta = ing.hay_faltante
         if falta:
             faltantes += 1
@@ -686,6 +692,65 @@ def _capa_fuera_de_rango(compra):
         f"{cuantas:,.0f} veces {'más caro' if veces > 1 else 'más barato'}. "
         f"Revisa la cantidad: suele ser que se capturó el contenido en "
         f"{unidad} en vez del número de paquetes.")
+
+
+@require_POST
+@login_required
+@user_passes_test(lambda u: u.is_superuser, login_url='/')
+def merma_registrar(request):
+    """Conteo físico: se captura lo que hay y la diferencia sale del inventario.
+
+    Lo calculado se congela aquí y no se recalcula después: el stock de mañana
+    ya no explica la merma de hoy.
+    """
+    ingrediente = Ingrediente.objects.filter(
+        pk=request.POST.get("ingrediente")).first()
+    real = _to_decimal(request.POST.get("cantidad_real"))
+    fecha = _fecha(request.POST.get("fecha"))
+
+    if not ingrediente:
+        messages.error(request, "Selecciona un ingrediente válido.")
+        return redirect("panel_inventario")
+    if real is None:
+        messages.error(request, "La cantidad contada debe ser un número válido.")
+        return redirect("panel_inventario")
+
+    calculado = ingrediente.stock_disponible
+    ajuste = AjusteInventario.objects.create(
+        fecha=fecha, ingrediente=ingrediente,
+        cantidad_calculada=calculado, cantidad_real=real,
+        motivo=request.POST.get("motivo", "").strip()[:200],
+    )
+    _log(request, ajuste, ADDITION, "Registró un conteo de inventario")
+    ajuste.refresh_from_db()
+    unidad = ingrediente.unidad_receta
+
+    if ajuste.es_merma:
+        if ajuste.costo_incompleto:
+            messages.warning(
+                request,
+                f"Merma registrada: faltan {ajuste.merma:,.2f} {unidad} de "
+                f"{ingrediente}. No se pudo costear del todo porque faltan "
+                f"compras que respalden lo que se consumió, así que todavía no "
+                f"entra al gasto. En cuanto se capturen, entra sola.")
+        else:
+            messages.success(
+                request,
+                f"Merma registrada: {ajuste.merma:,.2f} {unidad} de "
+                f"{ingrediente} por ${ajuste.costo:,.2f}.")
+    elif ajuste.sobrante:
+        # No se da de alta: habría que inventarle un precio a mercancía que
+        # nunca se compró. Se dice qué falta, que es la causa real.
+        messages.warning(
+            request,
+            f"Contaste {ajuste.sobrante:,.2f} {unidad} de más de "
+            f"{ingrediente}. No se dio de alta: sobrar significa que falta "
+            f"capturar una compra, y darle entrada obligaría a inventarle un "
+            f"precio. Captura la compra que falta y el stock cuadra solo.")
+    else:
+        messages.success(
+            request, f"{ingrediente}: el conteo cuadra con lo calculado.")
+    return redirect("panel_inventario")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

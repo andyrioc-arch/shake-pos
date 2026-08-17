@@ -3,6 +3,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from django.db import models
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.urls import reverse
+from django.utils import timezone
 
 IVA_TASA = Decimal("0.16")
 
@@ -119,7 +120,50 @@ class Ingrediente(models.Model):
             for ve in ext.ventaextra_set.select_related("venta"):
                 total += ext.cantidad * ve.cantidad
 
+        # 4) Lo que se perdió. Sin esto el conteo físico no sirve de nada: la
+        #    merma bajaría la cuenta 115 pero el stock en pantalla seguiría
+        #    contando mercancía que ya se tiró, y el siguiente conteo volvería
+        #    a reportar el mismo faltante.
+        #
+        #    `_merma_precargada` la inyecta quien recorre el catálogo entero
+        #    para no pagar una consulta por ingrediente; sin ella se resuelve
+        #    sola, que es lo correcto para un llamador suelto.
+        perdido = getattr(self, "_merma_precargada", None)
+        total += self.merma_total if perdido is None else perdido
+
         return total
+
+    @property
+    def merma_total(self):
+        """Unidades de receta perdidas y registradas en conteos físicos.
+
+        Quien recorra varios ingredientes debe usar `mermas_por_ingrediente()`
+        y no esta propiedad: aquí cuesta una consulta por ingrediente, y el
+        panel las pide todas.
+        """
+        return self.mermas_por_ingrediente(
+            [self.pk]).get(self.pk, Decimal("0"))
+
+    @staticmethod
+    def mermas_por_ingrediente(ids=None):
+        """{ingrediente_id: unidades perdidas} para todos, en UNA consulta.
+
+        La resta se hace en la base y no en Python porque el llamador que
+        importa es el panel, que recorre el catálogo entero: pedirlo ingrediente
+        por ingrediente son treinta viajes al pooler cada vez que el cajero
+        abre su pantalla. Es la misma lección que dejó el costo de la última
+        compra en el catálogo.
+        """
+        from django.db.models.functions import Greatest
+        qs = AjusteInventario.objects.all()
+        if ids is not None:
+            qs = qs.filter(ingrediente_id__in=ids)
+        filas = qs.values("ingrediente_id").annotate(
+            perdido=models.Sum(Greatest(
+                models.F("cantidad_calculada") - models.F("cantidad_real"),
+                models.Value(Decimal("0")))))
+        return {f["ingrediente_id"]: f["perdido"] or Decimal("0")
+                for f in filas}
 
     @property
     def stock_disponible(self):
@@ -812,8 +856,76 @@ class VentaExtra(models.Model):
         return self.cantidad * self.extra.costo
 
 
+class AjusteInventario(models.Model):
+    """Un conteo físico: lo que el sistema calculaba contra lo que de verdad hay.
+
+    La diferencia hacia abajo es merma —se echó a perder, se tiró, se derramó—
+    y sale del inventario consumiendo capas por FIFO, igual que una venta. No
+    basta con registrar un gasto: si el inventario contable no baja, la cuenta
+    115 se queda inflada y el faltante reaparece en el siguiente conteo.
+
+    La diferencia hacia ARRIBA no se postea. Que aparezca mercancía significa
+    que falta capturar una compra, no que el negocio ganó inventario; darle
+    entrada obligaría a inventarle un precio, que es exactamente lo que el
+    costeo entero existe para no hacer. Se guarda el conteo como constancia y
+    se avisa qué falta.
+    """
+
+    fecha = models.DateField(default=timezone.localdate)
+    ingrediente = models.ForeignKey(
+        Ingrediente, on_delete=models.PROTECT, related_name="ajustes")
+    cantidad_calculada = models.DecimalField(
+        "Lo que el sistema calculaba", max_digits=14, decimal_places=4,
+        editable=False,
+        help_text="Congelado al momento del conteo: el stock de mañana ya no "
+                  "explica la merma de hoy.")
+    cantidad_real = models.DecimalField(
+        "Lo que hay de verdad", max_digits=14, decimal_places=4,
+        validators=[MinValueValidator(Decimal("0"))])
+    costo = models.DecimalField(
+        "Costo de la merma ($)", max_digits=12, decimal_places=2,
+        null=True, blank=True, editable=False,
+        help_text="Lo que valía lo que se perdió, según las capas que lo "
+                  "surtieron. Vacío mientras no se ha costeado.")
+    costo_incompleto = models.BooleanField(
+        default=False, editable=False,
+        help_text="Faltaban capas para respaldar parte de lo perdido.")
+    motivo = models.CharField(max_length=200, blank=True)
+    creado = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Ajuste de inventario (merma)"
+        verbose_name_plural = "Ajustes de inventario (mermas)"
+        ordering = ["-fecha", "-id"]
+        indexes = [models.Index(fields=["fecha"]),
+                   models.Index(fields=["ingrediente", "fecha"])]
+
+    def __str__(self):
+        return f"{self.fecha} · {self.ingrediente} · {self.diferencia:+}"
+
+    @property
+    def diferencia(self):
+        """Real − calculado. Negativa es merma; positiva, una compra sin capturar."""
+        return self.cantidad_real - self.cantidad_calculada
+
+    @property
+    def merma(self):
+        """Cuánto se perdió, en unidades de receta. Cero si sobró o cuadró."""
+        falta = self.cantidad_calculada - self.cantidad_real
+        return falta if falta > 0 else Decimal("0")
+
+    @property
+    def es_merma(self):
+        return self.merma > 0
+
+    @property
+    def sobrante(self):
+        dif = self.diferencia
+        return dif if dif > 0 else Decimal("0")
+
+
 class ConsumoCapa(models.Model):
-    """Qué capa de compra surtió a qué venta, y por cuánto.
+    """Qué capa de compra surtió a qué salida de inventario, y por cuánto.
 
     Es el rastro que hace auditable el costo de una venta y, sobre todo, lo que
     permite deshacerlo: para recostear hay que devolverle a cada compra las
@@ -823,10 +935,22 @@ class ConsumoCapa(models.Model):
     `compra` en blanco significa que faltaban capas para esa parte del consumo:
     se deja constancia con importe cero en vez de inventar el costo con el
     precio del catálogo, que abonaría inventario que nunca entró.
+
+    Una fila cuelga de una venta O de un ajuste de inventario, nunca de las dos
+    ni de ninguna. La merma vive aquí y no en su propia tabla a propósito: el
+    invariante que audita `recostear --verificar` es «lo consumido más el saldo
+    da lo que trajo la capa», y lo consumido lo cuenta esta tabla. Una tabla
+    aparte dejaría ese invariante roto en cada capa que tocara una merma, y ese
+    auditor es lo único que avisa cuando el costeo se descompone.
     """
 
     venta = models.ForeignKey(
-        "Venta", on_delete=models.CASCADE, related_name="consumos")
+        "Venta", on_delete=models.CASCADE, related_name="consumos",
+        null=True, blank=True)
+    ajuste = models.ForeignKey(
+        "AjusteInventario", on_delete=models.CASCADE, related_name="consumos",
+        null=True, blank=True,
+        help_text="La merma que se llevó estas unidades, si no fue una venta.")
     compra = models.ForeignKey(
         "Compra", on_delete=models.CASCADE, null=True, blank=True,
         related_name="consumos")
@@ -846,11 +970,23 @@ class ConsumoCapa(models.Model):
         indexes = [
             models.Index(fields=["ingrediente", "venta"]),
             models.Index(fields=["compra"]),
+            models.Index(fields=["ajuste"]),
+        ]
+        constraints = [
+            # Una salida de inventario tiene exactamente un dueño. Sin esto,
+            # una fila huérfana consumiría saldo que nadie puede devolver, y
+            # una con los dos lo devolvería dos veces al deshacerse.
+            models.CheckConstraint(
+                condition=(models.Q(venta__isnull=False, ajuste__isnull=True) |
+                           models.Q(venta__isnull=True, ajuste__isnull=False)),
+                name="consumo_de_una_venta_o_de_un_ajuste",
+            ),
         ]
 
     def __str__(self):
         origen = self.compra_id or "sin capa"
-        return f"venta {self.venta_id} ← compra {origen}: {self.cantidad_receta}"
+        dueño = f"venta {self.venta_id}" if self.venta_id else f"merma {self.ajuste_id}"
+        return f"{dueño} ← compra {origen}: {self.cantidad_receta}"
 
 
 class ConfiguracionAlarmas(models.Model):
