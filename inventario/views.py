@@ -558,12 +558,23 @@ def _lealtad_de_la_nota(nota, request, con_qr=True):
 
 def _crear_producto(p, fecha, metodo="efectivo", es_cortesia=False,
                     descuento=Decimal("0")):
-    """Crea una línea de Venta (un producto) con sus sustituciones y add-ons."""
+    """Crea una línea de Venta (un producto) con sus sustituciones y add-ons.
+
+    Una receta que ya no está disponible DETIENE la venta. Antes desaparecía
+    del carrito sin decir nada y el cliente pagaba de menos: el cajero cobraba
+    el total que la pantalla mostró y la nota salía con un producto menos.
+    Detener es lo correcto porque el cliente está enfrente y se puede corregir
+    en el momento; un aviso después de cobrar no sirve de nada.
+    """
     if not isinstance(p, dict):
         return None
-    receta = Receta.objects.filter(pk=p.get("receta"), activa=True).first()
+    receta = Receta.objects.filter(pk=p.get("receta")).first()
     if not receta:
         return None
+    if not receta.activa:
+        raise _VentaError(
+            f"«{receta.nombre}» ya no está disponible y no se puede vender. "
+            f"Quítalo del pedido o vuelve a activarlo en el catálogo.")
     try:
         cantidad = max(1, int(p.get("cantidad") or 1))
     except (TypeError, ValueError):

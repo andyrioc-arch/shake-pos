@@ -1688,3 +1688,56 @@ class PresentacionEnLaCompraTests(TestCase):
         resp = self._comprar("1", "10", contenido_paquete="1.5")
         avisos = [str(m) for m in resp.context["messages"]]
         self.assertTrue(any("0.50" in a and "1.50" in a for a in avisos), avisos)
+
+
+class RecetaDesactivadaTests(TestCase):
+    """Un producto que ya no está detiene la venta en vez de desaparecer.
+
+    Antes la línea se caía del carrito sin decir nada: el cajero cobraba el
+    total que la pantalla había mostrado y la nota salía con un producto menos,
+    así que el cliente pagaba de menos y nadie se enteraba.
+    """
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        from contabilidad import posting
+        posting.crear_catalogo()
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+        ing = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("30.00"))
+        self.viva = Receta.objects.create(
+            nombre="Shake", precio_venta=Decimal("130.00"))
+        self.muerta = Receta.objects.create(
+            nombre="Shake de temporada", precio_venta=Decimal("150.00"),
+            activa=False)
+        for r in (self.viva, self.muerta):
+            RecetaIngrediente.objects.create(
+                receta=r, ingrediente=ing, cantidad=200)
+
+    def _vender(self, productos):
+        import json
+        from django.urls import reverse
+        return self.client.post(reverse("inventario_venta_agregar"), {
+            "productos_json": json.dumps(productos),
+            "metodo_pago": "efectivo", "pago_con": "500",
+            "nombre_cliente": "Andrea"}, follow=True)
+
+    def test_la_venta_se_detiene_y_dice_cual(self):
+        resp = self._vender([{"receta": self.viva.pk, "cantidad": 1},
+                             {"receta": self.muerta.pk, "cantidad": 1}])
+        self.assertEqual(Nota.objects.count(), 0)
+        self.assertEqual(Venta.objects.count(), 0)
+        avisos = [str(m) for m in resp.context["messages"]]
+        self.assertTrue(any("Shake de temporada" in a for a in avisos), avisos)
+
+    def test_no_se_cobra_de_menos_a_medias(self):
+        """Detener entera es el punto: media venta es una venta mal cobrada."""
+        self._vender([{"receta": self.viva.pk, "cantidad": 1},
+                      {"receta": self.muerta.pk, "cantidad": 1}])
+        self.assertFalse(Venta.objects.exists())
+
+    def test_el_carrito_sano_se_cobra_igual(self):
+        self._vender([{"receta": self.viva.pk, "cantidad": 2}])
+        self.assertEqual(Nota.objects.get().total, Decimal("260.00"))

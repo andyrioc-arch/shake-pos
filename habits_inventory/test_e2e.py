@@ -310,13 +310,27 @@ class DiaDeUsoTests(TestCase):
             Movimiento.objects.filter(tipo=Movimiento.Tipo.VENTA).count(),
             ventas)
 
-        # (c) un producto desactivado dentro del carrito.
-        # HALLAZGO, no diseño: la línea desaparece del ticket EN SILENCIO, sin
-        # ningún mensaje, y el cliente pagaría de menos. Se fija como está para
-        # que el día que se arregle, este test avise.
+        # (c) un producto desactivado dentro del carrito: detiene la venta.
+        # Antes la línea desaparecía del ticket en silencio y el cliente pagaba
+        # de menos —el cajero cobraba el total que la pantalla había mostrado—.
+        # Este test fijaba ese hallazgo para que avisara al arreglarse. Avisó.
         resp = self._vender([{"receta": self.shake.pk, "cantidad": 1},
                              {"receta": self.viejo.pk, "cantidad": 1}],
                             pago_con="200")
+        # Sin `fetch_redirect_response`: seguir el redirect aquí consumiría los
+        # mensajes y el aviso no se podría leer después.
+        self.assertRedirects(resp, reverse("panel_inventario"),
+                             fetch_redirect_response=False)
+        self.assertFalse(
+            Nota.objects.exclude(pk__in=[n1.pk, n2.pk, n3.pk]).exists())
+        self.assertEqual(Venta.objects.count(), ventas)
+        avisos = [str(m) for m in self.c_caja.get(
+            reverse("panel_inventario")).context["messages"]]
+        self.assertTrue(any(self.viejo.nombre in a for a in avisos), avisos)
+
+        # Y el cajero hace lo que haría de verdad: quita el producto que ya no
+        # está y cobra el resto. El día sigue su curso.
+        self._vender([{"receta": self.shake.pk, "cantidad": 1}], pago_con="200")
         n4 = Nota.objects.exclude(pk__in=[n1.pk, n2.pk, n3.pk]).get()
         self.assertEqual(n4.lineas.count(), 1)
         self.assertEqual(n4.total, Decimal("130.00"))
