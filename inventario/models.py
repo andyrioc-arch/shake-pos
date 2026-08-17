@@ -1,7 +1,7 @@
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
 from django.db import models
-from django.core.validators import MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.urls import reverse
 
 IVA_TASA = Decimal("0.16")
@@ -424,6 +424,53 @@ class Nota(models.Model):
         """¿Sigue en la barra sin entregar?"""
         return self.entregada_en is None
 
+    # ── Descuento ─────────────────────────────────────────────────────────
+    # Se derivan de las líneas y no se guardan: `total` ya viene rebajado, y
+    # una columna al lado sería una segunda versión del mismo hecho esperando
+    # a desfasarse el día que alguien edite una línea desde el admin.
+    #
+    # Las tres cifras salen de UN solo recorrido y se guardan en caché: cada
+    # una abriendo su propio `lineas.all()` convertía el comprobante —lo que
+    # abre el cliente al escanear el QR— en veinte consultas.
+    def _resumen_descuento(self):
+        if not hasattr(self, "_desc_cache"):
+            lineas = list(self.lineas.all())
+            lista = sum((l.ingreso_lista for l in lineas), Decimal("0"))
+            # El monto se DERIVA de la resta y no se suma aparte. Sumar los
+            # importes crudos y redondearlos para enseñarlos deja el
+            # comprobante sin cuadrar: el total se redondea sobre el
+            # complemento, los dos redondeos suben, y el cliente lee
+            # «30.00 − 3.71 = 26.30».
+            monto = Decimal("0") if self.es_cortesia else lista - self.total
+            self._desc_cache = {
+                "lista": lista,
+                "monto": monto if monto > 0 else Decimal("0"),
+                # El mayor de las líneas: hoy la caja pone el mismo en todas, y
+                # promediarlos daría un número que no es el de ninguna.
+                "pct": max((l.descuento_pct for l in lineas),
+                           default=Decimal("0")),
+            }
+        return self._desc_cache
+
+    @property
+    def total_lista(self):
+        """Lo que habría costado sin descuento."""
+        return self._resumen_descuento()["lista"]
+
+    @property
+    def descuento_monto(self):
+        """Lo que se rebajó. Cuadra con el total por construcción."""
+        return self._resumen_descuento()["monto"]
+
+    @property
+    def descuento_pct(self):
+        """El porcentaje aplicado, para enseñarlo en la nota."""
+        return self._resumen_descuento()["pct"]
+
+    @property
+    def tiene_descuento(self):
+        return self.descuento_monto > 0
+
     @property
     def subtotal(self):
         return desglosa_iva(self.total)[0]
@@ -498,6 +545,14 @@ class Venta(models.Model):
         "Método de pago", max_length=10,
         choices=MetodoPago.choices, default=MetodoPago.EFECTIVO,
     )
+    descuento_pct = models.DecimalField(
+        "Descuento (%)", max_digits=5, decimal_places=2,
+        default=Decimal("0"), db_default=Decimal("0"),
+        validators=[MinValueValidator(Decimal("0")),
+                    MaxValueValidator(Decimal("100"))],
+        help_text="Rebaja sobre el precio de lista. No cambia el costo: solo "
+                  "baja lo que se cobró.",
+    )
     es_cortesia = models.BooleanField(
         "Cortesía", default=False,
         help_text="Producto regalado (activación): sin ingreso, pero consume inventario.",
@@ -556,13 +611,34 @@ class Venta(models.Model):
         return sum((e.costo_total for e in self.extras.all()), Decimal("0"))
 
     @property
+    def ingreso_lista(self):
+        """Lo que costaría sin descuento: precio de lista por lo que se llevó.
+
+        Se separa de `ingreso` para que la nota pueda enseñar de cuánto era
+        antes y cuánto se le rebajó. Sin este dato, un descuento del 100% y una
+        cortesía se ven idénticos en los reportes, y no son lo mismo: la
+        cortesía va contra 506 y el descuento contra el ingreso.
+        """
+        # Shakes a precio base + add-ons cobrados una vez por la línea.
+        # El precio ya incluye IVA (16%); ver subtotal/iva para el desglose.
+        return self.cantidad * self.precio_efectivo + self.cargo_extras
+
+    @property
+    def descuento_monto(self):
+        if self.es_cortesia or not self.descuento_pct:
+            return Decimal("0")
+        return self.ingreso_lista * self.descuento_pct / Decimal("100")
+
+    @property
     def ingreso(self):
         # Una cortesía es gratis: no genera ingreso (pero sí consume inventario).
         if self.es_cortesia:
             return Decimal("0")
-        # Shakes a precio base + add-ons cobrados una vez por la línea.
-        # El precio ya incluye IVA (16%); ver subtotal/iva para el desglose.
-        return self.cantidad * self.precio_efectivo + self.cargo_extras
+        # Se redondea UNA sola vez, aquí, y no en cada parte: el descuento sobre
+        # un total impar deja fracciones de centavo, y cuadrarlas por separado
+        # deja al total de la nota sin coincidir con la suma de sus líneas.
+        return (self.ingreso_lista - self.descuento_monto).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     @property
     def subtotal(self):

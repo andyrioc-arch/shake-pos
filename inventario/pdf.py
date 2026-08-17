@@ -30,6 +30,7 @@ ALTO_HITO = 6 * mm
 PASO_SUBTOTAL = 5 * mm
 PASO_IVA = 4 * mm
 PASO_TOTAL = 6 * mm
+PASO_DESCUENTO = 4 * mm
 ALTO_TOTALES = 2 * mm + PASO_SUBTOTAL + PASO_IVA + PASO_TOTAL + 5 * mm
 
 ALTO_LEALTAD = 2 * mm + 5 * mm + 11 * mm
@@ -64,8 +65,13 @@ def _dinero(valor):
     return f"${Decimal(valor or 0):,.2f}"
 
 
-def _alto_total(lineas, pago, lealtad):
+def _alto_total(lineas, pago, lealtad, con_descuento=False):
     alto = ALTO_CABEZA + ALTO_META + ALTO_TOTALES + ALTO_QR + ALTO_PIE
+    if con_descuento:
+        # Las dos filas del descuento (lista y rebaja). Si no se suman aquí, el
+        # ticket se dibuja más largo que el papel que se pidió y el encabezado
+        # se sale por arriba.
+        alto += 2 * PASO_DESCUENTO
     for linea in lineas:
         alto += ALTO_LINEA
         if linea.get("extras") or linea.get("subs"):
@@ -102,7 +108,7 @@ def _dibuja_qr(c, url, centro_x, tope_y, lado):
 def nota_pdf(nota, lineas, url, lealtad=None):
     """Devuelve los bytes del PDF de una nota."""
     pago = nota.pago_con is not None and nota.metodo_pago == "efectivo"
-    alto = _alto_total(lineas, pago, lealtad)
+    alto = _alto_total(lineas, pago, lealtad, nota.tiene_descuento)
 
     buffer = io.BytesIO()
     c = rl_canvas.Canvas(buffer, pagesize=(ANCHO, alto))
@@ -142,8 +148,19 @@ def nota_pdf(nota, lineas, url, lealtad=None):
     # ── Totales ───────────────────────────────────────────────────────────
     y -= 2 * mm
     c.line(MARGEN, y, ANCHO - MARGEN, y)
-    y -= PASO_SUBTOTAL
     c.setFont("Helvetica", 8)
+    if nota.tiene_descuento:
+        # El descuento se enseña arriba del subtotal, con el precio de lista al
+        # lado: es lo que el cliente quiere ver, y sin la referencia el número
+        # rebajado no dice nada.
+        y -= PASO_DESCUENTO
+        c.drawString(MARGEN, y, "Precio de lista")
+        c.drawRightString(ANCHO - MARGEN, y, _dinero(nota.total_lista))
+        y -= PASO_DESCUENTO
+        pct = nota.descuento_pct.normalize()
+        c.drawString(MARGEN, y, f"Descuento ({pct:f}%)")
+        c.drawRightString(ANCHO - MARGEN, y, "-" + _dinero(nota.descuento_monto))
+    y -= PASO_SUBTOTAL
     c.drawString(MARGEN, y, "Subtotal")
     c.drawRightString(ANCHO - MARGEN, y, _dinero(nota.subtotal))
     y -= PASO_IVA

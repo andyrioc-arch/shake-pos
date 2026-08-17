@@ -263,6 +263,16 @@
             </div>
           </div>
 
+          <!-- Descuento. Se autollena con el que tenga pactado el cliente al
+               teclear su celular, y se puede cambiar a mano. -->
+          <div id="descuento-box" style="margin-bottom:10px;">
+            <label>🏷️ Descuento (%) <span class="muted">(opcional)</span></label>
+            <input type="number" name="descuento_pct" id="descuento-pct"
+                   step="0.01" min="0" max="100" placeholder="0"
+                   autocomplete="off">
+            <div id="descuento-nota" class="mods-note" style="display:none;"></div>
+          </div>
+
           <!-- Método de pago -->
           <div class="pago" id="pago-box">
             <label>Método de pago</label>
@@ -526,11 +536,20 @@
     const cortesiaChk = document.getElementById("cortesia-chk");
     const cortesiaMotivoBox = document.getElementById("cortesia-motivo-box");
     const pagoBox = document.getElementById("pago-box");
+    const descuentoBox = document.getElementById("descuento-box");
+    const descuentoPct = document.getElementById("descuento-pct");
+    const descuentoNota = document.getElementById("descuento-nota");
 
     let carrito = [];
     let totalActual = 0;
 
     function esCortesia() { return cortesiaChk.checked; }
+
+    function pctDescuento() {
+      if (esCortesia()) return 0;
+      const p = parseFloat(descuentoPct.value || "0");
+      return (isNaN(p) || p < 0 || p > 100) ? 0 : p;
+    }
 
     function metodoActual() {
       const m = document.querySelector('input[name="metodo_pago"]:checked');
@@ -538,9 +557,11 @@
     }
 
     function actualizarCambio() {
-      // Cortesía: sin cobro. Se oculta el pago y se muestra el motivo.
+      // Cortesía: sin cobro. Se oculta el pago, el descuento y se pide motivo.
+      // Un descuento sobre algo que ya es gratis no significa nada.
       cortesiaMotivoBox.style.display = esCortesia() ? "" : "none";
       pagoBox.style.display = esCortesia() ? "none" : "";
+      descuentoBox.style.display = esCortesia() ? "none" : "";
       if (esCortesia()) return;
       const esEfectivo = metodoActual() === "efectivo";
       efectivoBox.style.display = esEfectivo ? "" : "none";
@@ -552,7 +573,10 @@
     }
     metodos.forEach(function (m) { m.addEventListener("change", actualizarCambio); });
     pagoCon.addEventListener("input", actualizarCambio);
-    cortesiaChk.addEventListener("change", actualizarCambio);
+    // El descuento y la cortesía cambian el total, no solo el cambio: hay que
+    // volver a dibujar el carrito, no solo recalcular lo que se devuelve.
+    cortesiaChk.addEventListener("change", render);
+    descuentoPct.addEventListener("input", render);
 
     // Llena "ingrediente original" con los del producto elegido.
     function refrescarOrig() {
@@ -616,6 +640,11 @@
         cartList.innerHTML = '<li class="cart-empty">Aún no has agregado productos.</li>';
         btnRegistrar.disabled = true;
         cartTotalEl.textContent = fmt(0);
+        descuentoNota.style.display = "none";
+        totalActual = 0;
+        // También con el carrito vacío: marcar cortesía tiene que esconder el
+        // cobro y el descuento en ese momento, no hasta que se agregue algo.
+        actualizarCambio();
         return;
       }
       let total = 0;
@@ -632,9 +661,19 @@
           '<button type="button" class="ci-del" data-i="' + idx + '" title="Quitar">✕</button>';
         cartList.appendChild(li);
       });
-      cartTotalEl.textContent = fmt(total);
+      // El total que se enseña es el que se va a cobrar. Mostrar el de lista y
+      // aplicar el descuento hasta el final haría que el cambio en efectivo se
+      // calculara contra un número que no es el que paga el cliente.
+      const pct = pctDescuento();
+      const rebaja = total * pct / 100;
+      cartTotalEl.textContent = fmt(total - rebaja);
+      descuentoNota.style.display = rebaja > 0 ? "" : "none";
+      if (rebaja > 0) {
+        descuentoNota.textContent =
+          "Lista " + fmt(total) + " · descuento −" + fmt(rebaja);
+      }
       btnRegistrar.disabled = false;
-      totalActual = total;
+      totalActual = total - rebaja;
       actualizarCambio();
       cartList.querySelectorAll(".ci-del").forEach(function (b) {
         b.addEventListener("click", function () {
@@ -699,6 +738,7 @@
     const tel = document.getElementById("lealtad-tel");
     const info = document.getElementById("lealtad-info");
     const nombre = document.getElementById("nombre-cliente");
+    const dcto = document.getElementById("descuento-pct");
     if (!tel || !info || !nombre) return;
     let timer = null;
     let consulta = 0;
@@ -723,6 +763,12 @@
           // el nombre al pedido debajo de las manos.
           if (d.encontrado && d.nombre && !nombre.value.trim()) {
             nombre.value = d.nombre;
+          }
+          // El descuento pactado se aplica solo, pero no pisa uno tecleado a
+          // mano: si el cajero ya puso otro, es porque lo autorizaron.
+          if (d.encontrado && d.descuento && dcto && !parseFloat(dcto.value || "0")) {
+            dcto.value = parseFloat(d.descuento);
+            dcto.dispatchEvent(new Event("input"));
           }
           if (!d.encontrado) {
             info.textContent = "Cliente nuevo: se registra al guardar la venta.";
