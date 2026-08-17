@@ -1741,3 +1741,27 @@ class RecetaDesactivadaTests(TestCase):
     def test_el_carrito_sano_se_cobra_igual(self):
         self._vender([{"receta": self.viva.pk, "cantidad": 2}])
         self.assertEqual(Nota.objects.get().total, Decimal("260.00"))
+
+
+class MinimoSoloDeLoQueSeVendeTests(TestCase):
+    """El semáforo de faltantes mide contra lo que de verdad se puede pedir."""
+
+    def setUp(self):
+        self.ing = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("30.00"))
+        self.viva = Receta.objects.create(
+            nombre="Shake", precio_venta=Decimal("130.00"))
+        RecetaIngrediente.objects.create(
+            receta=self.viva, ingrediente=self.ing, cantidad=200)
+
+    def test_una_receta_apagada_deja_de_exigir_stock(self):
+        vieja = Receta.objects.create(
+            nombre="De temporada", precio_venta=Decimal("150.00"))
+        RecetaIngrediente.objects.create(
+            receta=vieja, ingrediente=self.ing, cantidad=300)
+        self.assertEqual(self.ing.minimo_para_cinco, Decimal("2500"))
+
+        vieja.activa = False
+        vieja.save(update_fields=["activa"])
+        self.assertEqual(self.ing.minimo_para_cinco, Decimal("1000"))
