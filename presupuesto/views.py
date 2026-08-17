@@ -81,7 +81,11 @@ def _volver(anio, mes):
 def _to_decimal(valor):
     try:
         d = Decimal(str(valor).replace(",", "").strip())
-        return d if d >= 0 else None
+        # `NaN` queda atrapado por el except —comparar lo hace estallar— pero
+        # `Infinity` sí se compara y pasa, y muere al escribir en la columna.
+        # `is_finite()` cierra los dos de frente. Misma guarda que
+        # `lealtad.api._monto` e `inventario.views._to_decimal`.
+        return d if d.is_finite() and d >= 0 else None
     except (InvalidOperation, AttributeError):
         return None
 
@@ -189,8 +193,13 @@ def gasto_eliminar(request):
     if anio is None:
         messages.error(request, "Periodo inválido.")
         return redirect("panel_presupuesto")
-    pk = request.POST.get("pk")
-    obj = PresupuestoGasto.objects.filter(pk=pk).first()
+    # Sin `int()`, un pk que no sea número lanza ValueError al armar la
+    # consulta: "Field 'id' expected a number but got 'abc'".
+    try:
+        pk = int(request.POST.get("pk"))
+    except (TypeError, ValueError):
+        pk = None
+    obj = PresupuestoGasto.objects.filter(pk=pk).first() if pk else None
     if obj:
         _log(request, obj, DELETION, "Eliminó línea de gasto")
         obj.delete()

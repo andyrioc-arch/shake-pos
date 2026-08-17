@@ -193,3 +193,36 @@ class PeriodoFueraDeRangoTests(TestCase):
         self.assertIn("Mayo 2019", periodos)
         self.assertEqual(comparativo.resumen()["tot_real_ventas"],
                          Decimal("300.00"))
+
+
+class EntradasImposiblesTests(TestCase):
+    """Lo que un POST fabricado puede meter por los formularios."""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        posting.crear_catalogo()
+        self.user = User.objects.create_superuser("admin", "a@a.com", "pass")
+        self.client.force_login(self.user)
+
+    def test_ningun_monto_imposible_se_guarda(self):
+        from django.urls import reverse
+        for malo in ("NaN", "Infinity", "-Infinity", "abc"):
+            with self.subTest(monto=malo):
+                self.client.post(reverse("presupuesto_venta_guardar"), {
+                    "anio": 2026, "mes": 8, "monto": malo})
+                self.assertEqual(PresupuestoVenta.objects.count(), 0)
+
+    def test_un_pk_que_no_es_numero_no_truena(self):
+        """Sin int(), armar la consulta lanza ValueError y sale un 500."""
+        from django.urls import reverse
+        resp = self.client.post(reverse("presupuesto_gasto_eliminar"), {
+            "anio": 2026, "mes": 8, "pk": "abc"})
+        self.assertEqual(resp.status_code, 302)
+
+    def test_se_sigue_borrando_por_pk_bueno(self):
+        from django.urls import reverse
+        g = PresupuestoGasto.objects.create(
+            anio=2026, mes=8, categoria="insumos", monto=Decimal("100"))
+        self.client.post(reverse("presupuesto_gasto_eliminar"), {
+            "anio": 2026, "mes": 8, "pk": g.pk})
+        self.assertEqual(PresupuestoGasto.objects.count(), 0)
