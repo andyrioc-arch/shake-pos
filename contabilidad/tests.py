@@ -768,3 +768,36 @@ class PeriodoFueraDeRangoTests(TestCase):
         self.assertIn((2019, 5),
                       [(p["anio"], p["mes"]) for p in resp.context["periodos"]])
         self.assertEqual((resp.context["anio"], resp.context["mes"]), (2019, 5))
+
+
+class MontosImposiblesTests(TestCase):
+    """Un monto que no es un número no puede tumbar la pantalla.
+
+    `Decimal` acepta «NaN» e «Infinity» sin quejarse y revienta al COMPARARLOS
+    o al escribirlos. Es la trampa que ya documentaba el proyecto, y este
+    lector no había copiado la guarda.
+    """
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        posting.crear_catalogo()
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+
+    def test_ningun_monto_imposible_registra_ni_truena(self):
+        from django.urls import reverse
+        from contabilidad.models import Movimiento
+        for malo in ("NaN", "Infinity", "-Infinity", "nan", "inf", "abc", ""):
+            with self.subTest(monto=malo):
+                antes = Movimiento.objects.count()
+                resp = self.client.post(reverse("gasto_registrar"), {
+                    "categoria": "renta", "descripcion": "Renta", "monto": malo})
+                self.assertEqual(resp.status_code, 302)
+                self.assertEqual(Movimiento.objects.count(), antes)
+
+    def test_un_monto_bueno_si_entra(self):
+        from django.urls import reverse
+        from contabilidad.models import Movimiento
+        self.client.post(reverse("gasto_registrar"), {
+            "categoria": "renta", "descripcion": "Renta", "monto": "4500"})
+        self.assertEqual(Movimiento.objects.count(), 1)

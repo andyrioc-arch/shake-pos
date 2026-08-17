@@ -101,6 +101,13 @@ def gasto_registrar(request):
     descripcion = request.POST.get("descripcion", "").strip()
     try:
         monto = Decimal(str(request.POST.get("monto", "")).replace(",", "").strip())
+        # `is_finite()` antes de comparar: `Decimal("NaN")` se construye sin
+        # quejarse y revienta con InvalidOperation en cuanto se compara, e
+        # `Infinity` sí se compara pero muere al escribir en la columna. Los
+        # dos son un 500 con el cliente enfrente. Misma guarda que
+        # `lealtad.api._monto` e `inventario.views._to_decimal`.
+        if not monto.is_finite():
+            monto = None
     except (InvalidOperation, AttributeError):
         monto = None
     fecha = localdate()

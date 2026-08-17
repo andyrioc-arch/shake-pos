@@ -423,3 +423,33 @@ class PeriodoFueraDeRangoTests(TestCase):
         self.assertEqual(
             PronosticoFlujoCuenta.objects.get(anio=2026, mes=8).monto,
             Decimal("1000"))
+
+
+class MontosImposiblesTests(TestCase):
+    """`Infinity` se compara sin quejarse y muere al escribirlo en la columna."""
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        from contabilidad import posting
+        posting.crear_catalogo()
+        self.user = User.objects.create_superuser("admin", "a@a.com", "pass")
+        self.client.force_login(self.user)
+        self.cuenta = calculos.cuentas_flujo()[0]
+
+    def test_ningun_pronostico_imposible_se_guarda(self):
+        from django.urls import reverse
+        for malo in ("NaN", "Infinity", "-Infinity", "abc"):
+            with self.subTest(monto=malo):
+                resp = self.client.post(reverse("pronostico_guardar"), {
+                    "anio": 2026, "mes": 8, f"cuenta_{self.cuenta.id}": malo})
+                self.assertEqual(resp.status_code, 302)
+                self.assertEqual(PronosticoFlujoCuenta.objects.count(), 0)
+
+    def test_ninguna_inversion_imposible_se_guarda(self):
+        from django.urls import reverse
+        for malo in ("NaN", "Infinity", "abc"):
+            with self.subTest(monto=malo):
+                self.client.post(reverse("inversion_agregar"), {
+                    "concepto": "Licuadora", "categoria": "equipo",
+                    "monto": malo})
+                self.assertEqual(InversionInicial.objects.count(), 0)

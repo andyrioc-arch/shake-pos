@@ -50,7 +50,11 @@ def _periodo_flujo(request):
 def _dec(valor):
     try:
         d = Decimal(str(valor).replace(",", "").strip())
-        return d if d >= 0 else None
+        # `NaN` queda atrapado por el except —comparar lo hace estallar— pero
+        # `Infinity` sí se compara y pasa, y muere al escribir en la columna.
+        # `is_finite()` cierra los dos de frente. Misma guarda que
+        # `lealtad.api._monto` e `inventario.views._to_decimal`.
+        return d if d.is_finite() and d >= 0 else None
     except (InvalidOperation, AttributeError):
         return None
 
