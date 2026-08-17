@@ -244,11 +244,17 @@
 
           <!-- A nombre de quién va el pedido. Va primero porque se pregunta
                primero, y es el mismo nombre que usa lealtad. -->
-          <div style="margin-bottom:10px;">
+          <div class="buscador-cliente" style="margin-bottom:10px;">
             <label>🧾 A nombre de</label>
             <input type="text" name="nombre_cliente" id="nombre-cliente"
                    placeholder="¿Cómo se llama?" autocomplete="off"
-                   maxlength="80" required>
+                   maxlength="80" required
+                   data-buscador-cliente data-destino="cliente-id"
+                   data-lista="nombre-sug"
+                   data-vacio="Nadie con ese nombre. Escribe su celular abajo y se da de alta al guardar.">
+            {# Lo que liga la venta al cliente es el id; el nombre va a la nota. #}
+            <input type="hidden" name="cliente_id" id="cliente-id">
+            <ul class="sugerencias" id="nombre-sug" hidden></ul>
           </div>
 
           <!-- Lealtad: celular del cliente para acumular sus puntos -->
@@ -957,13 +963,15 @@
       info.className = "lealtad-info";
     }
 
-    function consultar() {
-      const q = tel.value.trim();
-      if (q.replace(/\D/g, "").length < 6) { consulta++; limpiar(); return; }
+    // Dos caminos al mismo cliente: elegido de la lista por nombre (`id`), o
+    // tecleado a mano su celular o su código (`q`). La respuesta es la misma,
+    // así que la pantalla solo tiene una cosa que pintar.
+    function pedir(parametro, valor) {
       // Una respuesta rezagada no debe pisar a una más nueva: escondería la
       // caja del nombre o borraría lo que el cajero ya tecleó.
       const mia = ++consulta;
-      fetch("{% url 'lealtad_buscar' %}?q=" + encodeURIComponent(q))
+      fetch("{% url 'lealtad_buscar' %}?" + parametro + "=" +
+            encodeURIComponent(valor))
         .then(function (r) { return r.json(); })
         .then(function (d) {
           if (mia !== consulta) { return; }
@@ -1003,8 +1011,20 @@
 
     tel.addEventListener("input", function () {
       clearTimeout(timer);
-      timer = setTimeout(consultar, 350);
+      timer = setTimeout(function () {
+        const q = tel.value.trim();
+        if (q.replace(/\D/g, "").length < 6) { consulta++; limpiar(); return; }
+        pedir("q", q);
+      }, 350);
+    });
+
+    // Elegir de la lista por nombre trae puntos, nivel y —lo que cambia el
+    // cobro— el descuento pactado. Sin esto, elegir al cliente lo dejaría sin
+    // su descuento y se le cobraría de más.
+    nombre.addEventListener("cliente-elegido", function (e) {
+      pedir("id", e.detail.id);
     });
   })();
 </script>
+{% include "lealtad/_buscador_cliente.html" %}
 {% endblock %}

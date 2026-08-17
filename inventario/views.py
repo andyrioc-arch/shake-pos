@@ -370,11 +370,15 @@ def venta_agregar(request):
     # registrada y un problema del programa de lealtad no debe deshacerla.
     # Las cortesías no acumulan (no se cobraron).
     telefono = request.POST.get("telefono_lealtad", "").strip()
-    if telefono and not es_cortesia:
+    cliente_id = request.POST.get("cliente_id", "").strip()
+    if (telefono or cliente_id) and not es_cortesia:
         from lealtad import servicios as lealtad
+        # El cliente elegido de la lista manda sobre el celular tecleado: es
+        # una elección explícita sobre un dato que pudo quedarse de otra venta.
+        elegido = lealtad.cliente_por_id(cliente_id) if cliente_id else None
         try:
             compra = lealtad.registrar_compra_desde_nota(
-                nota, telefono, nombre=nombre_cliente)
+                nota, telefono, nombre=nombre_cliente, cliente=elegido)
         except lealtad.TelefonoInvalido as e:
             messages.warning(request, f"Venta registrada, pero {e}")
         except lealtad.ErrorLealtad as e:

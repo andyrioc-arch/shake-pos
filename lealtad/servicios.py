@@ -59,6 +59,18 @@ def buscar_cliente(texto):
     return None
 
 
+def cliente_por_id(pk):
+    """El cliente que se eligió de la lista, o None si el id no existe.
+
+    Vive aquí para que la caja no tenga que importar los modelos de lealtad:
+    todo lo que necesita del programa pasa por este módulo.
+    """
+    try:
+        return Cliente.objects.filter(pk=int(pk)).first()
+    except (TypeError, ValueError):
+        return None
+
+
 def _plegar(texto):
     """Minúsculas y sin acentos, para que «Perez» encuentre a «Pérez».
 
@@ -299,14 +311,22 @@ def registrar_compra(cliente, monto, *, nota=None, ticket="", fecha=None,
     return compra
 
 
-def registrar_compra_desde_nota(nota, telefono, nombre=""):
+def registrar_compra_desde_nota(nota, telefono, nombre="", cliente=None):
     """Punto de entrada desde la caja. Nunca lanza: una venta no puede fallar
-    porque el programa de lealtad tenga un problema."""
-    if not telefono:
+    porque el programa de lealtad tenga un problema.
+
+    `cliente` llega ya resuelto cuando se eligió de la lista por su nombre: ahí
+    no hay nada que buscar ni que dar de alta. De paso arregla que un código de
+    seis caracteres tecleado en la caja se encontrara en la búsqueda y luego
+    reventara aquí, porque `alta_cliente` solo entiende celulares: esa venta se
+    registraba pero no daba puntos.
+    """
+    if cliente is None and not telefono:
         return None
     try:
-        cliente, _ = alta_cliente(telefono, nombre=nombre,
-                                  origen=Cliente.Origen.CAJA)
+        if cliente is None:
+            cliente, _ = alta_cliente(telefono, nombre=nombre,
+                                      origen=Cliente.Origen.CAJA)
         return registrar_compra(cliente, nota.total, nota=nota,
                                 fecha=nota.fecha, origen=Compra.Origen.CAJA)
     except (TelefonoInvalido, ErrorLealtad):

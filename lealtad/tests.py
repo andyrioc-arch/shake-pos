@@ -1748,3 +1748,83 @@ class BuscadorPorNombreTests(TestCase):
         resp = self.client.post(url)
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(resp["Location"], f"/?next={url}")
+
+
+class CajaEligeClienteTests(TestCase):
+    """La caja liga la venta al cliente elegido de la lista, no al celular.
+
+    El celular sigue funcionando como segunda vía: hay quien lo dicta. Y
+    elegir de la lista arregla de paso que un código de seis caracteres se
+    encontrara en la búsqueda y luego no diera puntos.
+    """
+
+    def setUp(self):
+        from contabilidad import posting
+        posting.crear_catalogo()
+        self.andy = User.objects.create_superuser("andy", "a@x.mx", "x")
+        self.cajero = User.objects.create_user("caja", "c@x.mx", "x",
+                                               is_staff=True)
+        self.client.force_login(self.cajero)
+        self.receta = crea_receta("Smoothie", "130", "10")
+        self.ana, _ = servicios.alta_cliente("9991111111", nombre="Ana Pérez")
+        self.otra, _ = servicios.alta_cliente("9992222222", nombre="Ana Pérez")
+
+    def _vender(self, **extra):
+        datos = {
+            "productos_json": json.dumps(
+                [{"receta": self.receta.pk, "cantidad": 1}]),
+            "metodo_pago": "efectivo", "pago_con": "200",
+            "nombre_cliente": "Ana Pérez",
+        }
+        datos.update(extra)
+        return self.client.post(reverse("inventario_venta_agregar"), datos,
+                                follow=True)
+
+    def test_la_venta_queda_del_cliente_elegido(self):
+        self._vender(cliente_id=self.otra.pk)
+        self.otra.refresh_from_db()
+        self.ana.refresh_from_db()
+        self.assertEqual(self.otra.visitas, 1)
+        self.assertEqual(self.ana.visitas, 0)
+
+    def test_el_celular_tecleado_sigue_ligando(self):
+        self._vender(telefono_lealtad="9991111111")
+        self.ana.refresh_from_db()
+        self.assertEqual(self.ana.visitas, 1)
+
+    def test_el_elegido_gana_al_celular_que_se_quedo_de_otra_venta(self):
+        """El id es una elección explícita; el celular pudo quedarse tecleado."""
+        self._vender(cliente_id=self.otra.pk, telefono_lealtad="9991111111")
+        self.otra.refresh_from_db()
+        self.ana.refresh_from_db()
+        self.assertEqual(self.otra.visitas, 1)
+        self.assertEqual(self.ana.visitas, 0)
+
+    def test_el_codigo_de_seis_ya_da_puntos(self):
+        """Antes se encontraba en la búsqueda y reventaba al guardar la venta.
+
+        `alta_cliente` solo entiende celulares, así que la venta se registraba
+        con un aviso y el cliente se quedaba sin sus puntos.
+        """
+        resp = self._vender(cliente_id=self.ana.pk)
+        self.ana.refresh_from_db()
+        self.assertEqual(self.ana.visitas, 1)
+        avisos = [str(m) for m in resp.context["messages"]]
+        self.assertFalse(any("no parece un celular" in a for a in avisos), avisos)
+
+    def test_sin_cliente_la_venta_entra_igual(self):
+        """Ligar al programa es opcional; vender no."""
+        from inventario.models import Nota
+        self._vender()
+        self.assertEqual(Nota.objects.count(), 1)
+
+    def test_una_cortesia_no_acumula_aunque_se_elija_cliente(self):
+        self._vender(cliente_id=self.otra.pk, cortesia="1",
+                     motivo_cortesia="Activación")
+        self.otra.refresh_from_db()
+        self.assertEqual(self.otra.visitas, 0)
+
+    def test_un_id_inventado_no_tumba_la_venta(self):
+        from inventario.models import Nota
+        self._vender(cliente_id="999999")
+        self.assertEqual(Nota.objects.count(), 1)
