@@ -134,6 +134,25 @@ class CompraAdmin(admin.ModelAdmin):
     autocomplete_fields = ("cliente",)
     date_hierarchy = "fecha"
 
+    # El monto de la compra ES el monto de la venta que dio los puntos.
+    # Regla de Andy: el staff no ve ventas en $. Mismo patrón que
+    # `inventario.admin.VentaAdmin`.
+    def get_list_display(self, request):
+        if request.user.is_superuser:
+            return self.list_display
+        return tuple(c for c in self.list_display if c != "monto")
+
+    def get_exclude(self, request, obj=None):
+        if request.user.is_superuser:
+            return super().get_exclude(request, obj)
+        return ("monto",)
+
+    def has_add_permission(self, request):
+        # `monto` no acepta nulos y para el staff va excluido del formulario,
+        # así que un alta manual suya reventaría al guardar. No pierde nada:
+        # las compras de puntos las crea la caja al registrar la venta.
+        return request.user.is_superuser and super().has_add_permission(request)
+
 
 @admin.register(MovimientoPuntos)
 class MovimientoPuntosAdmin(admin.ModelAdmin):

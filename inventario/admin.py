@@ -41,6 +41,22 @@ class NotaAdmin(admin.ModelAdmin):
     readonly_fields = ("token", "creada")
     date_hierarchy = "creada"
 
+    # El total y el efectivo de cada nota son montos de venta: el cajero los
+    # ve al cobrar, no en el histórico. Regla de Andy: el staff no ve ventas
+    # en $.
+    _cols_dinero = ("total", "cambio")
+    _campos_dinero = ("total", "pago_con", "cambio")
+
+    def get_list_display(self, request):
+        if request.user.is_superuser:
+            return self.list_display
+        return tuple(c for c in self.list_display if c not in self._cols_dinero)
+
+    def get_exclude(self, request, obj=None):
+        if request.user.is_superuser:
+            return super().get_exclude(request, obj)
+        return self._campos_dinero
+
 admin.site.site_header = "🥤 SHAKE — Control de Inventario"
 admin.site.site_title = "SHAKE Inventario"
 admin.site.index_title = "Panel de control"
@@ -247,14 +263,25 @@ class VentaAdmin(VersionAdmin):
     autocomplete_fields = ("receta",)
     date_hierarchy = "fecha"
 
-    # Ingreso/costo/ganancia solo para superusuario; staff registra ventas
-    # pero no ve márgenes ni totales financieros.
-    _cols_costo = ("ingreso_col", "costo_col", "ganancia_col")
+    # Precio/ingreso/costo/ganancia solo para superusuario; staff registra
+    # ventas pero no ve montos en $ — regla de Andy. El precio cobrado también
+    # es un monto de venta: se ve en la caja al cobrar, no en el histórico.
+    _cols_costo = ("precio_col", "ingreso_col", "costo_col", "ganancia_col")
 
     def get_list_display(self, request):
         if request.user.is_superuser:
             return self.list_display
         return tuple(c for c in self.list_display if c not in self._cols_costo)
+
+    def get_exclude(self, request, obj=None):
+        # El formulario expone `precio_unitario` (el precio congelado al
+        # vender); para el staff se excluye por la misma regla. También el
+        # selector de nota: `Nota.__str__` trae el total, así que el dropdown
+        # publicaría el monto de TODAS las notas. La nota se liga sola cuando
+        # la venta entra por la caja.
+        if request.user.is_superuser:
+            return super().get_exclude(request, obj)
+        return ("precio_unitario", "nota")
 
     @admin.display(description="Personalizada")
     def personalizada_col(self, obj):

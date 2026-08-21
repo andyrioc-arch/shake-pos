@@ -1765,3 +1765,58 @@ class MinimoSoloDeLoQueSeVendeTests(TestCase):
         vieja.activa = False
         vieja.save(update_fields=["activa"])
         self.assertEqual(self.ing.minimo_para_cinco, Decimal("1000"))
+
+
+class ElStaffNoVeMontosEnElAdminTests(TestCase):
+    """Regla de Andy: los montos de venta son solo del superusuario.
+
+    El sitio propio ya lo cumple (`solo_super` + `es_super`); estos tests
+    fijan la misma regla en el admin, que es donde el staff registra ventas.
+    """
+
+    def setUp(self):
+        from django.contrib.admin.sites import site
+        from django.contrib.auth.models import User
+        from django.test import RequestFactory
+        self.cajero = User.objects.create_user(
+            "caja", "caja@x.mx", "x", is_staff=True)
+        self.duena = User.objects.create_superuser("andy", "a@x.mx", "x")
+        self.factory = RequestFactory()
+        self.venta_admin = site.get_model_admin(Venta)
+        self.nota_admin = site.get_model_admin(Nota)
+
+    def _req(self, user):
+        req = self.factory.get("/admin/")
+        req.user = user
+        return req
+
+    def test_el_listado_de_ventas_no_trae_columnas_con_dinero(self):
+        cols = self.venta_admin.get_list_display(self._req(self.cajero))
+        for col in ("precio_col", "ingreso_col", "costo_col", "ganancia_col"):
+            self.assertNotIn(col, cols)
+        self.assertIn("precio_col",
+                      self.venta_admin.get_list_display(self._req(self.duena)))
+
+    def test_el_formulario_de_venta_no_trae_el_precio(self):
+        form = self.venta_admin.get_form(self._req(self.cajero))
+        self.assertNotIn("precio_unitario", form.base_fields)
+        # El selector de nota publica el total de TODAS las notas, porque
+        # `Nota.__str__` lo trae. Fuera también.
+        self.assertNotIn("nota", form.base_fields)
+        form = self.venta_admin.get_form(self._req(self.duena))
+        self.assertIn("precio_unitario", form.base_fields)
+        self.assertIn("nota", form.base_fields)
+
+    def test_el_listado_de_notas_no_trae_total_ni_cambio(self):
+        cols = self.nota_admin.get_list_display(self._req(self.cajero))
+        self.assertNotIn("total", cols)
+        self.assertNotIn("cambio", cols)
+        self.assertIn("total",
+                      self.nota_admin.get_list_display(self._req(self.duena)))
+
+    def test_el_formulario_de_nota_no_trae_dinero(self):
+        form = self.nota_admin.get_form(self._req(self.cajero))
+        for campo in ("total", "pago_con", "cambio"):
+            self.assertNotIn(campo, form.base_fields)
+        form = self.nota_admin.get_form(self._req(self.duena))
+        self.assertIn("total", form.base_fields)

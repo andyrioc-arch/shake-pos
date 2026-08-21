@@ -1828,3 +1828,44 @@ class CajaEligeClienteTests(TestCase):
         from inventario.models import Nota
         self._vender(cliente_id="999999")
         self.assertEqual(Nota.objects.count(), 1)
+
+
+class ElStaffNoVeMontosEnElAdminDeLealtadTests(TestCase):
+    """El monto de una compra de puntos ES el monto de la venta que los dio.
+
+    Regla de Andy: el staff no ve ventas en $. Mismo patrón que el admin de
+    inventario.
+    """
+
+    def setUp(self):
+        from django.contrib.admin.sites import site
+        from django.test import RequestFactory
+        from lealtad.models import Compra
+        self.cajero = User.objects.create_user(
+            "caja", "caja@x.mx", "x", is_staff=True)
+        self.duena = User.objects.create_superuser("andy", "a@x.mx", "x")
+        self.factory = RequestFactory()
+        self.compra_admin = site.get_model_admin(Compra)
+
+    def _req(self, user):
+        req = self.factory.get("/admin/")
+        req.user = user
+        return req
+
+    def test_el_listado_no_trae_el_monto(self):
+        self.assertNotIn(
+            "monto", self.compra_admin.get_list_display(self._req(self.cajero)))
+        self.assertIn(
+            "monto", self.compra_admin.get_list_display(self._req(self.duena)))
+
+    def test_el_formulario_no_trae_el_monto(self):
+        form = self.compra_admin.get_form(self._req(self.cajero))
+        self.assertNotIn("monto", form.base_fields)
+        form = self.compra_admin.get_form(self._req(self.duena))
+        self.assertIn("monto", form.base_fields)
+
+    def test_el_staff_no_puede_dar_de_alta_compras(self):
+        # Sin `monto` en su formulario, el alta del staff reventaría al
+        # guardar: se le niega desde el permiso.
+        self.assertFalse(
+            self.compra_admin.has_add_permission(self._req(self.cajero)))
