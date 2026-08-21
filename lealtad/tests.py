@@ -1869,3 +1869,45 @@ class ElStaffNoVeMontosEnElAdminDeLealtadTests(TestCase):
         # guardar: se le niega desde el permiso.
         self.assertFalse(
             self.compra_admin.has_add_permission(self._req(self.cajero)))
+
+    def test_el_cliente_no_ensena_su_gasto_al_staff(self):
+        from django.contrib.admin.sites import site
+        from lealtad.models import Cliente
+        cliente_admin = site.get_model_admin(Cliente)
+        self.assertNotIn(
+            "gasto_col", cliente_admin.get_list_display(self._req(self.cajero)))
+        self.assertNotIn(
+            "gasto_historico",
+            cliente_admin.get_readonly_fields(self._req(self.cajero)))
+        # Y excluido del formulario: el campo es editable a nivel modelo, así
+        # que solo sacarlo de los readonly lo volvería capturable.
+        self.assertIn(
+            "gasto_historico", cliente_admin.get_exclude(self._req(self.cajero)))
+        self.assertIn(
+            "gasto_col", cliente_admin.get_list_display(self._req(self.duena)))
+
+    def test_el_inline_de_compras_del_cliente_no_trae_monto(self):
+        from lealtad.admin import CompraInline
+        from django.contrib.admin.sites import site
+        from lealtad.models import Cliente
+        inline = CompraInline(Cliente, site)
+        self.assertNotIn("monto", inline.get_fields(self._req(self.cajero)))
+        self.assertIn("monto", inline.get_fields(self._req(self.duena)))
+
+    def test_el_formulario_de_movimientos_no_lista_las_compras(self):
+        from django.contrib.admin.sites import site
+        from lealtad.models import MovimientoPuntos
+        mov_admin = site.get_model_admin(MovimientoPuntos)
+        form = mov_admin.get_form(self._req(self.cajero))
+        self.assertNotIn("compra", form.base_fields)
+
+    def test_el_str_de_la_compra_no_trae_el_monto(self):
+        # Aparece en títulos y dropdowns del admin que el staff sí ve.
+        from decimal import Decimal
+        from django.utils.timezone import localdate
+        from lealtad.models import Cliente, Compra
+        cli = Cliente.objects.create(telefono="5512345678", nombre="Juan")
+        compra = Compra.objects.create(
+            cliente=cli, monto=Decimal("137.50"),
+            puntos_ganados=13, fecha=localdate())
+        self.assertNotIn("137", str(compra))

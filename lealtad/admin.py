@@ -1,4 +1,5 @@
 from django.contrib import admin
+from inventario.admin import SinMontosParaStaff
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
@@ -89,9 +90,29 @@ class CompraInline(admin.TabularInline):
     def has_add_permission(self, request, obj=None):
         return False
 
+    # El monto por compra es monto de venta: fuera para el staff, igual que
+    # en CompraAdmin.
+    def get_fields(self, request, obj=None):
+        campos = super().get_fields(request, obj)
+        if request.user.is_superuser:
+            return campos
+        return [c for c in campos if c != "monto"]
+
+    def get_readonly_fields(self, request, obj=None):
+        campos = super().get_readonly_fields(request, obj)
+        if request.user.is_superuser:
+            return campos
+        return tuple(c for c in campos if c != "monto")
+
 
 @admin.register(Cliente)
-class ClienteAdmin(admin.ModelAdmin):
+class ClienteAdmin(SinMontosParaStaff, admin.ModelAdmin):
+    # El gasto histórico es la suma de las ventas del cliente. Ojo:
+    # `gasto_historico` es editable a nivel modelo, así que quitarlo de los
+    # readonly sin excluirlo lo volvería un campo capturable; el mixin hace
+    # las dos cosas.
+    cols_dinero = ("gasto_col",)
+    campos_dinero = ("gasto_historico",)
     list_display = ("telefono_col", "nombre", "nivel_col", "puntos_saldo",
                     "puntos_historicos", "visitas", "gasto_col",
                     "ultima_compra", "estado")
@@ -126,7 +147,7 @@ class ClienteAdmin(admin.ModelAdmin):
 
 
 @admin.register(Compra)
-class CompraAdmin(admin.ModelAdmin):
+class CompraAdmin(SinMontosParaStaff, admin.ModelAdmin):
     list_display = ("fecha", "cliente", "monto", "puntos_ganados",
                     "multiplicador", "origen", "ticket")
     list_filter = ("origen", "fecha")
@@ -134,18 +155,11 @@ class CompraAdmin(admin.ModelAdmin):
     autocomplete_fields = ("cliente",)
     date_hierarchy = "fecha"
 
-    # El monto de la compra ES el monto de la venta que dio los puntos.
-    # Regla de Andy: el staff no ve ventas en $. Mismo patrón que
-    # `inventario.admin.VentaAdmin`.
-    def get_list_display(self, request):
-        if request.user.is_superuser:
-            return self.list_display
-        return tuple(c for c in self.list_display if c != "monto")
-
-    def get_exclude(self, request, obj=None):
-        if request.user.is_superuser:
-            return super().get_exclude(request, obj)
-        return ("monto",)
+    # El monto de la compra ES el monto de la venta que dio los puntos. La
+    # nota sale del formulario porque el selector pinta cada nota con su
+    # __str__ y publicaría todas.
+    cols_dinero = ("monto",)
+    campos_dinero = ("monto", "nota")
 
     def has_add_permission(self, request):
         # `monto` no acepta nulos y para el staff va excluido del formulario,
@@ -155,7 +169,10 @@ class CompraAdmin(admin.ModelAdmin):
 
 
 @admin.register(MovimientoPuntos)
-class MovimientoPuntosAdmin(admin.ModelAdmin):
+class MovimientoPuntosAdmin(SinMontosParaStaff, admin.ModelAdmin):
+    # El selector de `compra` pinta cada compra con su __str__; aunque ya no
+    # trae el monto, no hay razón para listarle al staff las compras de todos.
+    campos_dinero = ("compra",)
     list_display = ("creado", "cliente", "tipo", "puntos", "saldo_lote",
                     "expira_el", "descripcion")
     list_filter = ("tipo",)

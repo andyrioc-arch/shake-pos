@@ -9,14 +9,48 @@ from .models import (
 )
 
 
+class SinMontosParaStaff:
+    """Los montos de venta y los costos son solo del superusuario (regla de
+    Andy); el staff ve unidades, fechas y porcentajes.
+
+    `cols_dinero` sale del listado y `campos_dinero` del formulario —también
+    de los readonly, que Django pinta aunque el campo esté excluido— para
+    cualquiera que no sea superusuario. Un solo mecanismo para todos los
+    admin: cada copia a mano de esta regla es un lugar donde se puede volver
+    a fugar.
+    """
+    cols_dinero = ()
+    campos_dinero = ()
+
+    def get_list_display(self, request):
+        cols = super().get_list_display(request)
+        if request.user.is_superuser:
+            return cols
+        return tuple(c for c in cols if c not in self.cols_dinero)
+
+    def get_exclude(self, request, obj=None):
+        excluidos = tuple(super().get_exclude(request, obj) or ())
+        if request.user.is_superuser:
+            return excluidos or None
+        return excluidos + tuple(self.campos_dinero)
+
+    def get_readonly_fields(self, request, obj=None):
+        campos = super().get_readonly_fields(request, obj)
+        if request.user.is_superuser:
+            return campos
+        return tuple(c for c in campos if c not in self.campos_dinero)
+
+
 @admin.register(AjusteInventario)
-class AjusteInventarioAdmin(admin.ModelAdmin):
+class AjusteInventarioAdmin(SinMontosParaStaff, admin.ModelAdmin):
     list_display = ("fecha", "ingrediente", "cantidad_calculada",
                     "cantidad_real", "diferencia", "costo", "motivo")
     list_filter = ("fecha", "ingrediente")
     search_fields = ("ingrediente__nombre", "motivo")
     readonly_fields = ("cantidad_calculada", "costo", "costo_incompleto",
                        "creado")
+    cols_dinero = ("costo",)
+    campos_dinero = ("costo", "costo_incompleto")
 
     def has_add_permission(self, request):
         """Un conteo se captura en el panel, no aquí.
@@ -34,7 +68,7 @@ class AjusteInventarioAdmin(admin.ModelAdmin):
 
 
 @admin.register(Nota)
-class NotaAdmin(admin.ModelAdmin):
+class NotaAdmin(SinMontosParaStaff, admin.ModelAdmin):
     list_display = ("folio", "nombre_cliente", "creada", "metodo_pago", "total",
                     "cambio", "entregada_en")
     list_filter = ("metodo_pago", "fecha", "entregada_en")
@@ -42,20 +76,9 @@ class NotaAdmin(admin.ModelAdmin):
     date_hierarchy = "creada"
 
     # El total y el efectivo de cada nota son montos de venta: el cajero los
-    # ve al cobrar, no en el histórico. Regla de Andy: el staff no ve ventas
-    # en $.
-    _cols_dinero = ("total", "cambio")
-    _campos_dinero = ("total", "pago_con", "cambio")
-
-    def get_list_display(self, request):
-        if request.user.is_superuser:
-            return self.list_display
-        return tuple(c for c in self.list_display if c not in self._cols_dinero)
-
-    def get_exclude(self, request, obj=None):
-        if request.user.is_superuser:
-            return super().get_exclude(request, obj)
-        return self._campos_dinero
+    # ve al cobrar, no en el histórico.
+    cols_dinero = ("total", "cambio")
+    campos_dinero = ("total", "pago_con", "cambio")
 
 admin.site.site_header = "🥤 SHAKE — Control de Inventario"
 admin.site.site_title = "SHAKE Inventario"
@@ -78,7 +101,7 @@ def pct(value):
 
 # ── Ingredientes ──────────────────────────────────────────────────────────────
 @admin.register(Ingrediente)
-class IngredienteAdmin(admin.ModelAdmin):
+class IngredienteAdmin(SinMontosParaStaff, admin.ModelAdmin):
     list_display = (
         "nombre", "categoria", "unidad_compra", "cantidad_por_unidad",
         "unidad_receta", "costo_unidad_compra", "costo_receta_col",
@@ -89,15 +112,12 @@ class IngredienteAdmin(admin.ModelAdmin):
     # El costo se ajusta con las compras y el catálogo; no se edita en línea
     # aquí (así la columna, oculta para el staff, no entra en list_editable).
 
-    # Columnas con costo que solo ve un superusuario.
-    _cols_costo = (
+    # Columnas con costo que solo ve un superusuario. El formulario no entra
+    # al mixin: sus fieldsets declaran costo_unidad_compra y excluirlo
+    # rompería el fieldset para el staff.
+    cols_dinero = (
         "costo_unidad_compra", "costo_receta_col", "stock_col", "estado_col",
     )
-
-    def get_list_display(self, request):
-        if request.user.is_superuser:
-            return self.list_display
-        return tuple(c for c in self.list_display if c not in self._cols_costo)
 
     fieldsets = (
         (None, {
@@ -151,9 +171,22 @@ class RecetaIngredienteInline(admin.TabularInline):
             return money(obj.costo_linea)
         return "-"
 
+    # El costo por línea es de la familia que el staff no ve.
+    def get_fields(self, request, obj=None):
+        campos = super().get_fields(request, obj)
+        if request.user.is_superuser:
+            return campos
+        return [c for c in campos if c != "costo_linea_col"]
+
+    def get_readonly_fields(self, request, obj=None):
+        campos = super().get_readonly_fields(request, obj)
+        if request.user.is_superuser:
+            return campos
+        return tuple(c for c in campos if c != "costo_linea_col")
+
 
 @admin.register(Receta)
-class RecetaAdmin(admin.ModelAdmin):
+class RecetaAdmin(SinMontosParaStaff, admin.ModelAdmin):
     inlines = [RecetaIngredienteInline]
     list_display = (
         "nombre_col", "perfil", "precio_venta",
@@ -168,12 +201,7 @@ class RecetaAdmin(admin.ModelAdmin):
     fields = ("nombre", "emoji", "perfil", "tamano", "precio_venta", "activa")
 
     # Columnas con costo/ganancia/volumen que solo ve un superusuario.
-    _cols_costo = ("costo_col", "ganancia_col", "margen_col", "vendidos_col")
-
-    def get_list_display(self, request):
-        if request.user.is_superuser:
-            return self.list_display
-        return tuple(c for c in self.list_display if c not in self._cols_costo)
+    cols_dinero = ("costo_col", "ganancia_col", "margen_col", "vendidos_col")
 
     @admin.display(description="Shake", ordering="nombre")
     def nombre_col(self, obj):
@@ -252,7 +280,7 @@ class VentaExtraInline(admin.TabularInline):
 
 
 @admin.register(Venta)
-class VentaAdmin(VersionAdmin):
+class VentaAdmin(SinMontosParaStaff, VersionAdmin):
     inlines = [VentaSustitucionInline, VentaExtraInline]
     list_display = (
         "fecha", "receta", "cantidad", "metodo_pago", "personalizada_col",
@@ -263,25 +291,12 @@ class VentaAdmin(VersionAdmin):
     autocomplete_fields = ("receta",)
     date_hierarchy = "fecha"
 
-    # Precio/ingreso/costo/ganancia solo para superusuario; staff registra
-    # ventas pero no ve montos en $ — regla de Andy. El precio cobrado también
-    # es un monto de venta: se ve en la caja al cobrar, no en el histórico.
-    _cols_costo = ("precio_col", "ingreso_col", "costo_col", "ganancia_col")
-
-    def get_list_display(self, request):
-        if request.user.is_superuser:
-            return self.list_display
-        return tuple(c for c in self.list_display if c not in self._cols_costo)
-
-    def get_exclude(self, request, obj=None):
-        # El formulario expone `precio_unitario` (el precio congelado al
-        # vender); para el staff se excluye por la misma regla. También el
-        # selector de nota: `Nota.__str__` trae el total, así que el dropdown
-        # publicaría el monto de TODAS las notas. La nota se liga sola cuando
-        # la venta entra por la caja.
-        if request.user.is_superuser:
-            return super().get_exclude(request, obj)
-        return ("precio_unitario", "nota")
+    # El precio cobrado también es un monto de venta: se ve en la caja al
+    # cobrar, no en el histórico. `nota` sale del formulario porque el
+    # selector pinta cada nota con su __str__ y publicaría el folio de todas;
+    # la nota se liga sola cuando la venta entra por la caja.
+    cols_dinero = ("precio_col", "ingreso_col", "costo_col", "ganancia_col")
+    campos_dinero = ("precio_unitario", "nota")
 
     @admin.display(description="Personalizada")
     def personalizada_col(self, obj):
@@ -313,8 +328,11 @@ class VentaAdmin(VersionAdmin):
 
 
 @admin.register(Extra)
-class ExtraAdmin(admin.ModelAdmin):
+class ExtraAdmin(SinMontosParaStaff, admin.ModelAdmin):
     list_display = ("nombre", "ingrediente", "cantidad", "cargo", "costo_col", "activo")
+    # El cargo es precio de lista y el cajero lo necesita; el costo del
+    # insumo es de la familia que el staff no ve.
+    cols_dinero = ("costo_col",)
     list_editable = ("cargo", "activo")
     search_fields = ("nombre",)
     autocomplete_fields = ("ingrediente",)

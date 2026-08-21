@@ -1820,3 +1820,11 @@ class ElStaffNoVeMontosEnElAdminTests(TestCase):
             self.assertNotIn(campo, form.base_fields)
         form = self.nota_admin.get_form(self._req(self.duena))
         self.assertIn("total", form.base_fields)
+
+    def test_el_str_de_la_nota_no_trae_el_total(self):
+        # El __str__ pinta el título del change view, los breadcrumbs y la
+        # página de borrado, que el staff sí ve.
+        nota = Nota.objects.create(
+            fecha=date.today(), total=Decimal("137.50"),
+            metodo_pago="efectivo")
+        self.assertNotIn("137", str(nota))
