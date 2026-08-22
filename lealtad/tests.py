@@ -1828,3 +1828,113 @@ class CajaEligeClienteTests(TestCase):
         from inventario.models import Nota
         self._vender(cliente_id="999999")
         self.assertEqual(Nota.objects.count(), 1)
+
+
+class ElStaffNoVeMontosEnElAdminDeLealtadTests(TestCase):
+    """El monto de una compra de puntos ES el monto de la venta que los dio.
+
+    Regla de Andy: el staff no ve ventas en $. Mismo patrón que el admin de
+    inventario.
+    """
+
+    def setUp(self):
+        from django.contrib.admin.sites import site
+        from django.test import RequestFactory
+        from lealtad.models import Compra
+        self.cajero = User.objects.create_user(
+            "caja", "caja@x.mx", "x", is_staff=True)
+        self.duena = User.objects.create_superuser("andy", "a@x.mx", "x")
+        self.factory = RequestFactory()
+        self.compra_admin = site.get_model_admin(Compra)
+
+    def _req(self, user):
+        req = self.factory.get("/admin/")
+        req.user = user
+        return req
+
+    def test_el_listado_no_trae_el_monto(self):
+        self.assertNotIn(
+            "monto", self.compra_admin.get_list_display(self._req(self.cajero)))
+        self.assertIn(
+            "monto", self.compra_admin.get_list_display(self._req(self.duena)))
+
+    def test_el_formulario_no_trae_el_monto(self):
+        form = self.compra_admin.get_form(self._req(self.cajero))
+        self.assertNotIn("monto", form.base_fields)
+        form = self.compra_admin.get_form(self._req(self.duena))
+        self.assertIn("monto", form.base_fields)
+
+    def test_el_staff_no_puede_dar_de_alta_compras(self):
+        # Sin `monto` en su formulario, el alta del staff reventaría al
+        # guardar: se le niega desde el permiso.
+        self.assertFalse(
+            self.compra_admin.has_add_permission(self._req(self.cajero)))
+
+    def test_el_cliente_no_ensena_su_gasto_al_staff(self):
+        from django.contrib.admin.sites import site
+        from lealtad.models import Cliente
+        cliente_admin = site.get_model_admin(Cliente)
+        self.assertNotIn(
+            "gasto_col", cliente_admin.get_list_display(self._req(self.cajero)))
+        self.assertNotIn(
+            "gasto_historico",
+            cliente_admin.get_readonly_fields(self._req(self.cajero)))
+        # Y excluido del formulario: el campo es editable a nivel modelo, así
+        # que solo sacarlo de los readonly lo volvería capturable.
+        self.assertIn(
+            "gasto_historico", cliente_admin.get_exclude(self._req(self.cajero)))
+        self.assertIn(
+            "gasto_col", cliente_admin.get_list_display(self._req(self.duena)))
+
+    def test_el_inline_de_compras_del_cliente_no_trae_monto(self):
+        from lealtad.admin import CompraInline
+        from django.contrib.admin.sites import site
+        from lealtad.models import Cliente
+        inline = CompraInline(Cliente, site)
+        self.assertNotIn("monto", inline.get_fields(self._req(self.cajero)))
+        self.assertIn("monto", inline.get_fields(self._req(self.duena)))
+
+    def test_el_formulario_de_movimientos_no_lista_las_compras(self):
+        from django.contrib.admin.sites import site
+        from lealtad.models import MovimientoPuntos
+        mov_admin = site.get_model_admin(MovimientoPuntos)
+        form = mov_admin.get_form(self._req(self.cajero))
+        self.assertNotIn("compra", form.base_fields)
+
+    def test_la_descripcion_de_movimientos_no_llega_al_staff(self):
+        # `servicios.registrar_compra` escribe "Compra de $X" en la
+        # descripción y las filas viejas ya lo traen guardado: la columna
+        # se oculta, no solo lo que se escribe de hoy en adelante.
+        from django.contrib.admin.sites import site
+        from lealtad.models import MovimientoPuntos
+        mov_admin = site.get_model_admin(MovimientoPuntos)
+        self.assertNotIn(
+            "descripcion", mov_admin.get_list_display(self._req(self.cajero)))
+        from lealtad.admin import MovimientoInline
+        from lealtad.models import Cliente
+        inline = MovimientoInline(Cliente, site)
+        self.assertNotIn(
+            "descripcion", inline.get_fields(self._req(self.cajero)))
+        self.assertIn(
+            "descripcion", mov_admin.get_list_display(self._req(self.duena)))
+
+    def test_el_premio_no_ensena_valor_ni_costo_al_staff(self):
+        from django.contrib.admin.sites import site
+        from lealtad.models import Premio
+        premio_admin = site.get_model_admin(Premio)
+        cols = premio_admin.get_list_display(self._req(self.cajero))
+        self.assertNotIn("valor_col", cols)
+        self.assertNotIn("costo_col", cols)
+        self.assertIn(
+            "valor_col", premio_admin.get_list_display(self._req(self.duena)))
+
+    def test_el_str_de_la_compra_no_trae_el_monto(self):
+        # Aparece en títulos y dropdowns del admin que el staff sí ve.
+        from decimal import Decimal
+        from django.utils.timezone import localdate
+        from lealtad.models import Cliente, Compra
+        cli = Cliente.objects.create(telefono="5512345678", nombre="Juan")
+        compra = Compra.objects.create(
+            cliente=cli, monto=Decimal("137.50"),
+            puntos_ganados=13, fecha=localdate())
+        self.assertNotIn("137", str(compra))

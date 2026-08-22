@@ -1,4 +1,5 @@
 from django.contrib import admin
+from inventario.admin import SinMontosParaStaff, SinMontosParaStaffInline
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
@@ -46,7 +47,11 @@ class NivelAdmin(admin.ModelAdmin):
 
 
 @admin.register(Premio)
-class PremioAdmin(admin.ModelAdmin):
+class PremioAdmin(SinMontosParaStaff, admin.ModelAdmin):
+    # El valor percibido y el costo estimado del premio son de la familia de
+    # costos. `valor` (campo) se queda: es el % o los pesos del premio de
+    # descuento, que el cajero aplica.
+    cols_dinero = ("valor_col", "costo_col")
     list_display = ("nombre", "puntos_requeridos", "tipo", "receta",
                     "valor_col", "costo_col", "canjes_col", "activo")
     list_editable = ("puntos_requeridos", "activo")
@@ -67,31 +72,42 @@ class PremioAdmin(admin.ModelAdmin):
         return obj.canjes.exclude(estado=Canje.Estado.CANCELADO).count()
 
 
-class MovimientoInline(admin.TabularInline):
+class MovimientoInline(SinMontosParaStaffInline, admin.TabularInline):
     model = MovimientoPuntos
     extra = 0
     can_delete = False
     fields = ("creado", "tipo", "puntos", "saldo_lote", "expira_el", "descripcion")
     readonly_fields = fields
     ordering = ("-creado",)
+    # La descripción de una compra dice "Compra de $X" (lealtad/servicios.py)
+    # y las filas viejas ya lo traen guardado: se oculta la columna, no solo
+    # lo que se escribe de hoy en adelante.
+    campos_dinero = ("descripcion",)
 
     def has_add_permission(self, request, obj=None):
         return False
 
 
-class CompraInline(admin.TabularInline):
+class CompraInline(SinMontosParaStaffInline, admin.TabularInline):
     model = Compra
     extra = 0
     fields = ("fecha", "monto", "puntos_ganados", "multiplicador", "origen")
     readonly_fields = fields
     ordering = ("-fecha",)
+    campos_dinero = ("monto",)
 
     def has_add_permission(self, request, obj=None):
         return False
 
 
 @admin.register(Cliente)
-class ClienteAdmin(admin.ModelAdmin):
+class ClienteAdmin(SinMontosParaStaff, admin.ModelAdmin):
+    # El gasto histórico es la suma de las ventas del cliente. Ojo:
+    # `gasto_historico` es editable a nivel modelo, así que quitarlo de los
+    # readonly sin excluirlo lo volvería un campo capturable; el mixin hace
+    # las dos cosas.
+    cols_dinero = ("gasto_col",)
+    campos_dinero = ("gasto_historico",)
     list_display = ("telefono_col", "nombre", "nivel_col", "puntos_saldo",
                     "puntos_historicos", "visitas", "gasto_col",
                     "ultima_compra", "estado")
@@ -126,7 +142,7 @@ class ClienteAdmin(admin.ModelAdmin):
 
 
 @admin.register(Compra)
-class CompraAdmin(admin.ModelAdmin):
+class CompraAdmin(SinMontosParaStaff, admin.ModelAdmin):
     list_display = ("fecha", "cliente", "monto", "puntos_ganados",
                     "multiplicador", "origen", "ticket")
     list_filter = ("origen", "fecha")
@@ -134,9 +150,25 @@ class CompraAdmin(admin.ModelAdmin):
     autocomplete_fields = ("cliente",)
     date_hierarchy = "fecha"
 
+    # El monto de la compra ES el monto de la venta que dio los puntos. La
+    # nota sale del formulario porque el selector pinta cada nota con su
+    # __str__ y publicaría todas.
+    cols_dinero = ("monto",)
+    campos_dinero = ("monto", "nota")
+
+    def has_add_permission(self, request):
+        # `monto` no acepta nulos y para el staff va excluido del formulario,
+        # así que un alta manual suya reventaría al guardar. No pierde nada:
+        # las compras de puntos las crea la caja al registrar la venta.
+        return request.user.is_superuser and super().has_add_permission(request)
+
 
 @admin.register(MovimientoPuntos)
-class MovimientoPuntosAdmin(admin.ModelAdmin):
+class MovimientoPuntosAdmin(SinMontosParaStaff, admin.ModelAdmin):
+    # `descripcion` dice "Compra de \$X" en las filas de compra —las viejas ya
+    # lo traen guardado— y el selector de `compra` lista las compras de todos.
+    cols_dinero = ("descripcion",)
+    campos_dinero = ("compra", "descripcion")
     list_display = ("creado", "cliente", "tipo", "puntos", "saldo_lote",
                     "expira_el", "descripcion")
     list_filter = ("tipo",)

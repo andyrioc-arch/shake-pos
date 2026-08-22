@@ -472,7 +472,10 @@ class Nota(models.Model):
         ordering = ["-creada"]
 
     def __str__(self):
-        return f"Nota {self.folio} · ${self.total:,.2f}"
+        # Sin el total: el __str__ aparece en títulos, breadcrumbs y dropdowns
+        # del admin que el staff sí ve, y el staff no ve montos de venta. El
+        # total es columna y campo donde el superusuario mira.
+        return f"Nota {self.folio}"
 
     @property
     def folio(self):

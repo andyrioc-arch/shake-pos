@@ -600,7 +600,9 @@ class Compra(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.fecha} · {self.cliente.telefono_display} · ${self.monto:,.2f}"
+        # Sin el monto, por lo mismo que `Nota.__str__`: aparece en títulos y
+        # dropdowns del admin que el staff sí ve.
+        return f"{self.fecha} · {self.cliente.telefono_display}"
 
 
 class MovimientoPuntos(models.Model):
