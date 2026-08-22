@@ -1901,6 +1901,33 @@ class ElStaffNoVeMontosEnElAdminDeLealtadTests(TestCase):
         form = mov_admin.get_form(self._req(self.cajero))
         self.assertNotIn("compra", form.base_fields)
 
+    def test_la_descripcion_de_movimientos_no_llega_al_staff(self):
+        # `servicios.registrar_compra` escribe "Compra de $X" en la
+        # descripción y las filas viejas ya lo traen guardado: la columna
+        # se oculta, no solo lo que se escribe de hoy en adelante.
+        from django.contrib.admin.sites import site
+        from lealtad.models import MovimientoPuntos
+        mov_admin = site.get_model_admin(MovimientoPuntos)
+        self.assertNotIn(
+            "descripcion", mov_admin.get_list_display(self._req(self.cajero)))
+        from lealtad.admin import MovimientoInline
+        from lealtad.models import Cliente
+        inline = MovimientoInline(Cliente, site)
+        self.assertNotIn(
+            "descripcion", inline.get_fields(self._req(self.cajero)))
+        self.assertIn(
+            "descripcion", mov_admin.get_list_display(self._req(self.duena)))
+
+    def test_el_premio_no_ensena_valor_ni_costo_al_staff(self):
+        from django.contrib.admin.sites import site
+        from lealtad.models import Premio
+        premio_admin = site.get_model_admin(Premio)
+        cols = premio_admin.get_list_display(self._req(self.cajero))
+        self.assertNotIn("valor_col", cols)
+        self.assertNotIn("costo_col", cols)
+        self.assertIn(
+            "valor_col", premio_admin.get_list_display(self._req(self.duena)))
+
     def test_el_str_de_la_compra_no_trae_el_monto(self):
         # Aparece en títulos y dropdowns del admin que el staff sí ve.
         from decimal import Decimal

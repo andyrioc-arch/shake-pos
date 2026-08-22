@@ -1821,6 +1821,18 @@ class ElStaffNoVeMontosEnElAdminTests(TestCase):
         form = self.nota_admin.get_form(self._req(self.duena))
         self.assertIn("total", form.base_fields)
 
+    def test_el_formulario_de_ingrediente_no_trae_el_costo(self):
+        from django.contrib.admin.sites import site
+        ing_admin = site.get_model_admin(Ingrediente)
+        campos = [f for _, opts in
+                  ing_admin.get_fieldsets(self._req(self.cajero))
+                  for f in opts["fields"]]
+        self.assertNotIn("costo_unidad_compra", campos)
+        campos = [f for _, opts in
+                  ing_admin.get_fieldsets(self._req(self.duena))
+                  for f in opts["fields"]]
+        self.assertIn("costo_unidad_compra", campos)
+
     def test_el_str_de_la_nota_no_trae_el_total(self):
         # El __str__ pinta el título del change view, los breadcrumbs y la
         # página de borrado, que el staff sí ve.

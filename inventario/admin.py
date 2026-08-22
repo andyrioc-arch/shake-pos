@@ -41,6 +41,23 @@ class SinMontosParaStaff:
         return tuple(c for c in campos if c not in self.campos_dinero)
 
 
+class SinMontosParaStaffInline:
+    """Lo mismo, para inlines: `campos_dinero` sale de fields y readonly."""
+    campos_dinero = ()
+
+    def get_fields(self, request, obj=None):
+        campos = super().get_fields(request, obj)
+        if request.user.is_superuser:
+            return campos
+        return [c for c in campos if c not in self.campos_dinero]
+
+    def get_readonly_fields(self, request, obj=None):
+        campos = super().get_readonly_fields(request, obj)
+        if request.user.is_superuser:
+            return campos
+        return tuple(c for c in campos if c not in self.campos_dinero)
+
+
 @admin.register(AjusteInventario)
 class AjusteInventarioAdmin(SinMontosParaStaff, admin.ModelAdmin):
     list_display = ("fecha", "ingrediente", "cantidad_calculada",
@@ -112,9 +129,9 @@ class IngredienteAdmin(SinMontosParaStaff, admin.ModelAdmin):
     # El costo se ajusta con las compras y el catálogo; no se edita en línea
     # aquí (así la columna, oculta para el staff, no entra en list_editable).
 
-    # Columnas con costo que solo ve un superusuario. El formulario no entra
-    # al mixin: sus fieldsets declaran costo_unidad_compra y excluirlo
-    # rompería el fieldset para el staff.
+    # Columnas con costo que solo ve un superusuario. El formulario no pasa
+    # por `campos_dinero`: excluir un campo declarado en fieldsets truena, así
+    # que el costo se quita del fieldset mismo en get_fieldsets.
     cols_dinero = (
         "costo_unidad_compra", "costo_receta_col", "stock_col", "estado_col",
     )
@@ -132,6 +149,16 @@ class IngredienteAdmin(SinMontosParaStaff, admin.ModelAdmin):
                            "(costo de compra ÷ cantidad por unidad).",
         }),
     )
+
+    def get_fieldsets(self, request, obj=None):
+        fieldsets = super().get_fieldsets(request, obj)
+        if request.user.is_superuser:
+            return fieldsets
+        return [
+            (titulo, {**opts, "fields": tuple(
+                f for f in opts["fields"] if f != "costo_unidad_compra")})
+            for titulo, opts in fieldsets
+        ]
 
     @admin.display(description="Costo/u. receta")
     def costo_receta_col(self, obj):
@@ -158,31 +185,19 @@ class IngredienteAdmin(SinMontosParaStaff, admin.ModelAdmin):
 
 
 # ── Recetas (con ingredientes editables en línea) ─────────────────────────────
-class RecetaIngredienteInline(admin.TabularInline):
+class RecetaIngredienteInline(SinMontosParaStaffInline, admin.TabularInline):
     model = RecetaIngrediente
     extra = 1
     autocomplete_fields = ("ingrediente",)
     fields = ("ingrediente", "cantidad", "costo_linea_col")
     readonly_fields = ("costo_linea_col",)
+    campos_dinero = ("costo_linea_col",)
 
     @admin.display(description="Costo línea")
     def costo_linea_col(self, obj):
         if obj.pk:
             return money(obj.costo_linea)
         return "-"
-
-    # El costo por línea es de la familia que el staff no ve.
-    def get_fields(self, request, obj=None):
-        campos = super().get_fields(request, obj)
-        if request.user.is_superuser:
-            return campos
-        return [c for c in campos if c != "costo_linea_col"]
-
-    def get_readonly_fields(self, request, obj=None):
-        campos = super().get_readonly_fields(request, obj)
-        if request.user.is_superuser:
-            return campos
-        return tuple(c for c in campos if c != "costo_linea_col")
 
 
 @admin.register(Receta)

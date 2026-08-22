@@ -1,5 +1,5 @@
 from django.contrib import admin
-from inventario.admin import SinMontosParaStaff
+from inventario.admin import SinMontosParaStaff, SinMontosParaStaffInline
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
@@ -47,7 +47,11 @@ class NivelAdmin(admin.ModelAdmin):
 
 
 @admin.register(Premio)
-class PremioAdmin(admin.ModelAdmin):
+class PremioAdmin(SinMontosParaStaff, admin.ModelAdmin):
+    # El valor percibido y el costo estimado del premio son de la familia de
+    # costos. `valor` (campo) se queda: es el % o los pesos del premio de
+    # descuento, que el cajero aplica.
+    cols_dinero = ("valor_col", "costo_col")
     list_display = ("nombre", "puntos_requeridos", "tipo", "receta",
                     "valor_col", "costo_col", "canjes_col", "activo")
     list_editable = ("puntos_requeridos", "activo")
@@ -68,41 +72,32 @@ class PremioAdmin(admin.ModelAdmin):
         return obj.canjes.exclude(estado=Canje.Estado.CANCELADO).count()
 
 
-class MovimientoInline(admin.TabularInline):
+class MovimientoInline(SinMontosParaStaffInline, admin.TabularInline):
     model = MovimientoPuntos
     extra = 0
     can_delete = False
     fields = ("creado", "tipo", "puntos", "saldo_lote", "expira_el", "descripcion")
     readonly_fields = fields
     ordering = ("-creado",)
+    # La descripción de una compra dice "Compra de $X" (lealtad/servicios.py)
+    # y las filas viejas ya lo traen guardado: se oculta la columna, no solo
+    # lo que se escribe de hoy en adelante.
+    campos_dinero = ("descripcion",)
 
     def has_add_permission(self, request, obj=None):
         return False
 
 
-class CompraInline(admin.TabularInline):
+class CompraInline(SinMontosParaStaffInline, admin.TabularInline):
     model = Compra
     extra = 0
     fields = ("fecha", "monto", "puntos_ganados", "multiplicador", "origen")
     readonly_fields = fields
     ordering = ("-fecha",)
+    campos_dinero = ("monto",)
 
     def has_add_permission(self, request, obj=None):
         return False
-
-    # El monto por compra es monto de venta: fuera para el staff, igual que
-    # en CompraAdmin.
-    def get_fields(self, request, obj=None):
-        campos = super().get_fields(request, obj)
-        if request.user.is_superuser:
-            return campos
-        return [c for c in campos if c != "monto"]
-
-    def get_readonly_fields(self, request, obj=None):
-        campos = super().get_readonly_fields(request, obj)
-        if request.user.is_superuser:
-            return campos
-        return tuple(c for c in campos if c != "monto")
 
 
 @admin.register(Cliente)
@@ -170,9 +165,10 @@ class CompraAdmin(SinMontosParaStaff, admin.ModelAdmin):
 
 @admin.register(MovimientoPuntos)
 class MovimientoPuntosAdmin(SinMontosParaStaff, admin.ModelAdmin):
-    # El selector de `compra` pinta cada compra con su __str__; aunque ya no
-    # trae el monto, no hay razón para listarle al staff las compras de todos.
-    campos_dinero = ("compra",)
+    # `descripcion` dice "Compra de \$X" en las filas de compra —las viejas ya
+    # lo traen guardado— y el selector de `compra` lista las compras de todos.
+    cols_dinero = ("descripcion",)
+    campos_dinero = ("compra", "descripcion")
     list_display = ("creado", "cliente", "tipo", "puntos", "saldo_lote",
                     "expira_el", "descripcion")
     list_filter = ("tipo",)
