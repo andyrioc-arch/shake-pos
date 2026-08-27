@@ -415,7 +415,9 @@ def estado_resultados(anio=None, mes=None):
     if cortesias:
         costo_ventas.append({"nombre": "Cortesías", "monto": cortesias})
 
-    gastos = _agrupa_gastos(saldos_gasto, cuentas)
+    gastos = _agrupa_gastos(
+        saldos_gasto, cuentas,
+        _montos_gasto_por_descripcion(desde, hasta))
     ingresos.sort(key=lambda x: x["nombre"])
     utilidad_bruta = tot_ing - tot_cv
     return {"ingresos": ingresos, "costo_ventas": costo_ventas, "gastos": gastos,
@@ -456,23 +458,55 @@ def _es_costo_de_ventas(cuenta):
     return False
 
 
-def _agrupa_gastos(saldos, cuentas):
+def _montos_gasto_por_descripcion(desde, hasta):
+    """{cuenta_id: [{nombre, monto}, …]} desde el libro de gastos del periodo.
+
+    Andy quiere ver, bajo Sueldos, cuánto fue «Mariana» y cuánto «Jackie»: eso
+    vive en `Movimiento.descripcion`, no en cuentas distintas. El GL sigue
+    mandando el total del grupo; este mapa solo parte ese total.
+    """
+    qs = Movimiento.objects.filter(tipo=Movimiento.Tipo.GASTO)
+    if desde:
+        qs = qs.filter(fecha__gte=desde)
+    if hasta:
+        qs = qs.filter(fecha__lte=hasta)
+    filas = (qs.values("cuenta_id", "descripcion")
+               .annotate(t=Sum("monto")))
+    por_cuenta = {}
+    for f in filas:
+        nombre = (f["descripcion"] or "").strip() or "(sin descripción)"
+        por_cuenta.setdefault(f["cuenta_id"], []).append(
+            {"nombre": nombre, "monto": f["t"] or Decimal("0")})
+    for lista in por_cuenta.values():
+        lista.sort(key=lambda x: x["nombre"].casefold())
+    return por_cuenta
+
+
+def _agrupa_gastos(saldos, cuentas, por_descripcion=None):
     """Gastos anidados por cuenta padre, ordenados por código.
 
     Una cuenta padre puede tener saldo PROPIO y además hijas. El grupo lleva
     `propio` aparte de `subcuentas`, y el total es la suma de ambos.
 
+    `detalles` reparte el saldo propio del grupo por descripción del
+    movimiento (p. ej. Sueldos → Mariana / Jackie). Si el GL tiene más que la
+    suma de descripciones —una merma sin Movimiento—, el residuo queda como
+    «(sin desglose)» para no inventar centavos ni esconderlos.
+
     El orden es explícito: antes se iteraba el agregado tal cual y las filas
     salían en un orden que dependía del motor.
     """
+    por_descripcion = por_descripcion or {}
     grupos = {}                              # cuenta_id del padre -> grupo
     for cid, saldo in saldos.items():
         c = cuentas[cid]
         cabeza = c.padre if c.padre_id else c
         g = grupos.setdefault(cabeza.id, {
             "nombre": cabeza.nombre, "codigo": cabeza.codigo,
-            "propio": Decimal("0"), "subcuentas": [], "total": Decimal("0"),
+            "propio": Decimal("0"), "subcuentas": [], "detalles": [],
+            "total": Decimal("0"), "_cuenta_ids": set(),
         })
+        g["_cuenta_ids"].add(cid)
         if c.id == cabeza.id:
             g["propio"] += saldo
         else:
@@ -482,7 +516,43 @@ def _agrupa_gastos(saldos, cuentas):
 
     for g in grupos.values():
         g["subcuentas"].sort(key=lambda x: x["codigo"])
+        # Desglose solo del saldo propio (las hijas ya se ven por cuenta).
+        detalles = []
+        for cid in g["_cuenta_ids"]:
+            c = cuentas[cid]
+            if c.padre_id:
+                continue                      # hija: no mezcla descripciones aquí
+            detalles.extend(por_descripcion.get(cid, []))
+        # Fusiona descripciones repetidas si vinieran de ids distintos.
+        fusion = {}
+        for d in detalles:
+            fusion[d["nombre"]] = fusion.get(d["nombre"], Decimal("0")) + d["monto"]
+        detalles = [{"nombre": n, "monto": m} for n, m in fusion.items()]
+        detalles.sort(key=lambda x: x["nombre"].casefold())
+        suma = sum((d["monto"] for d in detalles), Decimal("0"))
+        # El GL manda: si sobra saldo sin Movimiento, no se inventa ni se oculta.
+        if g["propio"] > suma:
+            detalles.append({"nombre": "(sin desglose)",
+                             "monto": g["propio"] - suma})
+        elif suma > g["propio"] and g["propio"]:
+            # Movimientos de más que el GL (no debería pasar): recorta al saldo.
+            detalles = _recorta_detalles(detalles, g["propio"])
+        g["detalles"] = detalles if g["propio"] else []
+        del g["_cuenta_ids"]
     return sorted(grupos.values(), key=lambda g: g["codigo"])
+
+
+def _recorta_detalles(detalles, tope):
+    """Ajusta la lista para que sume exactamente `tope`, sin inventar filas."""
+    out, acumulado = [], Decimal("0")
+    for d in detalles:
+        if acumulado >= tope:
+            break
+        monto = min(d["monto"], tope - acumulado)
+        if monto:
+            out.append({"nombre": d["nombre"], "monto": monto})
+            acumulado += monto
+    return out
 
 
 def _resultado_desde_agg(agg, cuentas):

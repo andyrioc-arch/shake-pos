@@ -217,10 +217,19 @@
         <tr><th class="l" colspan="2">Gastos operativos</th></tr>
         {% for g in resultados.gastos %}
           {% if g.subcuentas %}
-            {# Cuenta que agrupa: se muestra su saldo propio y el de cada hija. #}
-            {% if g.propio %}<tr><td class="l">{{ g.nombre }} <span style="color:#999;">(directo)</span></td><td>${{ g.propio|floatformat:2|intcomma }}</td></tr>{% endif %}
+            {# Cuenta que agrupa: saldo propio (con desglose) y cada hija. #}
+            {% if g.detalles %}
+              <tr><td class="l">{{ g.nombre }} <span style="color:#999;">(directo)</span></td><td>${{ g.propio|floatformat:2|intcomma }}</td></tr>
+              {% for d in g.detalles %}<tr><td class="l" style="padding-left:32px;color:#555;">↳ {{ d.nombre }}</td><td>${{ d.monto|floatformat:2|intcomma }}</td></tr>{% endfor %}
+            {% elif g.propio %}
+              <tr><td class="l">{{ g.nombre }} <span style="color:#999;">(directo)</span></td><td>${{ g.propio|floatformat:2|intcomma }}</td></tr>
+            {% endif %}
             {% for s in g.subcuentas %}<tr><td class="l" style="padding-left:32px;color:#555;">↳ {{ s.nombre }}</td><td>${{ s.monto|floatformat:2|intcomma }}</td></tr>{% endfor %}
             <tr><td class="l" style="font-weight:700;">Total {{ g.nombre|lower }}</td><td style="font-weight:700;">${{ g.total|floatformat:2|intcomma }}</td></tr>
+          {% elif g.detalles %}
+            {# Cuenta hoja: total de la cuenta + filas por descripción (Mariana…). #}
+            <tr><td class="l">{{ g.nombre }}</td><td>${{ g.total|floatformat:2|intcomma }}</td></tr>
+            {% for d in g.detalles %}<tr><td class="l" style="padding-left:16px;">↳ {{ d.nombre }}</td><td>${{ d.monto|floatformat:2|intcomma }}</td></tr>{% endfor %}
           {% else %}
             <tr><td class="l">{{ g.nombre }}</td><td>${{ g.total|floatformat:2|intcomma }}</td></tr>
           {% endif %}
