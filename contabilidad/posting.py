@@ -21,10 +21,7 @@ from .models import (
 # Catálogo básico: codigo -> (nombre, tipo)
 CATALOGO = [
     ("101", "Caja y bancos", Cuenta.Tipo.ACTIVO),
-    ("106", "Compras por facturar", Cuenta.Tipo.ACTIVO),
     ("115", "Inventario", Cuenta.Tipo.ACTIVO),
-    ("116", "Gastos por comprobar", Cuenta.Tipo.ACTIVO),
-    ("202", "Ventas por facturar", Cuenta.Tipo.PASIVO),
     ("301", "Capital", Cuenta.Tipo.CAPITAL),
     ("401", "Ventas", Cuenta.Tipo.INGRESO),
     ("501", "Costo de ventas", Cuenta.Tipo.GASTO),
@@ -37,18 +34,13 @@ CATALOGO = [
 ]
 
 # Agrupación en los REPORTES (hija → padre). No cambia dónde se postea.
-# Vacío: las cortesías ya no tienen cuenta propia; su desglose vive en el ER.
 JERARQUIA = {}
 
-# Cuentas puente para el criterio de reconocimiento (IFRS):
 CTA_CAJA = "101"
-CTA_COMPRAS_POR_FACTURAR = "106"   # activo: compra pagada, gasto aún no reconocido
-CTA_VENTAS_POR_FACTURAR = "202"    # pasivo: venta cobrada, ingreso aún no reconocido
 CTA_VENTAS = "401"
-CTA_COSTO_INSUMOS = "501"      # gasto: Costo de ventas (COGS) reconocido al vender
+CTA_COSTO_INSUMOS = "501"
 CTA_COSTO_VENTAS = "501"
-CTA_INVENTARIO = "115"         # activo: mercancía comprada aún no vendida
-CTA_GASTOS_POR_COMPROBAR = "116"   # activo: gasto pagado aún no reconocido
+CTA_INVENTARIO = "115"
 CTA_MERMA = "507"              # gasto: inventario perdido (caducado, tirado, derramado)
 
 # Cuenta de gasto por categoría (claves base; las nuevas usan CategoriaGasto).
@@ -128,89 +120,71 @@ def _reemplaza_asiento(referencia, fecha, concepto, lineas):
 
 @transaction.atomic
 def sincronizar_movimiento(mov: Movimiento):
-    """(Re)genera los asientos de un movimiento según su estado actual.
+    """(Re)genera el asiento de un movimiento. Sin cuentas puente.
 
-    • FLUJO (siempre): efectivo contra cuenta puente. Afecta balance, flujo y
-      balanza, pero NO el estado de resultados.
-    • RECONOCIMIENTO (automático, IAS 2 / IFRS), en la fecha del movimiento:
-        - Compra y gasto → siempre.
-        - Venta  → solo si su costo está completo. Ingreso y costo entran
-                   juntos o no entran: reconocer el ingreso con costo parcial
-                   infla la utilidad bruta en silencio.
+    Un solo asiento por movimiento:
+      • Compra:  DEBE Inventario · HABER Caja
+      • Gasto:   DEBE gasto · HABER Caja
+      • Venta con costo completo: DEBE Caja · HABER Ventas + DEBE COGS · HABER Inventario
+      • Venta incompleta / sin costear: sin asiento — el efectivo real no
+        aparece en caja hasta que el costo esté completo (decisión Andy 27 ago).
+      • Cortesía con costo: DEBE COGS · HABER Inventario (sin caja ni ingreso)
+
+    `asiento_flujo` queda siempre vacío (reliquia del modelo de dos asientos);
+    el asiento único vive en `asiento_reconocimiento` para que el libro siga
+    leyendo el mismo badge.
     """
     cero = Decimal("0")
     es_cortesia = mov.tipo == Movimiento.Tipo.VENTA and \
         mov.venta_id and mov.venta.es_cortesia
-    ref_flujo = f"Mov #{mov.pk} flujo"
-    if es_cortesia or (mov.tipo == Movimiento.Tipo.VENTA and not mov.monto):
-        # Cortesía (o venta $0): no mueve efectivo, no hay asiento de flujo.
-        Asiento.objects.filter(referencia=ref_flujo, automatico=True).delete()
-        flujo = None
-    elif mov.tipo == Movimiento.Tipo.VENTA:
-        # DEBE Caja · HABER Ventas por facturar
-        flujo = _reemplaza_asiento(
-            ref_flujo, mov.fecha, f"Cobro venta: {mov.descripcion}",
-            [(CTA_CAJA, mov.monto, cero),
-             (CTA_VENTAS_POR_FACTURAR, cero, mov.monto)])
-    elif mov.tipo == Movimiento.Tipo.COMPRA:
-        # DEBE Compras por facturar · HABER Caja
-        flujo = _reemplaza_asiento(
-            ref_flujo, mov.fecha, f"Pago compra: {mov.descripcion}",
-            [(CTA_COMPRAS_POR_FACTURAR, mov.monto, cero),
-             (CTA_CAJA, cero, mov.monto)])
-    else:  # GASTO operativo
-        # DEBE Gastos por comprobar · HABER Caja
-        flujo = _reemplaza_asiento(
-            ref_flujo, mov.fecha, f"Pago gasto: {mov.descripcion}",
-            [(CTA_GASTOS_POR_COMPROBAR, mov.monto, cero),
+
+    # Limpia el esquema viejo (flujo + reconocimiento) y el nuevo (ref corta).
+    Asiento.objects.filter(
+        referencia__in=[
+            f"Mov #{mov.pk}",
+            f"Mov #{mov.pk} flujo",
+            f"Mov #{mov.pk} reconocimiento",
+        ],
+        automatico=True,
+    ).delete()
+
+    ref = f"Mov #{mov.pk}"
+    asiento = None
+
+    if mov.tipo == Movimiento.Tipo.COMPRA:
+        asiento = _reemplaza_asiento(
+            ref, mov.fecha, f"Compra: {mov.descripcion}",
+            [(CTA_INVENTARIO, mov.monto, cero),
              (CTA_CAJA, cero, mov.monto)])
 
-    ref_rec = f"Mov #{mov.pk} reconocimiento"
-    reconocimiento = None
-    fecha_rec = mov.fecha
-    if mov.tipo == Movimiento.Tipo.VENTA:
-        # El costo es un hecho guardado por inventario.costeo, no algo que se
-        # recalcule aquí. Se difiere el reconocimiento ENTERO —ingreso
-        # incluido— mientras el costo no esté completo (invariante I2).
+    elif mov.tipo == Movimiento.Tipo.GASTO:
+        asiento = _reemplaza_asiento(
+            ref, mov.fecha, f"Gasto: {mov.descripcion}",
+            [(mov.cuenta.codigo, mov.monto, cero),
+             (CTA_CAJA, cero, mov.monto)])
+
+    elif mov.tipo == Movimiento.Tipo.VENTA:
         completo = bool(mov.venta_id) and mov.venta.costo_esta_completo
         costo = mov.venta.costo_fifo if completo else None
         if not completo:
-            Asiento.objects.filter(referencia=ref_rec, automatico=True).delete()
+            pass  # sin asiento: ni caja ni ingreso hasta costear
         elif es_cortesia:
-            # Regalo: el costo del inventario entra a Costo de ventas (501).
-            # Sin ingreso (401) y sin cuenta propia: el desglose «cuánto fue
-            # cortesía» vive en el Estado de resultados, no en el catálogo.
             if costo:
-                reconocimiento = _reemplaza_asiento(
-                    ref_rec, fecha_rec, f"Cortesía: {mov.descripcion}",
+                asiento = _reemplaza_asiento(
+                    ref, mov.fecha, f"Cortesía: {mov.descripcion}",
                     [(CTA_COSTO_VENTAS, costo, cero),
                      (CTA_INVENTARIO, cero, costo)])
-            else:
-                Asiento.objects.filter(referencia=ref_rec, automatico=True).delete()
         else:
-            # Ingreso: DEBE Ventas por facturar · HABER Ventas (total)
-            lineas = [(CTA_VENTAS_POR_FACTURAR, mov.monto, cero),
+            lineas = [(CTA_CAJA, mov.monto, cero),
                       (CTA_VENTAS, cero, mov.monto)]
-            # Costo de Ventas (FIFO): DEBE Costo de ventas · HABER Inventario
             if costo:
                 lineas += [(CTA_COSTO_VENTAS, costo, cero),
                            (CTA_INVENTARIO, cero, costo)]
-            reconocimiento = _reemplaza_asiento(
-                ref_rec, fecha_rec, f"Reconoce venta: {mov.descripcion}", lineas)
-    elif mov.tipo == Movimiento.Tipo.COMPRA:
-        # Compra → Inventario: DEBE Inventario · HABER Compras por facturar
-        reconocimiento = _reemplaza_asiento(
-            ref_rec, fecha_rec, f"Compra a inventario: {mov.descripcion}",
-            [(CTA_INVENTARIO, mov.monto, cero),
-             (CTA_COMPRAS_POR_FACTURAR, cero, mov.monto)])
-    else:  # GASTO → se reconoce como gasto del periodo
-        reconocimiento = _reemplaza_asiento(
-            ref_rec, fecha_rec, f"Reconoce gasto: {mov.descripcion}",
-            [(mov.cuenta.codigo, mov.monto, cero),
-             (CTA_GASTOS_POR_COMPROBAR, cero, mov.monto)])
+            asiento = _reemplaza_asiento(
+                ref, mov.fecha, f"Venta: {mov.descripcion}", lineas)
 
     Movimiento.objects.filter(pk=mov.pk).update(
-        asiento_flujo=flujo, asiento_reconocimiento=reconocimiento)
+        asiento_flujo=None, asiento_reconocimiento=asiento)
 
 
 @transaction.atomic
