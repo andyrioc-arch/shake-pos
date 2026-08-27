@@ -188,15 +188,16 @@ class MovimientoContable(models.Model):
 #  LIBRO DE MOVIMIENTOS  (puente automático ventas/compras/gastos → contabilidad)
 # ══════════════════════════════════════════════════════════════════════════════
 class Movimiento(models.Model):
-    """Registro único de cada venta/compra en el libro de movimientos.
+    """Registro único de cada venta/compra/gasto en el libro de movimientos.
 
-    Genera automáticamente sus asientos de partida doble:
-      • Asiento de FLUJO (siempre): mueve efectivo contra una cuenta puente,
-        por lo que afecta balance, flujo y balanza pero NO el estado de
-        resultados.
-      • Asiento de RECONOCIMIENTO (solo si está 'Facturado'): reclasifica de la
-        cuenta puente a ingreso/gasto, en la fecha de la factura, reconociendo
-        el resultado (criterio IFRS de reconocimiento).
+    Genera un asiento de partida doble (sin cuentas puente):
+      • Compra y gasto: al capturarse.
+      • Venta: solo cuando su costo está completo (ingreso y COGS juntos).
+      • Venta incompleta: sin asiento — el efectivo no entra a caja contable
+        hasta costear.
+
+    `asiento_flujo` quedó vacío tras quitar los puentes; el asiento único
+    vive en `asiento_reconocimiento`.
     """
 
     class Tipo(models.TextChoices):

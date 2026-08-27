@@ -69,8 +69,8 @@ class FifoCogsTests(TestCase):
         self.assertEqual(
             [(m.cuenta.codigo, m.debe, m.haber)
              for m in asiento.movimientos.order_by("cuenta__codigo")],
-            [("115", cero, Decimal("16.00")),      # sale del inventario
-             ("202", Decimal("400.00"), cero),     # se salda el puente
+            [("101", Decimal("400.00"), cero),     # cobro en caja
+             ("115", cero, Decimal("16.00")),      # sale del inventario
              ("401", cero, Decimal("400.00")),     # ingreso completo
              ("501", Decimal("16.00"), cero)])     # costo de ventas
 
@@ -192,7 +192,7 @@ class CatalogoTests(TestCase):
         self.assertTrue(Cuenta.objects.get(codigo="101").es_deudora)  # Activo
         self.assertTrue(Cuenta.objects.get(codigo="501").es_deudora)  # Gasto
         self.assertFalse(Cuenta.objects.get(codigo="401").es_deudora) # Ingreso
-        self.assertFalse(Cuenta.objects.get(codigo="202").es_deudora) # Pasivo
+        self.assertFalse(Cuenta.objects.filter(codigo="202").exists())
 
     def test_el_catalogo_no_tiene_cuentas_de_iva(self):
         # El IVA no se lleva en la contabilidad: los importes van completos y
@@ -583,10 +583,14 @@ class ReconocimientoAutomaticoTests(_ReconocimientoBase):
         self.assertEqual(
             posting.estado_resultados(2026, 8)["total_ingresos"], Decimal("200"))
 
-    def test_la_venta_sin_costo_igual_cobra_en_caja(self):
-        """El flujo no depende del costeo: el dinero sí entró."""
+    def test_la_venta_sin_costo_no_mueve_caja(self):
+        """Sin costo completo no hay asiento: ni ingreso ni cobro contable."""
         v = self._vender(2)                    # sin compras que la surtan
-        self.assertIsNotNone(self.Movimiento.objects.get(venta=v).asiento_flujo)
+        mov = self.Movimiento.objects.get(venta=v)
+        self.assertIsNone(mov.asiento_flujo)
+        self.assertIsNone(mov.asiento_reconocimiento)
+        self.assertEqual(
+            posting.flujo_efectivo(2026, 8)["entradas"], Decimal("0"))
         self.assertTrue(posting.balanza_comprobacion(2026, 8)["cuadra"])
 
 

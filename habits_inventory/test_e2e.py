@@ -177,11 +177,14 @@ class DiaDeUsoTests(TestCase):
         self.assertFalse(v1.costo_esta_completo)
         self.assertTrue(v1.consumos.filter(compra__isnull=True).exists())
 
-        # El invariante que sostiene todo: sin costo completo no hay ingreso.
+        # El invariante: sin costo completo no hay ingreso NI cobro en caja.
         mov1 = Movimiento.objects.get(venta=v1)
-        self.assertIsNotNone(mov1.asiento_flujo_id)
+        self.assertIsNone(mov1.asiento_flujo_id)
         self.assertIsNone(mov1.asiento_reconocimiento_id)
         self.assertEqual(self._reportes()["total_ingresos"], Decimal("0"))
+        self.assertEqual(
+            posting.flujo_efectivo(self.hoy.year, self.hoy.month)["entradas"],
+            Decimal("0"))
 
         salud = posting.salud_del_costeo(self.hoy.year, self.hoy.month)
         self.assertEqual(salud["incompletas"], 1)

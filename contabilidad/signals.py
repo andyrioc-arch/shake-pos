@@ -39,7 +39,10 @@ def venta_sustitucion_cambio(sender, instance, **kwargs):
 @receiver(post_delete, sender=Movimiento)
 def movimiento_borrado(sender, instance, **kwargs):
     Asiento.objects.filter(
-        referencia__in=[f"Mov #{instance.pk} flujo",
-                        f"Mov #{instance.pk} reconocimiento"],
+        referencia__in=[
+            f"Mov #{instance.pk}",
+            f"Mov #{instance.pk} flujo",
+            f"Mov #{instance.pk} reconocimiento",
+        ],
         automatico=True,
     ).delete()
