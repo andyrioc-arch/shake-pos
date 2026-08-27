@@ -136,6 +136,21 @@
       <tr><td colspan="9" style="text-align:center;color:#888;">
         Aún no hay ventas ni compras registradas.</td></tr>
       {% endfor %}
+      {% if flujo_totales %}
+      <tr>
+        <td>Total</td>
+        <td>${{ flujo_totales.ingresos|floatformat:2|intcomma }}</td>
+        <td>${{ flujo_totales.costo_variable|floatformat:2|intcomma }}</td>
+        <td>${{ flujo_totales.cortesias|floatformat:2|intcomma }}</td>
+        <td>${{ flujo_totales.compras|floatformat:2|intcomma }}</td>
+        <td>${{ flujo_totales.costos_fijos|floatformat:2|intcomma }}</td>
+        <td class="{% if flujo_totales.flujo_efectivo >= 0 %}pos{% else %}neg{% endif %}">
+          ${{ flujo_totales.flujo_efectivo|floatformat:2|intcomma }}</td>
+        <td class="{% if flujo_totales.ganancia_operativa >= 0 %}pos{% else %}neg{% endif %}">
+          ${{ flujo_totales.ganancia_operativa|floatformat:2|intcomma }}</td>
+        <td>${{ flujo_totales.ganancia_acumulada|floatformat:2|intcomma }}</td>
+      </tr>
+      {% endif %}
     </tbody>
   </table>
   </div>

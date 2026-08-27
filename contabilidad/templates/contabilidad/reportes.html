@@ -265,6 +265,13 @@
       {% empty %}
         <tr><td colspan="6" class="l" style="color:#999;text-align:center;">Sin movimientos este mes.</td></tr>
       {% endfor %}
+      {% for t in totales_libro %}
+        <tr class="tot">
+          <td class="l" colspan="3">Total {{ t.etiqueta|lower }}</td>
+          <td>${{ t.monto|floatformat:2|intcomma }}</td>
+          <td colspan="2"></td>
+        </tr>
+      {% endfor %}
       </tbody>
     </table>
     </div>

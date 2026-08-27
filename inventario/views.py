@@ -951,6 +951,7 @@ def panel_catalogo(request):
         "ingredientes": ingredientes,
         "categorias_ing": Ingrediente.Categoria.choices,
         "productos": productos,
+        "productos_promedio": _promedios_productos(productos),
         "producto_sel": producto_sel,
         "costo_sel_ultima_compra": (producto_sel.costo_ultima_compra(unitarios)
                                     if producto_sel else None),
@@ -958,6 +959,30 @@ def panel_catalogo(request):
         "ingredientes_libres": ingredientes_libres,
     }
     return render(request, "inventario/catalogo.html", ctx)
+
+
+def _promedios_productos(productos):
+    """Promedios de las columnas de dinero del catálogo.
+
+    La última compra puede faltar en algún producto: ese promedio solo mira
+    las filas que sí tienen número, para no hundir el promedio con ceros
+    inventados.
+    """
+    if not productos:
+        return None
+    n = len(productos)
+    ultima = [p["costo_ultima_compra"] for p in productos
+              if p["costo_ultima_compra"] is not None]
+    return {
+        "precio": sum((p["precio_venta"] for p in productos), Decimal("0")) / n,
+        "costo": sum((p["costo_receta"] for p in productos), Decimal("0")) / n,
+        "ultima": (sum(ultima, Decimal("0")) / len(ultima)) if ultima else None,
+        "ganancia": sum((p["ganancia_unitaria"] for p in productos),
+                        Decimal("0")) / n,
+        "margen_pct": sum((p["margen_pct"] for p in productos),
+                          Decimal("0")) / n,
+        "n": n,
+    }
 
 
 # ── Ingredientes ───────────────────────────────────────────────────────────────

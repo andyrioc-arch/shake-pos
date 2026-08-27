@@ -104,6 +104,17 @@
         {% empty %}
         <tr><td colspan="9" class="l" style="color:#999;text-align:center;">Sin productos. Crea el primero abajo.</td></tr>
         {% endfor %}
+        {% if productos_promedio %}
+        <tr class="tot">
+          <td class="l">Promedio ({{ productos_promedio.n }})</td>
+          <td>${{ productos_promedio.precio|floatformat:2|intcomma }}</td>
+          <td>${{ productos_promedio.costo|floatformat:2|intcomma }}</td>
+          <td>{% if productos_promedio.ultima is not None %}${{ productos_promedio.ultima|floatformat:2|intcomma }}{% else %}—{% endif %}</td>
+          <td>${{ productos_promedio.ganancia|floatformat:2|intcomma }}</td>
+          <td>{{ productos_promedio.margen_pct|floatformat:1 }}%</td>
+          <td colspan="3"></td>
+        </tr>
+        {% endif %}
       </tbody>
     </table>
     <form class="frm" method="post" action="{% url 'producto_agregar' %}">
