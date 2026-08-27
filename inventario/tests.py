@@ -840,7 +840,7 @@ class PedidosPendientesTests(TestCase):
 
     def _pedidos(self):
         from django.urls import reverse
-        return self.client.get(reverse("panel_pedidos"))
+        return self.client.get(reverse("panel_inventario"))
 
     def test_la_venta_guarda_a_nombre_de_quien_va(self):
         self._vender("Andrea")
@@ -893,7 +893,9 @@ class PedidosPendientesTests(TestCase):
         self._vender("Andrea")
         nota = Nota.objects.get()
         resp = self.client.post(reverse("pedido_entregar", args=[nota.pk]))
-        self.assertRedirects(resp, reverse("panel_pedidos"))
+        self.assertRedirects(
+            resp, reverse("panel_inventario") + "#pedidos",
+            fetch_redirect_response=False)
         nota.refresh_from_db()
         self.assertIsNotNone(nota.entregada_en)
         self.assertFalse(nota.pendiente)
@@ -926,9 +928,16 @@ class PedidosPendientesTests(TestCase):
         self.assertContains(self._pedidos(), "Cortesía")
 
     def test_el_cajero_no_ve_montos_en_la_lista(self):
-        """Misma puerta que el resto: el staff ve unidades, no dinero."""
+        """Misma puerta que el resto: el staff ve unidades, no dinero en el pedido.
+
+        El selector de productos de la caja sí muestra precios —hay que
+        cobrar—. Lo que no se enseña es el total del pendiente.
+        """
         self._vender("Andrea")
-        self.assertNotContains(self._pedidos(), "$100.00")
+        html = self._pedidos().content.decode()
+        inicio = html.index('id="pedidos"')
+        fin = html.index("Stock y faltantes", inicio)
+        self.assertNotIn("$100.00", html[inicio:fin])
 
     def test_la_lista_vacia_lo_dice(self):
         self.assertContains(self._pedidos(), "No hay nada pendiente")
@@ -936,9 +945,17 @@ class PedidosPendientesTests(TestCase):
     def test_pide_sesion(self):
         from django.urls import reverse
         self.client.logout()
-        resp = self.client.get(reverse("panel_pedidos"))
+        resp = self.client.get(reverse("panel_inventario"))
         self.assertEqual(resp.status_code, 302)
         self.assertIn("/login/", resp["Location"])
+
+    def test_la_ruta_vieja_de_pedidos_cae_en_la_caja(self):
+        """/pedidos/ se queda como alias; no hay una segunda pantalla."""
+        from django.urls import reverse
+        resp = self.client.get(reverse("panel_pedidos"))
+        self.assertRedirects(
+            resp, reverse("panel_inventario") + "#pedidos",
+            fetch_redirect_response=False)
 
 
 class DescuentoEnLaVentaTests(TestCase):

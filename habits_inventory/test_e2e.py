@@ -211,7 +211,8 @@ class DiaDeUsoTests(TestCase):
                          f'inline; filename="nota-{n1.folio}.pdf"')
 
         # ── 3b · La barra entrega el pedido ─────────────────────────────────
-        pedidos = self.c_caja.get(reverse("panel_pedidos"))
+        # Los pendientes viven bajo la caja: no hay que cambiar de pantalla.
+        pedidos = self.c_caja.get(reverse("panel_inventario"))
         self.assertContains(pedidos, "Andrea")
         self.assertTrue(n1.pendiente)
         self.c_caja.post(reverse("pedido_entregar", args=[n1.pk]))
@@ -220,7 +221,7 @@ class DiaDeUsoTests(TestCase):
         # Se afirma el estado vacío y no la ausencia del nombre: el aviso de
         # «Pedido de Andrea entregado» viaja en la siguiente petición y lleva
         # el nombre dentro, así que buscarlo daría un falso negativo.
-        self.assertContains(self.c_caja.get(reverse("panel_pedidos")),
+        self.assertContains(self.c_caja.get(reverse("panel_inventario")),
                             "No hay nada pendiente")
 
         # ── 4 · Llega la factura del proveedor ──────────────────────────────

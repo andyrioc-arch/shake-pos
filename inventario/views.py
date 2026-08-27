@@ -191,6 +191,9 @@ def panel_inventario(request):
         "total_cobradas": total_cobradas,
         "total_regaladas": total_regaladas,
         "total_ingreso": total_ingreso,
+        # Pedidos pendientes justo debajo de la caja: no hay que cambiar de
+        # pantalla para cantar el siguiente o marcar uno entregado.
+        "pedidos": _pedidos_pendientes(),
         # Para el formulario de registro (carrito de productos)
         "recetas_activas": Receta.objects.filter(activa=True),
         "ingredientes_lista": Ingrediente.objects.all(),
@@ -224,6 +227,29 @@ def panel_inventario(request):
         } if es_super else {},
     }
     return render(request, "inventario/panel.html", ctx)
+
+
+def _pedidos_pendientes():
+    """Notas aún no entregadas, listas para pintar en la caja.
+
+    Solo pendientes: un pedido entregado desaparece. Lo que se necesita en la
+    barra es saber qué falta, y una lista que crece todo el día deja de leerse
+    a la tercera hora. El histórico ya vive en el admin y en el libro.
+    """
+    pendientes = (Nota.objects.filter(entregada_en__isnull=True)
+                  .prefetch_related("lineas__receta")
+                  .order_by("creada"))
+    return [{
+        "pk": n.pk,
+        "folio": n.folio,
+        "nombre": n.nombre_cliente,
+        "creada": n.creada,
+        "total": n.total,
+        "es_cortesia": n.es_cortesia,
+        "url": n.get_absolute_url(),
+        "lineas": [f"{l.cantidad}× {l.receta.emoji} {l.receta.nombre}".strip()
+                   for l in n.lineas.all()],
+    } for n in pendientes]
 
 
 def _to_decimal(valor, permite_cero=True):
@@ -411,32 +437,8 @@ def venta_agregar(request):
 
 @login_required
 def panel_pedidos(request):
-    """Lo que falta por entregar en la barra. Para todo el personal.
-
-    Solo pendientes: un pedido entregado desaparece. Lo que se necesita aquí es
-    saber qué falta, y una lista que crece todo el día deja de leerse a la
-    tercera hora. El histórico ya vive en el admin y en el libro.
-    """
-    pendientes = (Nota.objects.filter(entregada_en__isnull=True)
-                  .prefetch_related("lineas__receta")
-                  .order_by("creada"))
-    pedidos = [{
-        "pk": n.pk,
-        "folio": n.folio,
-        "nombre": n.nombre_cliente,
-        "creada": n.creada,
-        "total": n.total,
-        "es_cortesia": n.es_cortesia,
-        "url": n.get_absolute_url(),
-        "lineas": [f"{l.cantidad}× {l.receta.emoji} {l.receta.nombre}".strip()
-                   for l in n.lineas.all()],
-    } for n in pendientes]
-    return render(request, "inventario/pedidos.html", {
-        "title": "Pedidos",
-        "active": "pedidos",
-        "pedidos": pedidos,
-        "es_super": request.user.is_superuser,
-    })
+    """Alias: los pedidos viven bajo la caja. Quien llega por /pedidos/ cae ahí."""
+    return redirect(reverse("panel_inventario") + "#pedidos")
 
 
 @require_POST
@@ -454,7 +456,7 @@ def pedido_entregar(request, pk):
         _log(request, nota, CHANGE, "Entregó el pedido")
         nombre = nota.nombre_cliente or nota.folio
         messages.success(request, f"Pedido de {nombre} entregado.")
-    return redirect("panel_pedidos")
+    return redirect(reverse("panel_inventario") + "#pedidos")
 
 
 def _qr_svg(url):

@@ -154,6 +154,31 @@
   .lealtad-info { font-size:12px; margin-top:6px; min-height:16px; font-weight:700; }
   .lealtad-info.ok { color:#8700ff; }
   .lealtad-info.nuevo { color:#777; font-weight:600; }
+
+  /* Pedidos bajo la caja: tarjetas, no tabla — se lee de pie y de reojo. */
+  .pedidos { display:grid; gap:14px; grid-template-columns:repeat(auto-fill,minmax(280px,1fr));
+             margin:8px 0 22px; }
+  .pedido { background:#fff; border:2px solid #000; border-radius:12px;
+            box-shadow:5px 5px 0 #000; overflow:hidden; display:flex; flex-direction:column; }
+  .pedido header { background:#000; color:#fff; padding:10px 16px;
+                   display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
+  .pedido .nombre { font-size:20px; font-weight:800; line-height:1.15; }
+  .pedido .folio { font-size:12px; color:rgba(255,255,255,.6); white-space:nowrap; }
+  .pedido .body { padding:14px 16px; flex:1; }
+  .pedido ul { margin:0; padding-left:18px; }
+  .pedido li { font-size:14px; margin-bottom:3px; }
+  .pedido .meta { margin-top:10px; font-size:12px; color:#666; display:flex; gap:10px; flex-wrap:wrap; }
+  .pedido .regalo { background:#f3ecff; color:#5b00b0; border:1px solid #8700ff;
+            padding:1px 8px; border-radius:6px; font-weight:700; }
+  .pedido form { margin:0; padding:0 16px 16px; }
+  .btn-entregar { width:100%; padding:12px; font-size:15px; font-weight:800;
+                  border:2px solid #000; border-radius:8px; background:#1e9aff;
+                  color:#fff; cursor:pointer; box-shadow:3px 3px 0 #000; }
+  .btn-entregar:hover { background:#1478cc; }
+  .btn-entregar:active { transform:translate(3px,3px); box-shadow:none; }
+  .pedidos-vacio { background:#fff; border:2px dashed #000; border-radius:12px;
+           padding:28px 20px; text-align:center; margin:8px 0 22px; }
+  .pedidos-vacio p { color:#666; margin:0; }
 </style>
 
 <div class="iv-wrap">
@@ -389,6 +414,44 @@
         <button class="btn-reg merma" type="submit">Registrar conteo</button>
       </div>
     </form>
+    {% endif %}
+  </div>
+
+  <!-- ── Pedidos pendientes (justo debajo de donde se registra) ─────── -->
+  <div id="pedidos">
+    <h2 style="font-size:18px;margin:8px 0 6px;">🧾 Pedidos pendientes
+      {% if pedidos %}<span class="muted" style="font-size:13px;font-weight:600;"> · {{ pedidos|length }} por entregar</span>{% endif %}
+    </h2>
+    {% if pedidos %}
+    <div class="pedidos">
+      {% for p in pedidos %}
+      <div class="pedido">
+        <header>
+          <span class="nombre">{{ p.nombre|default:"Sin nombre" }}</span>
+          <span class="folio">{{ p.creada|date:"H:i" }}</span>
+        </header>
+        <div class="body">
+          <ul>
+            {% for linea in p.lineas %}<li>{{ linea }}</li>{% endfor %}
+          </ul>
+          <div class="meta">
+            <span>Folio {{ p.folio }}</span>
+            {% if p.es_cortesia %}<span class="regalo">🎁 Cortesía</span>{% endif %}
+            {% if es_super and not p.es_cortesia %}<span>${{ p.total|floatformat:2 }}</span>{% endif %}
+            <a href="{{ p.url }}">Ver nota</a>
+          </div>
+        </div>
+        <form method="post" action="{% url 'pedido_entregar' p.pk %}">
+          {% csrf_token %}
+          <button class="btn-entregar" type="submit">✓ Entregado</button>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="pedidos-vacio">
+      <p>No hay nada pendiente. Todo entregado.</p>
+    </div>
     {% endif %}
   </div>
 
