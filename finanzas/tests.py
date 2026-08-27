@@ -279,7 +279,7 @@ class CosteoRealEnLosPanelesTests(TestCase):
         Venta.objects.create(fecha=date(2026, 8, 2), receta=self.rec, cantidad=1,
                              es_cortesia=True)
 
-        # La cortesía consumió inventario, pero su costo es mercadotecnia: si
+        # La cortesía consumió inventario, pero su costo es COGS regalado: si
         # entrara aquí, el margen del producto se vería la mitad de bueno.
         mc, unidades = calculos.margen_contribucion_promedio()
         self.assertEqual(mc, Decimal("96.00"))

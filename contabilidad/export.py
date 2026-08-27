@@ -70,12 +70,13 @@ def resultados(ws, anio, mes, periodo):
     _total(ws, r, "Total ingresos", d["total_ingresos"], 2); r += 2
     _seccion(ws, r, "COSTO DE VENTAS (FIFO)", 2); r += 1
     for it in d["costo_ventas"]:
-        ws.cell(row=r, column=1, value=it["nombre"])
+        ws.cell(row=r, column=1, value=f"    ↳ {it['nombre']}")
         _money(ws, r, 2, it["monto"]); r += 1
+    _total(ws, r, "Total costo de ventas", d["total_costo_ventas"], 2); r += 1
     _total(ws, r, "Utilidad bruta", d["utilidad_bruta"], 2); r += 2
     _seccion(ws, r, "GASTOS OPERATIVOS", 2); r += 1
     # Anidado igual que la pantalla: el xlsx y el reporte tienen que decir lo
-    # mismo, o cada uno cuenta una historia distinta de la mercadotecnia.
+    # mismo.
     for g in d["gastos"]:
         if not g["subcuentas"]:
             ws.cell(row=r, column=1, value=g["nombre"])

@@ -32,14 +32,13 @@ CATALOGO = [
     ("503", "Servicios", Cuenta.Tipo.GASTO),
     ("504", "Mercadotecnia", Cuenta.Tipo.GASTO),
     ("505", "Sueldos", Cuenta.Tipo.GASTO),
-    ("506", "Cortesías y promociones", Cuenta.Tipo.GASTO),
     ("507", "Merma de inventario", Cuenta.Tipo.GASTO),
     ("509", "Otros gastos", Cuenta.Tipo.GASTO),
 ]
 
-# Agrupación en los REPORTES (hija → padre). No cambia dónde se postea: los
-# asientos de cortesía siguen yendo a la 506; el reporte la lee dentro de 504.
-JERARQUIA = {"506": "504"}
+# Agrupación en los REPORTES (hija → padre). No cambia dónde se postea.
+# Vacío: las cortesías ya no tienen cuenta propia; su desglose vive en el ER.
+JERARQUIA = {}
 
 # Cuentas puente para el criterio de reconocimiento (IFRS):
 CTA_CAJA = "101"
@@ -50,7 +49,6 @@ CTA_COSTO_INSUMOS = "501"      # gasto: Costo de ventas (COGS) reconocido al ven
 CTA_COSTO_VENTAS = "501"
 CTA_INVENTARIO = "115"         # activo: mercancía comprada aún no vendida
 CTA_GASTOS_POR_COMPROBAR = "116"   # activo: gasto pagado aún no reconocido
-CTA_CORTESIAS = "506"          # gasto: costo de productos regalados (activaciones)
 CTA_MERMA = "507"              # gasto: inventario perdido (caducado, tirado, derramado)
 
 # Cuenta de gasto por categoría (claves base; las nuevas usan CategoriaGasto).
@@ -179,11 +177,13 @@ def sincronizar_movimiento(mov: Movimiento):
         if not completo:
             Asiento.objects.filter(referencia=ref_rec, automatico=True).delete()
         elif es_cortesia:
-            # Regalo: solo el costo del inventario → gasto de cortesías.
+            # Regalo: el costo del inventario entra a Costo de ventas (501).
+            # Sin ingreso (401) y sin cuenta propia: el desglose «cuánto fue
+            # cortesía» vive en el Estado de resultados, no en el catálogo.
             if costo:
                 reconocimiento = _reemplaza_asiento(
                     ref_rec, fecha_rec, f"Cortesía: {mov.descripcion}",
-                    [(CTA_CORTESIAS, costo, cero),
+                    [(CTA_COSTO_VENTAS, costo, cero),
                      (CTA_INVENTARIO, cero, costo)])
             else:
                 Asiento.objects.filter(referencia=ref_rec, automatico=True).delete()
@@ -406,11 +406,14 @@ def estado_resultados(anio=None, mes=None):
 
     Solo considera lo reconocido EN el mes. Una venta cuyo costo aún no está
     completo no aparece aquí: ni su ingreso ni su costo.
+
+    El costo de ventas se desglosa en comercial y cortesías: ambas postean a
+    la 501; la separación sale de las ventas, no de cuentas distintas.
     """
     desde, hasta = _rango_mes(anio, mes)
     agg = _agg(desde=desde, hasta=hasta)
     cuentas = {c.id: c for c in Cuenta.objects.select_related("padre")}
-    ingresos, costo_ventas = [], []
+    ingresos = []
     saldos_gasto = {}                       # cuenta_id -> saldo, para agrupar
     tot_ing = tot_cv = tot_gas = Decimal("0")
     for cid, (d, h) in agg.items():
@@ -422,19 +425,46 @@ def estado_resultados(anio=None, mes=None):
             ingresos.append({"nombre": c.nombre, "monto": saldo}); tot_ing += saldo
         elif c.tipo == Cuenta.Tipo.GASTO:
             if _es_costo_de_ventas(c):
-                costo_ventas.append({"nombre": c.nombre, "monto": saldo}); tot_cv += saldo
+                tot_cv += saldo
             else:
                 saldos_gasto[cid] = saldo
                 tot_gas += saldo
 
+    cortesias = _costo_de_cortesias(desde, hasta)
+    # El GL es la verdad del total; el desglose no puede inventar centavos.
+    if cortesias > tot_cv:
+        cortesias = tot_cv
+    comercial = tot_cv - cortesias
+    costo_ventas = []
+    if comercial:
+        costo_ventas.append({"nombre": "Comercial", "monto": comercial})
+    if cortesias:
+        costo_ventas.append({"nombre": "Cortesías", "monto": cortesias})
+
     gastos = _agrupa_gastos(saldos_gasto, cuentas)
     ingresos.sort(key=lambda x: x["nombre"])
-    costo_ventas.sort(key=lambda x: x["nombre"])
     utilidad_bruta = tot_ing - tot_cv
     return {"ingresos": ingresos, "costo_ventas": costo_ventas, "gastos": gastos,
             "total_ingresos": tot_ing, "total_costo_ventas": tot_cv,
+            "costo_cortesias": cortesias, "costo_comercial": comercial,
             "utilidad_bruta": utilidad_bruta,
             "total_gastos": tot_gas, "utilidad": utilidad_bruta - tot_gas}
+
+
+def _costo_de_cortesias(desde, hasta):
+    """Suma el FIFO reconocido de las cortesías del periodo.
+
+    Solo las que tienen costo completo: las incompletas no generaron asiento
+    a 501, así que no pueden entrar al desglose.
+    """
+    from inventario.models import Venta
+    qs = Venta.objects.filter(es_cortesia=True, costo_incompleto=False,
+                              costo_fifo__isnull=False)
+    if desde:
+        qs = qs.filter(fecha__gte=desde)
+    if hasta:
+        qs = qs.filter(fecha__lte=hasta)
+    return qs.aggregate(t=Sum("costo_fifo"))["t"] or Decimal("0")
 
 
 def _es_costo_de_ventas(cuenta):
@@ -455,9 +485,8 @@ def _es_costo_de_ventas(cuenta):
 def _agrupa_gastos(saldos, cuentas):
     """Gastos anidados por cuenta padre, ordenados por código.
 
-    Una cuenta padre puede tener saldo PROPIO y además hijas: la 504 recibe
-    posteos directos vía `registrar_gasto` y encima agrupa a la 506. Por eso el
-    grupo lleva `propio` aparte de `subcuentas`, y el total es la suma de ambos.
+    Una cuenta padre puede tener saldo PROPIO y además hijas. El grupo lleva
+    `propio` aparte de `subcuentas`, y el total es la suma de ambos.
 
     El orden es explícito: antes se iteraba el agregado tal cual y las filas
     salían en un orden que dependía del motor.
