@@ -919,6 +919,8 @@ def panel_catalogo(request):
             "precio_venta": r.precio_venta, "activa": r.activa,
             "costo_receta": r.costo_receta,
             "ganancia_unitaria": r.ganancia_unitaria,
+            # Porcentaje ya listo para la plantilla: `margen` es fracción.
+            "margen_pct": (r.margen * Decimal("100")).quantize(Decimal("0.1")),
             "costo_ultima_compra": r.costo_ultima_compra(unitarios),
             "num_ingredientes": len(r.ingredientes.all()),
         })

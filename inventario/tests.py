@@ -57,6 +57,16 @@ class RecetaCostoTests(TestCase):
     def test_ganancia_unitaria(self):
         self.assertEqual(self.rec.ganancia_unitaria, Decimal("75.50"))
 
+    def test_el_catalogo_muestra_el_margen(self):
+        from django.contrib.auth.models import User
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+        resp = self.client.get("/catalogo/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Margen")
+        # 79.5% ≈ (95 − 19.5) / 95
+        self.assertContains(resp, "79.5%")
+
 
 class InventarioStockTests(TestCase):
     def setUp(self):
