@@ -83,6 +83,24 @@ def panel_financiero(request):
         f["mes_nombre"] = f"{MESES[f['mes']]} {f['anio']}"
         filas.append(f)
 
+    flujo_totales = None
+    if filas:
+        flujo_totales = {
+            "ingresos": sum((f["ingresos"] for f in filas), Decimal("0")),
+            "costo_variable": sum((f["costo_variable"] for f in filas),
+                                 Decimal("0")),
+            "cortesias": sum((f["cortesias"] for f in filas), Decimal("0")),
+            "compras": sum((f["compras"] for f in filas), Decimal("0")),
+            "costos_fijos": sum((f["costos_fijos"] for f in filas),
+                               Decimal("0")),
+            "flujo_efectivo": sum((f["flujo_efectivo"] for f in filas),
+                                 Decimal("0")),
+            "ganancia_operativa": sum((f["ganancia_operativa"] for f in filas),
+                                     Decimal("0")),
+            # El acumulado no se suma: es el cierre del último mes.
+            "ganancia_acumulada": filas[-1]["ganancia_acumulada"],
+        }
+
     pe = data["punto_equilibrio"]
     hoy = localdate()
     ctx = {
@@ -95,6 +113,7 @@ def panel_financiero(request):
         "pe_unidades_mes": pe["unidades_mes"],
         "pe_unidades_dia": pe["unidades_dia"],
         "filas": filas,
+        "flujo_totales": flujo_totales,
         "recuperado_txt": recuperado_txt,
         "ganancia_acumulada": flujo["ganancia_acumulada_final"],
         "inversion_pendiente": (

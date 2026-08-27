@@ -362,6 +362,13 @@ class ReportesViewTests(TestCase):
         ]
         self.assertEqual(posiciones, sorted(posiciones))
 
+    def test_el_libro_suma_montos_por_tipo(self):
+        posting.registrar_gasto(date(2025, 5, 2), "sueldos",
+                                Decimal("200"), "Mariana")
+        html = self.client.get("/contabilidad/?anio=2025&mes=5").content.decode()
+        self.assertIn("Total gasto operativo", html)
+        self.assertIn("$4,700.00", html)  # 4500 renta + 200 sueldos
+
     def test_reportes_requiere_login(self):
         self.client.logout()
         resp = self.client.get("/contabilidad/")

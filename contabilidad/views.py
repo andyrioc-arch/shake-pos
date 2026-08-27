@@ -3,6 +3,7 @@ from django.utils.timezone import localdate
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
+from django.db.models import Sum
 from django.http import Http404, HttpResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -68,6 +69,15 @@ def reportes(request):
                    .filter(fecha__year=anio, fecha__month=mes)
                    .select_related("cuenta", "venta__nota")
                    .order_by("fecha", "id"))
+    # Totales del libro por tipo: un solo gran total mezcla ventas con
+    # compras y gastos y no le dice nada a Andy.
+    totales_libro = []
+    for tipo, etiqueta in Movimiento.Tipo.choices:
+        monto = (movimientos.filter(tipo=tipo)
+                 .aggregate(t=Sum("monto"))["t"])
+        if monto:
+            totales_libro.append({"tipo": tipo, "etiqueta": etiqueta,
+                                  "monto": monto})
 
     ctx = {
         "title": "Contabilidad",
@@ -81,6 +91,7 @@ def reportes(request):
             for (a, m) in posting.periodos_disponibles()
         ],
         "movimientos": movimientos,
+        "totales_libro": totales_libro,
         "balanza": posting.balanza_comprobacion(anio, mes),
         "resultados": posting.estado_resultados(anio, mes),
         "balance": posting.balance_general(anio, mes),

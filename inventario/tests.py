@@ -67,6 +67,15 @@ class RecetaCostoTests(TestCase):
         # 79.5% ≈ (95 − 19.5) / 95
         self.assertContains(resp, "79.5%")
 
+    def test_el_catalogo_muestra_promedios_de_columnas(self):
+        from django.contrib.auth.models import User
+        User.objects.create_superuser("andy", "a@a.com", "pass")
+        self.client.login(username="andy", password="pass")
+        resp = self.client.get("/catalogo/")
+        self.assertContains(resp, "Promedio (1)")
+        # Precio único = promedio
+        self.assertContains(resp, "$95.00")
+
 
 class InventarioStockTests(TestCase):
     def setUp(self):
