@@ -685,8 +685,32 @@ class JerarquiaDeCuentasTests(TestCase):
                  for f in ws.iter_rows(min_col=1, max_col=2) if f[0].value}
         self.assertEqual(filas["↳ Cortesías"], 4)          # 200 ml × 0.02
         self.assertEqual(filas["Total costo de ventas"], 4)
-        self.assertEqual(filas["Mercadotecnia"], 300)      # sin hijas
+        self.assertEqual(filas["Mercadotecnia"], 300)
+        self.assertEqual(filas["↳ Volantes"], 300)         # desglose por descripción
         self.assertEqual(filas["Total gastos operativos"], 300)
+
+    def test_sueldos_se_desglosan_por_descripcion(self):
+        """Andy: bajo Sueldos, ver cuánto fue Mariana y cuánto Jackie."""
+        posting.registrar_gasto(date(2026, 8, 19), "sueldos",
+                                Decimal("322"), "Mariana")
+        posting.registrar_gasto(date(2026, 8, 20), "sueldos",
+                                Decimal("230"), "Jackie")
+        posting.registrar_gasto(date(2026, 8, 21), "sueldos",
+                                Decimal("230"), "Mariana")
+        posting.registrar_gasto(date(2026, 8, 1), "renta",
+                                Decimal("4500"), "Local")
+
+        er = posting.estado_resultados(2026, 8)
+        por_nombre = {g["nombre"]: g for g in er["gastos"]}
+        sueldos = por_nombre["Sueldos"]
+        self.assertEqual(sueldos["total"], Decimal("782"))
+        self.assertEqual(
+            [(d["nombre"], d["monto"]) for d in sueldos["detalles"]],
+            [("Jackie", Decimal("230")), ("Mariana", Decimal("552"))])
+        renta = por_nombre["Renta"]
+        self.assertEqual(renta["detalles"],
+                         [{"nombre": "Local", "monto": Decimal("4500")}])
+        self.assertEqual(er["total_gastos"], Decimal("5282"))
 
 
 class PeriodoFueraDeRangoTests(TestCase):
