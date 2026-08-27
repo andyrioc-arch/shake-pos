@@ -80,7 +80,7 @@
   <div class="blk">
     <h2>🥤 Productos</h2>
     <table class="t">
-      <thead><tr><th class="l">Producto</th><th>Precio</th><th>Costo receta</th><th>Última compra</th><th>Ganancia/u.</th><th>Activo</th><th>Receta</th><th>Acción</th></tr></thead>
+      <thead><tr><th class="l">Producto</th><th>Precio</th><th>Costo receta</th><th>Última compra</th><th>Ganancia/u.</th><th>Margen</th><th>Activo</th><th>Receta</th><th>Acción</th></tr></thead>
       <tbody>
         {% for p in productos %}
         <tr {% if producto_sel and p.pk == producto_sel.pk %}class="sel-row"{% endif %}>
@@ -92,6 +92,7 @@
              congelar el catálogo deja a Andy sin saber cuánto se movió. {% endcomment %}
           <td>{% if p.costo_ultima_compra is not None %}${{ p.costo_ultima_compra|floatformat:2|intcomma }}{% else %}<span class="muted" title="A algún ingrediente le falta su primera compra capturada.">—</span>{% endif %}</td>
           <td>${{ p.ganancia_unitaria|floatformat:2|intcomma }}</td>
+          <td>{{ p.margen_pct|floatformat:1 }}%</td>
           <td><span class="badge {% if p.activa %}on{% else %}off{% endif %}">{% if p.activa %}Sí{% else %}No{% endif %}</span></td>
           <td><a class="btn mini gold" href="?producto={{ p.pk }}">Editar receta ({{ p.num_ingredientes }})</a></td>
           <td style="text-align:center;">
@@ -101,7 +102,7 @@
           </td>
         </tr>
         {% empty %}
-        <tr><td colspan="7" class="l" style="color:#999;text-align:center;">Sin productos. Crea el primero abajo.</td></tr>
+        <tr><td colspan="9" class="l" style="color:#999;text-align:center;">Sin productos. Crea el primero abajo.</td></tr>
         {% endfor %}
       </tbody>
     </table>
