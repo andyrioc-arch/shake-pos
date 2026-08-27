@@ -13,6 +13,7 @@ from django.db.models import ProtectedError, Q, Sum
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils.html import format_html
 from django.views.decorators.http import require_POST
 
 from .alarmas import alarmas_margen
@@ -395,7 +396,17 @@ def venta_agregar(request):
         user_id=request.user.pk, queryset=creadas, action_flag=ADDITION,
         change_message=f"Registró venta ({etiqueta}) · nota {nota.folio}",
     )
-    return redirect("nota_ver", token=nota.token)
+    # La nota se genera igual, pero no se impone en pantalla: en la barra lo
+    # urgente es seguir cobrando. Quien la necesite la abre desde el aviso.
+    messages.success(request, format_html(
+        '{que} de {nombre} registrada. '
+        '<a href="{nota}">Ver nota</a> · <a href="{pdf}">PDF</a>',
+        que="Cortesía" if es_cortesia else "Venta",
+        nombre=nombre_cliente,
+        nota=reverse("nota_ver", args=[nota.token]),
+        pdf=reverse("nota_pdf", args=[nota.token]),
+    ))
+    return redirect("panel_inventario")
 
 
 @login_required

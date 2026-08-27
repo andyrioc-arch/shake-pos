@@ -869,6 +869,18 @@ class PedidosPendientesTests(TestCase):
         self.assertIsNone(nota.entregada_en)
         self.assertTrue(nota.pendiente)
 
+    def test_al_cobrar_vuelve_a_la_caja_con_enlace_a_la_nota(self):
+        """La nota existe; no se impone. Quien la necesite la abre del aviso."""
+        from django.urls import reverse
+        resp = self._vender("Andrea")
+        self.assertRedirects(
+            resp, reverse("panel_inventario"), fetch_redirect_response=False)
+        nota = Nota.objects.get()
+        panel = self.client.get(reverse("panel_inventario"))
+        self.assertContains(panel, "Ver nota")
+        self.assertContains(panel, reverse("nota_ver", args=[nota.token]))
+        self.assertContains(panel, reverse("nota_pdf", args=[nota.token]))
+
     def test_la_lista_muestra_lo_pendiente_con_su_nombre(self):
         self._vender("Andrea")
         resp = self._pedidos()

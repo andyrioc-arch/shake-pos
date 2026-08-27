@@ -164,7 +164,10 @@ class DiaDeUsoTests(TestCase):
                             pago_con="200")
         n1 = Nota.objects.get()
         self.assertRedirects(
-            resp, reverse("nota_ver", kwargs={"token": n1.token}))
+            resp, reverse("panel_inventario"), fetch_redirect_response=False)
+        # La nota sigue existiendo y se ofrece en el aviso, no se impone.
+        self.assertContains(
+            self.c_caja.get(reverse("panel_inventario")), "Ver nota")
         self.assertEqual(n1.total, Decimal("130.00"))
         self.assertEqual(n1.cambio, Decimal("70.00"))
         self.assertEqual(n1.folio, n1.token.hex[:8].upper())
@@ -197,7 +200,8 @@ class DiaDeUsoTests(TestCase):
 
         # ── 3 · El cliente se lleva su comprobante ──────────────────────────
         # La nota y su PDF son públicos a propósito: quien tiene el token ya
-        # puede verla, y pedir sesión solo estorbaría al cliente.
+        # puede verla, y pedir sesión solo estorbaría al cliente. Tras cobrar
+        # la caja ofrece el enlace; no te arrastra a la nota.
         self.assertEqual(
             self.c_publico.get(n1.get_absolute_url()).status_code, 200)
         pdf = self.c_publico.get(reverse("nota_pdf", args=[n1.token]))
