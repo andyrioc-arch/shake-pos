@@ -210,7 +210,8 @@
         {% for i in resultados.ingresos %}<tr><td class="l">{{ i.nombre }}</td><td>${{ i.monto|floatformat:2|intcomma }}</td></tr>{% empty %}<tr><td class="l" colspan="2" style="color:#999;">Sin ingresos reconocidos.</td></tr>{% endfor %}
         <tr class="tot"><td class="l">Total ingresos</td><td>${{ resultados.total_ingresos|floatformat:2|intcomma }}</td></tr>
         <tr><th class="l" colspan="2">Costo de ventas (FIFO)</th></tr>
-        {% for cv in resultados.costo_ventas %}<tr><td class="l">{{ cv.nombre }}</td><td>${{ cv.monto|floatformat:2|intcomma }}</td></tr>{% empty %}<tr><td class="l" colspan="2" style="color:#999;">Sin costo de ventas.</td></tr>{% endfor %}
+        {% for cv in resultados.costo_ventas %}<tr><td class="l" style="padding-left:16px;">↳ {{ cv.nombre }}</td><td>${{ cv.monto|floatformat:2|intcomma }}</td></tr>{% empty %}<tr><td class="l" colspan="2" style="color:#999;">Sin costo de ventas.</td></tr>{% endfor %}
+        <tr class="tot"><td class="l">Total costo de ventas</td><td>${{ resultados.total_costo_ventas|floatformat:2|intcomma }}</td></tr>
         <tr class="tot"><td class="l">Utilidad bruta</td>
           <td class="{% if resultados.utilidad_bruta >= 0 %}good{% else %}bad{% endif %}">${{ resultados.utilidad_bruta|floatformat:2|intcomma }}</td></tr>
         <tr><th class="l" colspan="2">Gastos operativos</th></tr>

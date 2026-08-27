@@ -140,12 +140,11 @@ class VentaSinComprasTests(TestCase):
 
 
 class CortesiaTests(TestCase):
-    """Una cortesía es gratis pero consume inventario; su costo va a Cortesías."""
+    """Una cortesía es gratis pero consume inventario; su costo va a COGS."""
 
-    def test_cortesia_gratis_consume_inventario_y_gasto_promocion(self):
+    def test_cortesia_gratis_consume_inventario_y_entra_a_costo_de_ventas(self):
         from inventario.models import (
             Ingrediente, Receta, RecetaIngrediente, Venta, Compra)
-        from contabilidad.models import Movimiento
         posting.crear_catalogo()
         i = Ingrediente.objects.create(
             nombre="Leche", categoria="liquido", unidad_compra="litro",
@@ -153,8 +152,8 @@ class CortesiaTests(TestCase):
             costo_unidad_compra=Decimal("20"))
         r = Receta.objects.create(nombre="Shake", precio_venta=Decimal("100"))
         RecetaIngrediente.objects.create(receta=r, ingrediente=i, cantidad=Decimal("200"))
-        c = Compra.objects.create(fecha=date(2026, 8, 1), ingrediente=i,
-                                  cantidad=Decimal("1"), monto_total=Decimal("20.00"))
+        Compra.objects.create(fecha=date(2026, 8, 1), ingrediente=i,
+                              cantidad=Decimal("1"), monto_total=Decimal("20.00"))
 
         v = Venta.objects.create(fecha=date(2026, 8, 5), receta=r,
                                  cantidad=2, es_cortesia=True)
@@ -166,17 +165,16 @@ class CortesiaTests(TestCase):
 
         er = posting.estado_resultados(2026, 8)
         self.assertEqual(er["total_ingresos"], Decimal("0"))
-        self.assertEqual(er["total_costo_ventas"], Decimal("0"))
-        # Desde P6 la cortesía se lee DENTRO de Mercadotecnia, sin dejar de ser
-        # su propia cuenta: el asiento sigue yendo a la 506.
-        grupos = {g["codigo"]: g for g in er["gastos"]}
-        mercadotecnia = grupos["504"]
-        self.assertEqual(mercadotecnia["propio"], Decimal("0"))   # sin gasto directo
-        self.assertEqual(mercadotecnia["total"], Decimal("8"))    # 400ml * 0.02
-        sub = {s["codigo"]: s for s in mercadotecnia["subcuentas"]}
-        self.assertEqual(sub["506"]["nombre"], "Cortesías y promociones")
-        self.assertEqual(sub["506"]["monto"], Decimal("8"))
-        self.assertEqual(er["total_gastos"], Decimal("8"))        # no cambió
+        # El costo del regalo entra a 501, desglosado como Cortesías.
+        self.assertEqual(er["total_costo_ventas"], Decimal("8"))  # 400ml * 0.02
+        self.assertEqual(er["costo_cortesias"], Decimal("8"))
+        self.assertEqual(er["costo_comercial"], Decimal("0"))
+        self.assertEqual(
+            [(cv["nombre"], cv["monto"]) for cv in er["costo_ventas"]],
+            [("Cortesías", Decimal("8"))])
+        self.assertEqual(er["gastos"], [])                    # ya no es mercadotecnia
+        self.assertEqual(er["total_gastos"], Decimal("0"))
+        self.assertFalse(Cuenta.objects.filter(codigo="506").exists())
         self.assertTrue(posting.balance_general(2026, 8)["cuadra"])
 
 
@@ -641,43 +639,13 @@ class ReconocimientoSeRetiraTests(_ReconocimientoBase):
 
 
 class JerarquiaDeCuentasTests(TestCase):
-    """P6: la 506 se lee dentro de la 504 sin que el posteo cambie."""
+    """El reporte anida gastos por `Cuenta.padre` y ordena por código."""
 
     def setUp(self):
         posting.crear_catalogo()
 
-    def test_la_506_cuelga_de_la_504(self):
-        c506 = Cuenta.objects.get(codigo="506")
-        self.assertEqual(c506.padre.codigo, "504")
-
-    def test_crear_catalogo_repone_la_jerarquia_si_alguien_la_rompe(self):
-        """`_cuenta_segura()` puede recrear una cuenta borrada.
-
-        Si renaciera suelta, las cortesías desaparecerían del grupo de
-        mercadotecnia en el reporte sin que nadie se entere.
-        """
-        Cuenta.objects.filter(codigo="506").update(padre=None)
-        posting.crear_catalogo()
-        self.assertEqual(Cuenta.objects.get(codigo="506").padre.codigo, "504")
-
-    def test_el_grupo_suma_el_gasto_propio_del_padre_y_el_de_la_hija(self):
-        """La 504 es cuenta de movimiento Y padre a la vez."""
-        posting.registrar_gasto(date(2026, 8, 1), "mercadotecnia",
-                                Decimal("300"), "Volantes")
-        # Un gasto directo a cortesías, como el que hará el canje en P9.
-        cortesias = Cuenta.objects.get(codigo="506")
-        posting._reemplaza_asiento(
-            "prueba cortesía", date(2026, 8, 2), "Regalo",
-            [(cortesias.codigo, Decimal("50"), Decimal("0")),
-             ("115", Decimal("0"), Decimal("50"))])
-
-        er = posting.estado_resultados(2026, 8)
-        grupo = {g["codigo"]: g for g in er["gastos"]}["504"]
-        self.assertEqual(grupo["propio"], Decimal("300"))
-        self.assertEqual(grupo["subcuentas"][0]["codigo"], "506")
-        self.assertEqual(grupo["subcuentas"][0]["monto"], Decimal("50"))
-        self.assertEqual(grupo["total"], Decimal("350"))
-        self.assertEqual(er["total_gastos"], Decimal("350"))
+    def test_el_catalogo_ya_no_trae_la_506(self):
+        self.assertFalse(Cuenta.objects.filter(codigo="506").exists())
 
     def test_los_gastos_salen_ordenados_por_codigo(self):
         """Antes se iteraba el agregado tal cual: el orden dependía del motor."""
@@ -687,25 +655,34 @@ class JerarquiaDeCuentasTests(TestCase):
                    posting.estado_resultados(2026, 8)["gastos"]]
         self.assertEqual(codigos, sorted(codigos))
 
-    def test_el_xlsx_dice_lo_mismo_que_la_pantalla(self):
+    def test_el_xlsx_desglosa_cortesias_dentro_del_costo_de_ventas(self):
+        from inventario.models import (
+            Ingrediente, Receta, RecetaIngrediente, Venta, Compra)
+        from inventario import costeo
         from contabilidad import export
         from openpyxl import Workbook
+
         posting.registrar_gasto(date(2026, 8, 1), "mercadotecnia",
                                 Decimal("300"), "Volantes")
-        cortesias = Cuenta.objects.get(codigo="506")
-        posting._reemplaza_asiento(
-            "prueba cortesía", date(2026, 8, 2), "Regalo",
-            [(cortesias.codigo, Decimal("50"), Decimal("0")),
-             ("115", Decimal("0"), Decimal("50"))])
+        i = Ingrediente.objects.create(
+            nombre="Leche", unidad_compra="litro", cantidad_por_unidad=1000,
+            unidad_receta="ml", costo_unidad_compra=Decimal("20"))
+        r = Receta.objects.create(nombre="Shake", precio_venta=Decimal("100"))
+        RecetaIngrediente.objects.create(receta=r, ingrediente=i, cantidad=200)
+        Compra.objects.create(fecha=date(2026, 8, 1), ingrediente=i,
+                              cantidad=1, monto_total=Decimal("20.00"))
+        v = Venta.objects.create(fecha=date(2026, 8, 2), receta=r,
+                                 cantidad=1, es_cortesia=True)
+        costeo.costear_venta(v)
 
         ws = Workbook().active
         export.resultados(ws, 2026, 8, "Agosto 2026")
         filas = {str(f[0].value).strip(): f[1].value
                  for f in ws.iter_rows(min_col=1, max_col=2) if f[0].value}
-        self.assertEqual(filas["Mercadotecnia (directo)"], 300)
-        self.assertEqual(filas["↳ Cortesías y promociones"], 50)
-        self.assertEqual(filas["Total mercadotecnia"], 350)
-        self.assertEqual(filas["Total gastos operativos"], 350)
+        self.assertEqual(filas["↳ Cortesías"], 4)          # 200 ml × 0.02
+        self.assertEqual(filas["Total costo de ventas"], 4)
+        self.assertEqual(filas["Mercadotecnia"], 300)      # sin hijas
+        self.assertEqual(filas["Total gastos operativos"], 300)
 
 
 class PeriodoFueraDeRangoTests(TestCase):

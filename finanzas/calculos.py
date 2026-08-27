@@ -170,8 +170,8 @@ def flujo_mensual():
     for v in Venta.objects.con_costeo():
         p = _periodo(v.fecha)
         ingresos[p] += v.ingreso
-        # El costo de una cortesía es mercadotecnia, no costo variable de venta:
-        # va aparte para no ensuciar el margen del producto. Pero se sigue
+        # El costo de una cortesía es COGS regalado, no mercadotecnia: va
+        # aparte para no ensuciar el margen del producto. Pero se sigue
         # restando de la ganancia operativa, porque el insumo sí se gastó.
         if v.es_cortesia:
             cortesias[p] += v.costo_de_ventas

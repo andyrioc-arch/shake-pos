@@ -1016,7 +1016,7 @@ class DescuentoEnLaVentaTests(TestCase):
     def test_del_100_por_ciento_cobra_cero_pero_no_es_cortesia(self):
         """Regalar y descontar al 100% no son lo mismo en los libros.
 
-        La cortesía va contra 506; el descuento se queda en el ingreso.
+        La cortesía va contra 501 (desglosada); el descuento se queda en el ingreso.
         """
         self._vender("100")
         v = Venta.objects.get()

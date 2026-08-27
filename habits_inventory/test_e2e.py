@@ -52,10 +52,7 @@ class DiaDeUsoTests(TestCase):
     """El recorrido completo de un día de mostrador."""
 
     def setUp(self):
-        # El catálogo contable tiene que existir ANTES del primer asiento. Si no,
-        # `_cuenta_segura()` crea la 506 suelta, sin padre, y el desglose de
-        # gastos la reporta como grupo propio en vez de dentro de la 504: el test
-        # fallaría por el montaje y parecería un bug de contabilidad.
+        # El catálogo contable tiene que existir ANTES del primer asiento.
         posting.crear_catalogo()
 
         # La fecha es HOY y no una fija a propósito: `entregar_canje` fecha la
@@ -373,10 +370,10 @@ class DiaDeUsoTests(TestCase):
         lineas = sorted(
             (l.cuenta.codigo, l.debe, l.haber)
             for l in mov_cortesia.asiento_reconocimiento.movimientos.all())
-        # 506 Cortesías contra 115 Inventario: nunca 401 ni 501.
+        # 501 Costo de ventas contra 115 Inventario: nunca 401.
         self.assertEqual(lineas, [
             ("115", Decimal("0.00"), Decimal("14.00")),
-            ("506", Decimal("14.00"), Decimal("0.00")),
+            ("501", Decimal("14.00"), Decimal("0.00")),
         ])
         # La cortesía NO acumula puntos, aunque el teléfono venga en el POST.
         cliente.refresh_from_db()
@@ -465,19 +462,17 @@ class DiaDeUsoTests(TestCase):
         er = self._reportes()
         # 130 + 270 + 50 + 50 + 130 + 260
         self.assertEqual(er["total_ingresos"], Decimal("890"))
-        # 14 + 44 + 4.50 + 4.50 + 14 + 28 — sin las dos cortesías
-        self.assertEqual(er["total_costo_ventas"], Decimal("109"))
-        self.assertEqual(er["utilidad_bruta"], Decimal("781"))
+        # 14 + 44 + 4.50 + 4.50 + 14 + 28 + cortesías 14 + 4.50
+        self.assertEqual(er["total_costo_ventas"], Decimal("127.50"))
+        self.assertEqual(er["costo_cortesias"], Decimal("18.50"))
+        self.assertEqual(er["costo_comercial"], Decimal("109"))
+        self.assertEqual(er["utilidad_bruta"], Decimal("762.50"))
 
         gastos = {g["codigo"]: g for g in er["gastos"]}
         self.assertEqual(gastos["502"]["total"], Decimal("1500"))
-        # Las cortesías (14.00 + 4.50) se presentan DENTRO de la 504 y fuera
-        # del costo de ventas, que es lo que decidió P6.
-        self.assertEqual(gastos["504"]["propio"], Decimal("0"))
-        self.assertEqual(
-            [(s["codigo"], s["monto"]) for s in gastos["504"]["subcuentas"]],
-            [("506", Decimal("18.50"))])
-        self.assertEqual(er["total_gastos"], Decimal("1518.50"))
+        # Las cortesías ya no viven en mercadotecnia.
+        self.assertNotIn("504", gastos)
+        self.assertEqual(er["total_gastos"], Decimal("1500"))
 
         balanza = posting.balanza_comprobacion(self.hoy.year, self.hoy.month)
         self.assertTrue(balanza["cuadra"])

@@ -1034,7 +1034,7 @@ class CanjeConsumeInventarioTests(TestCase):
         self.assertEqual(canje.costo, Decimal("6.00"))    # 200 ml × 0.03
         self.assertEqual(self.ing.stock_disponible, antes - 200)
 
-    def test_el_costo_del_premio_entra_a_mercadotecnia_y_no_a_costo_de_ventas(self):
+    def test_el_costo_del_premio_entra_a_costo_de_ventas_como_cortesia(self):
         from contabilidad import posting
         premio = Premio.objects.create(
             nombre="Latte gratis", puntos_requeridos=100,
@@ -1044,7 +1044,9 @@ class CanjeConsumeInventarioTests(TestCase):
 
         hoy = timezone.localdate()
         er = posting.estado_resultados(hoy.year, hoy.month)
-        self.assertEqual(er["total_costo_ventas"], Decimal("0"))
+        self.assertEqual(er["total_costo_ventas"], Decimal("6.00"))
+        self.assertEqual(er["costo_cortesias"], Decimal("6.00"))
+        self.assertEqual(er["total_gastos"], Decimal("0"))
         self.assertTrue(posting.balanza_comprobacion(hoy.year, hoy.month)["cuadra"])
 
     def test_un_premio_sin_receta_avisa_en_vez_de_reventar(self):
