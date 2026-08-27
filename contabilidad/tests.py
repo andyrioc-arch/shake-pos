@@ -347,6 +347,21 @@ class ReportesViewTests(TestCase):
         self.assertContains(resp, "Estado de resultados")
         self.assertContains(resp, "Balance general")
 
+    def test_el_panel_pone_los_reportes_antes_del_libro(self):
+        """Andy quiere leer ER → Flujo → Balance → Salud → Libro."""
+        html = self.client.get("/contabilidad/").content.decode()
+        posiciones = [
+            html.index(titulo) for titulo in (
+                "Estado de resultados",
+                "Flujo de efectivo",
+                "Balance general",
+                "Salud del costeo",
+                "Libro de movimientos",
+                "Balanza de comprobación",
+            )
+        ]
+        self.assertEqual(posiciones, sorted(posiciones))
+
     def test_reportes_requiere_login(self):
         self.client.logout()
         resp = self.client.get("/contabilidad/")

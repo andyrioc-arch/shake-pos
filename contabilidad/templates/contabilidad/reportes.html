@@ -99,6 +99,82 @@
     </p>
   </div>
 
+  <!-- ── ESTADO DE RESULTADOS + FLUJO ─────────────────────────────────── -->
+  <div class="cols">
+    <div class="blk">
+      <h2>📈 Estado de resultados <small>({{ mes_nombre }} {{ anio }})</small>
+        <a class="dl" href="{% url 'exportar_estado' 'resultados' %}?anio={{ anio }}&mes={{ mes }}">⬇ xlsx</a></h2>
+      <table class="t">
+        <tr><th class="l" colspan="2">Ingresos reconocidos</th></tr>
+        {% for i in resultados.ingresos %}<tr><td class="l">{{ i.nombre }}</td><td>${{ i.monto|floatformat:2|intcomma }}</td></tr>{% empty %}<tr><td class="l" colspan="2" style="color:#999;">Sin ingresos reconocidos.</td></tr>{% endfor %}
+        <tr class="tot"><td class="l">Total ingresos</td><td>${{ resultados.total_ingresos|floatformat:2|intcomma }}</td></tr>
+        <tr><th class="l" colspan="2">Costo de ventas (FIFO)</th></tr>
+        {% for cv in resultados.costo_ventas %}<tr><td class="l" style="padding-left:16px;">↳ {{ cv.nombre }}</td><td>${{ cv.monto|floatformat:2|intcomma }}</td></tr>{% empty %}<tr><td class="l" colspan="2" style="color:#999;">Sin costo de ventas.</td></tr>{% endfor %}
+        <tr class="tot"><td class="l">Total costo de ventas</td><td>${{ resultados.total_costo_ventas|floatformat:2|intcomma }}</td></tr>
+        <tr class="tot"><td class="l">Utilidad bruta</td>
+          <td class="{% if resultados.utilidad_bruta >= 0 %}good{% else %}bad{% endif %}">${{ resultados.utilidad_bruta|floatformat:2|intcomma }}</td></tr>
+        <tr><th class="l" colspan="2">Gastos operativos</th></tr>
+        {% for g in resultados.gastos %}
+          {% if g.subcuentas %}
+            {# Cuenta que agrupa: saldo propio (con desglose) y cada hija. #}
+            {% if g.detalles %}
+              <tr><td class="l">{{ g.nombre }} <span style="color:#999;">(directo)</span></td><td>${{ g.propio|floatformat:2|intcomma }}</td></tr>
+              {% for d in g.detalles %}<tr><td class="l" style="padding-left:32px;color:#555;">↳ {{ d.nombre }}</td><td>${{ d.monto|floatformat:2|intcomma }}</td></tr>{% endfor %}
+            {% elif g.propio %}
+              <tr><td class="l">{{ g.nombre }} <span style="color:#999;">(directo)</span></td><td>${{ g.propio|floatformat:2|intcomma }}</td></tr>
+            {% endif %}
+            {% for s in g.subcuentas %}<tr><td class="l" style="padding-left:32px;color:#555;">↳ {{ s.nombre }}</td><td>${{ s.monto|floatformat:2|intcomma }}</td></tr>{% endfor %}
+            <tr><td class="l" style="font-weight:700;">Total {{ g.nombre|lower }}</td><td style="font-weight:700;">${{ g.total|floatformat:2|intcomma }}</td></tr>
+          {% elif g.detalles %}
+            {# Cuenta hoja: total de la cuenta + filas por descripción (Mariana…). #}
+            <tr><td class="l">{{ g.nombre }}</td><td>${{ g.total|floatformat:2|intcomma }}</td></tr>
+            {% for d in g.detalles %}<tr><td class="l" style="padding-left:16px;">↳ {{ d.nombre }}</td><td>${{ d.monto|floatformat:2|intcomma }}</td></tr>{% endfor %}
+          {% else %}
+            <tr><td class="l">{{ g.nombre }}</td><td>${{ g.total|floatformat:2|intcomma }}</td></tr>
+          {% endif %}
+        {% empty %}<tr><td class="l" colspan="2" style="color:#999;">Sin gastos operativos.</td></tr>{% endfor %}
+        <tr class="tot"><td class="l">Total gastos operativos</td><td>${{ resultados.total_gastos|floatformat:2|intcomma }}</td></tr>
+        <tr class="tot"><td class="l">Utilidad neta del mes</td>
+          <td class="{% if resultados.utilidad >= 0 %}good{% else %}bad{% endif %}">${{ resultados.utilidad|floatformat:2|intcomma }}</td></tr>
+      </table>
+    </div>
+
+    <div class="blk">
+      <h2>💵 Flujo de efectivo <small>({{ mes_nombre }} {{ anio }})</small>
+        <a class="dl" href="{% url 'exportar_estado' 'flujo' %}?anio={{ anio }}&mes={{ mes }}">⬇ xlsx</a></h2>
+      <table class="t">
+        <tr><td class="l">Saldo inicial de caja</td><td>${{ flujo.saldo_inicial|floatformat:2|intcomma }}</td></tr>
+        <tr><td class="l">Entradas (cobros)</td><td class="good">+${{ flujo.entradas|floatformat:2|intcomma }}</td></tr>
+        <tr><td class="l">Salidas (pagos)</td><td class="bad">−${{ flujo.salidas|floatformat:2|intcomma }}</td></tr>
+        <tr class="tot"><td class="l">Flujo neto del mes</td>
+          <td class="{% if flujo.neto >= 0 %}good{% else %}bad{% endif %}">${{ flujo.neto|floatformat:2|intcomma }}</td></tr>
+        <tr class="tot"><td class="l">Saldo final de caja</td><td>${{ flujo.saldo_final|floatformat:2|intcomma }}</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── BALANCE GENERAL ──────────────────────────────────────────────── -->
+  <div class="blk">
+    <h2>🏦 Balance general <small>(al cierre de {{ mes_nombre }} {{ anio }})</small>
+      <span class="cuadra {% if balance.cuadra %}si{% else %}no{% endif %}">{% if balance.cuadra %}✓ Cuadra{% else %}✗ No cuadra{% endif %}</span>
+      <a class="dl" href="{% url 'exportar_estado' 'balance' %}?anio={{ anio }}&mes={{ mes }}">⬇ xlsx</a>
+    </h2>
+    <div class="cols" style="gap:0;">
+      <table class="t" style="flex:1;">
+        <tr><th class="l" colspan="2">Activo</th></tr>
+        {% for a in balance.activos %}<tr><td class="l">{{ a.nombre }}</td><td>${{ a.monto|floatformat:2|intcomma }}</td></tr>{% empty %}<tr><td class="l" colspan="2" style="color:#999;">—</td></tr>{% endfor %}
+        <tr class="tot"><td class="l">Total activo</td><td>${{ balance.total_activo|floatformat:2|intcomma }}</td></tr>
+      </table>
+      <table class="t" style="flex:1;">
+        <tr><th class="l" colspan="2">Pasivo</th></tr>
+        {% for p in balance.pasivos %}<tr><td class="l">{{ p.nombre }}</td><td>${{ p.monto|floatformat:2|intcomma }}</td></tr>{% empty %}<tr><td class="l" colspan="2" style="color:#999;">—</td></tr>{% endfor %}
+        <tr><th class="l" colspan="2">Capital</th></tr>
+        {% for c in balance.capital %}<tr><td class="l">{{ c.nombre }}</td><td>${{ c.monto|floatformat:2|intcomma }}</td></tr>{% endfor %}
+        <tr class="tot"><td class="l">Total pasivo + capital</td><td>${{ balance.total_pasivo_capital|floatformat:2|intcomma }}</td></tr>
+      </table>
+    </div>
+  </div>
+
   <!-- ── SALUD DEL COSTEO ─────────────────────────────────────────────── -->
   <div class="blk">
     <h2>
@@ -198,82 +274,6 @@
       costo y el cobro se reconocen juntos o no se reconoce ninguno. Mientras
       falte costo, la venta no mueve la caja contable.
     </p>
-  </div>
-
-  <!-- ── ESTADO DE RESULTADOS + FLUJO ─────────────────────────────────── -->
-  <div class="cols">
-    <div class="blk">
-      <h2>📈 Estado de resultados <small>({{ mes_nombre }} {{ anio }})</small>
-        <a class="dl" href="{% url 'exportar_estado' 'resultados' %}?anio={{ anio }}&mes={{ mes }}">⬇ xlsx</a></h2>
-      <table class="t">
-        <tr><th class="l" colspan="2">Ingresos reconocidos</th></tr>
-        {% for i in resultados.ingresos %}<tr><td class="l">{{ i.nombre }}</td><td>${{ i.monto|floatformat:2|intcomma }}</td></tr>{% empty %}<tr><td class="l" colspan="2" style="color:#999;">Sin ingresos reconocidos.</td></tr>{% endfor %}
-        <tr class="tot"><td class="l">Total ingresos</td><td>${{ resultados.total_ingresos|floatformat:2|intcomma }}</td></tr>
-        <tr><th class="l" colspan="2">Costo de ventas (FIFO)</th></tr>
-        {% for cv in resultados.costo_ventas %}<tr><td class="l" style="padding-left:16px;">↳ {{ cv.nombre }}</td><td>${{ cv.monto|floatformat:2|intcomma }}</td></tr>{% empty %}<tr><td class="l" colspan="2" style="color:#999;">Sin costo de ventas.</td></tr>{% endfor %}
-        <tr class="tot"><td class="l">Total costo de ventas</td><td>${{ resultados.total_costo_ventas|floatformat:2|intcomma }}</td></tr>
-        <tr class="tot"><td class="l">Utilidad bruta</td>
-          <td class="{% if resultados.utilidad_bruta >= 0 %}good{% else %}bad{% endif %}">${{ resultados.utilidad_bruta|floatformat:2|intcomma }}</td></tr>
-        <tr><th class="l" colspan="2">Gastos operativos</th></tr>
-        {% for g in resultados.gastos %}
-          {% if g.subcuentas %}
-            {# Cuenta que agrupa: saldo propio (con desglose) y cada hija. #}
-            {% if g.detalles %}
-              <tr><td class="l">{{ g.nombre }} <span style="color:#999;">(directo)</span></td><td>${{ g.propio|floatformat:2|intcomma }}</td></tr>
-              {% for d in g.detalles %}<tr><td class="l" style="padding-left:32px;color:#555;">↳ {{ d.nombre }}</td><td>${{ d.monto|floatformat:2|intcomma }}</td></tr>{% endfor %}
-            {% elif g.propio %}
-              <tr><td class="l">{{ g.nombre }} <span style="color:#999;">(directo)</span></td><td>${{ g.propio|floatformat:2|intcomma }}</td></tr>
-            {% endif %}
-            {% for s in g.subcuentas %}<tr><td class="l" style="padding-left:32px;color:#555;">↳ {{ s.nombre }}</td><td>${{ s.monto|floatformat:2|intcomma }}</td></tr>{% endfor %}
-            <tr><td class="l" style="font-weight:700;">Total {{ g.nombre|lower }}</td><td style="font-weight:700;">${{ g.total|floatformat:2|intcomma }}</td></tr>
-          {% elif g.detalles %}
-            {# Cuenta hoja: total de la cuenta + filas por descripción (Mariana…). #}
-            <tr><td class="l">{{ g.nombre }}</td><td>${{ g.total|floatformat:2|intcomma }}</td></tr>
-            {% for d in g.detalles %}<tr><td class="l" style="padding-left:16px;">↳ {{ d.nombre }}</td><td>${{ d.monto|floatformat:2|intcomma }}</td></tr>{% endfor %}
-          {% else %}
-            <tr><td class="l">{{ g.nombre }}</td><td>${{ g.total|floatformat:2|intcomma }}</td></tr>
-          {% endif %}
-        {% empty %}<tr><td class="l" colspan="2" style="color:#999;">Sin gastos operativos.</td></tr>{% endfor %}
-        <tr class="tot"><td class="l">Total gastos operativos</td><td>${{ resultados.total_gastos|floatformat:2|intcomma }}</td></tr>
-        <tr class="tot"><td class="l">Utilidad neta del mes</td>
-          <td class="{% if resultados.utilidad >= 0 %}good{% else %}bad{% endif %}">${{ resultados.utilidad|floatformat:2|intcomma }}</td></tr>
-      </table>
-    </div>
-
-    <div class="blk">
-      <h2>💵 Flujo de efectivo <small>({{ mes_nombre }} {{ anio }})</small>
-        <a class="dl" href="{% url 'exportar_estado' 'flujo' %}?anio={{ anio }}&mes={{ mes }}">⬇ xlsx</a></h2>
-      <table class="t">
-        <tr><td class="l">Saldo inicial de caja</td><td>${{ flujo.saldo_inicial|floatformat:2|intcomma }}</td></tr>
-        <tr><td class="l">Entradas (cobros)</td><td class="good">+${{ flujo.entradas|floatformat:2|intcomma }}</td></tr>
-        <tr><td class="l">Salidas (pagos)</td><td class="bad">−${{ flujo.salidas|floatformat:2|intcomma }}</td></tr>
-        <tr class="tot"><td class="l">Flujo neto del mes</td>
-          <td class="{% if flujo.neto >= 0 %}good{% else %}bad{% endif %}">${{ flujo.neto|floatformat:2|intcomma }}</td></tr>
-        <tr class="tot"><td class="l">Saldo final de caja</td><td>${{ flujo.saldo_final|floatformat:2|intcomma }}</td></tr>
-      </table>
-    </div>
-  </div>
-
-  <!-- ── BALANCE GENERAL ──────────────────────────────────────────────── -->
-  <div class="blk">
-    <h2>🏦 Balance general <small>(al cierre de {{ mes_nombre }} {{ anio }})</small>
-      <span class="cuadra {% if balance.cuadra %}si{% else %}no{% endif %}">{% if balance.cuadra %}✓ Cuadra{% else %}✗ No cuadra{% endif %}</span>
-      <a class="dl" href="{% url 'exportar_estado' 'balance' %}?anio={{ anio }}&mes={{ mes }}">⬇ xlsx</a>
-    </h2>
-    <div class="cols" style="gap:0;">
-      <table class="t" style="flex:1;">
-        <tr><th class="l" colspan="2">Activo</th></tr>
-        {% for a in balance.activos %}<tr><td class="l">{{ a.nombre }}</td><td>${{ a.monto|floatformat:2|intcomma }}</td></tr>{% empty %}<tr><td class="l" colspan="2" style="color:#999;">—</td></tr>{% endfor %}
-        <tr class="tot"><td class="l">Total activo</td><td>${{ balance.total_activo|floatformat:2|intcomma }}</td></tr>
-      </table>
-      <table class="t" style="flex:1;">
-        <tr><th class="l" colspan="2">Pasivo</th></tr>
-        {% for p in balance.pasivos %}<tr><td class="l">{{ p.nombre }}</td><td>${{ p.monto|floatformat:2|intcomma }}</td></tr>{% empty %}<tr><td class="l" colspan="2" style="color:#999;">—</td></tr>{% endfor %}
-        <tr><th class="l" colspan="2">Capital</th></tr>
-        {% for c in balance.capital %}<tr><td class="l">{{ c.nombre }}</td><td>${{ c.monto|floatformat:2|intcomma }}</td></tr>{% endfor %}
-        <tr class="tot"><td class="l">Total pasivo + capital</td><td>${{ balance.total_pasivo_capital|floatformat:2|intcomma }}</td></tr>
-      </table>
-    </div>
   </div>
 
   <!-- ── BALANZA DE COMPROBACIÓN ──────────────────────────────────────── -->
