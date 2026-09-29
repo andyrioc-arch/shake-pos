@@ -96,52 +96,115 @@ class Ingrediente(models.Model):
         No hace falta prever capas sin congelar: `cantidad_receta` es NOT NULL
         desde `0011_la_compra_sin_huecos`, así que toda compra trae su dato.
         """
-        agg = self.compras.aggregate(total=models.Sum("cantidad_receta"))
-        return agg["total"] or Decimal("0")
+        return self.comprados_por_ingrediente(
+            [self.pk]).get(self.pk, Decimal("0"))
+
+    @staticmethod
+    def comprados_por_ingrediente(ids=None):
+        """{ingrediente_id: unidades de receta compradas}, en UNA consulta."""
+        qs = Compra.objects.order_by()
+        if ids is not None:
+            qs = qs.filter(ingrediente_id__in=ids)
+        filas = qs.values("ingrediente_id").annotate(
+            total=models.Sum("cantidad_receta"))
+        return {f["ingrediente_id"]: f["total"] or Decimal("0") for f in filas}
 
     @property
     def total_consumido(self):
-        """Unidades de receta consumidas, considerando sustituciones y extras.
+        """Unidades de receta consumidas: ventas, sustituciones, extras y merma.
+
+        Quien recorra varios ingredientes debe usar `consumos_por_ingrediente()`
+        o inyectar su resultado en `_consumo_precargado`: aquí cuesta cinco
+        consultas por ingrediente. Sin él se resuelve solo, que es lo correcto
+        para un llamador suelto.
+        """
+        precargado = getattr(self, "_consumo_precargado", None)
+        if precargado is not None:
+            return precargado
+        return self.consumos_por_ingrediente(
+            [self.pk]).get(self.pk, Decimal("0"))
+
+    @staticmethod
+    def consumos_por_ingrediente(ids=None):
+        """{ingrediente_id: unidades de receta consumidas}, en cinco consultas.
 
         Para cada venta:
-          + lo que la receta usa de este ingrediente × cantidad vendida
-          − lo que se sustituyó (si este ingrediente fue reemplazado en la venta)
-          + lo que entró como sustituto (si este ingrediente reemplazó a otro)
-          + lo que se usó como extra
+          + lo que la receta usa del ingrediente × cantidad vendida
+          − lo mismo, si en esa venta el ingrediente se sustituyó por otro
+          + lo que entró como sustituto (si reemplazó a otro)
+          + lo que se usó como extra, una vez por la línea y no por shake
+        y encima, lo perdido en los conteos físicos.
+
+        Nada de esto se puede preguntar venta por venta: el panel recorre el
+        catálogo entero, y con cientos de ventas eso eran millones de viajes
+        al pooler y medio minuto de espera en la caja. El número de consultas
+        no puede crecer con las ventas.
+
+        Las multiplicaciones van en Python y no en la base: en SQLite un
+        decimal por un entero se vuelve flotante, y el stock tiene que salir
+        idéntico al de la propiedad.
         """
-        total = Decimal("0")
+        from collections import defaultdict
+        total = defaultdict(Decimal)
+        if ids is not None:
+            ids = set(ids)
 
-        # 1) Consumo base por recetas que usan este ingrediente
-        for item in self.usos.select_related("receta"):
-            for venta in item.receta.ventas.all():
-                # ¿En esta venta se sustituyó este ingrediente por otro? -> no se usó
-                sustituido = venta.sustituciones.filter(
-                    ingrediente_original=self
-                ).exists()
-                if not sustituido:
-                    total += item.cantidad * venta.cantidad
+        # Una venta con dos sustituciones del MISMO ingrediente lo deja de
+        # usar una sola vez; por eso el descuento va sobre pares únicos y el
+        # consumo del sustituto, sobre cada fila.
+        subs = VentaSustitucion.objects.order_by().values_list(
+            "venta_id", "ingrediente_original_id", "ingrediente_nuevo_id",
+            "venta__receta_id", "venta__cantidad")
+        if ids is not None:
+            subs = subs.filter(models.Q(ingrediente_original_id__in=ids) |
+                               models.Q(ingrediente_nuevo_id__in=ids))
+        subs = list(subs)
 
-        # 2) Consumo como sustituto (este ingrediente entró en lugar de otro)
-        for sus in self.sustituto_en.select_related("venta"):
-            total += sus.cantidad_receta * sus.venta.cantidad
+        # El sustituto consume lo que la receta usaba del ORIGINAL, así que
+        # esas líneas hacen falta aunque el original no esté en `ids`.
+        lineas = RecetaIngrediente.objects.order_by().values_list(
+            "receta_id", "ingrediente_id", "cantidad")
+        if ids is not None:
+            lineas = lineas.filter(
+                ingrediente_id__in=ids | {s[1] for s in subs})
+        linea = {(r, i): c for r, i, c in lineas}
 
-        # 3) Consumo como add-on: una vez por la línea (no por cada shake)
-        for ext in self.extras.all():  # Extra objects que usan este ingrediente
-            for ve in ext.ventaextra_set.select_related("venta"):
-                total += ext.cantidad * ve.cantidad
+        vendidas = Venta.objects.order_by().values("receta_id").annotate(
+            n=models.Sum("cantidad"))
+        if ids is not None:
+            vendidas = vendidas.filter(receta_id__in={
+                r for r, i in linea if i in ids})
+        por_receta = {f["receta_id"]: f["n"] for f in vendidas}
 
-        # 4) Lo que se perdió. Sin esto el conteo físico no sirve de nada: la
-        #    merma bajaría la cuenta 115 pero el stock en pantalla seguiría
-        #    contando mercancía que ya se tiró, y el siguiente conteo volvería
-        #    a reportar el mismo faltante.
-        #
-        #    `_merma_precargada` la inyecta quien recorre el catálogo entero
-        #    para no pagar una consulta por ingrediente; sin ella se resuelve
-        #    sola, que es lo correcto para un llamador suelto.
-        perdido = getattr(self, "_merma_precargada", None)
-        total += self.merma_total if perdido is None else perdido
+        for (receta_id, ing_id), cantidad in linea.items():
+            if ids is None or ing_id in ids:
+                total[ing_id] += cantidad * por_receta.get(receta_id, 0)
 
-        return total
+        for _, original, receta_id, cant_venta in {
+                (s[0], s[1], s[3], s[4]) for s in subs}:
+            if ids is None or original in ids:
+                total[original] -= linea.get(
+                    (receta_id, original), Decimal("0")) * cant_venta
+        for _, original, nuevo, receta_id, cant_venta in subs:
+            if ids is None or nuevo in ids:
+                total[nuevo] += linea.get(
+                    (receta_id, original), Decimal("0")) * cant_venta
+
+        extras = VentaExtra.objects.order_by().values(
+            "extra__ingrediente_id", "extra__cantidad").annotate(
+            n=models.Sum("cantidad"))
+        if ids is not None:
+            extras = extras.filter(extra__ingrediente_id__in=ids)
+        for f in extras:
+            total[f["extra__ingrediente_id"]] += f["extra__cantidad"] * f["n"]
+
+        # Sin la merma el conteo físico no sirve de nada: bajaría la cuenta
+        # 115 pero el stock en pantalla seguiría contando mercancía que ya se
+        # tiró, y el siguiente conteo volvería a reportar el mismo faltante.
+        for ing_id, perdido in Ingrediente.mermas_por_ingrediente(ids).items():
+            total[ing_id] += perdido
+
+        return dict(total)
 
     @property
     def merma_total(self):
@@ -188,10 +251,22 @@ class Ingrediente(models.Model):
         rojo que no se puede apagar se aprende a ignorar, y entonces tampoco se
         ve el que sí importa.
         """
-        total = Decimal("0")
-        for item in self.usos.filter(receta__activa=True):
-            total += item.cantidad * 5
-        return total
+        return self.minimos_por_ingrediente(
+            [self.pk]).get(self.pk, Decimal("0"))
+
+    @staticmethod
+    def minimos_por_ingrediente(ids=None):
+        """{ingrediente_id: mínimo para cinco shakes}, en UNA consulta."""
+        from collections import defaultdict
+        lineas = RecetaIngrediente.objects.filter(
+            receta__activa=True).order_by().values_list(
+            "ingrediente_id", "cantidad")
+        if ids is not None:
+            lineas = lineas.filter(ingrediente_id__in=ids)
+        total = defaultdict(Decimal)
+        for ing_id, cantidad in lineas:
+            total[ing_id] += cantidad * 5
+        return dict(total)
 
     @property
     def faltante(self):

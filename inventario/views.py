@@ -9,7 +9,7 @@ from django.contrib import messages
 from django.contrib.admin.models import ADDITION, CHANGE, DELETION, LogEntry
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.db import transaction
-from django.db.models import ProtectedError, Q, Sum
+from django.db.models import Prefetch, ProtectedError, Q, Sum
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -96,26 +96,32 @@ def panel_inventario(request):
     es_super = request.user.is_superuser
 
     # ── Stock y faltantes ────────────────────────────────────────────────
-    # Las mermas de todo el catálogo salen de una sola consulta y se le
-    # inyectan a cada ingrediente. Pedirlas dentro del bucle cuesta una
-    # consulta por ingrediente en la pantalla que el cajero tiene abierta todo
-    # el día; es la misma lección que dejó el costo de la última compra.
-    mermas = Ingrediente.mermas_por_ingrediente()
+    # Lo comprado, lo consumido y el mínimo de todo el catálogo salen de unas
+    # cuantas consultas, y el stock se calcula UNA vez por ingrediente. Leerlo
+    # de las propiedades cuesta consultas por ingrediente, y esta fila las
+    # leía cuatro veces: cuando el consumo se preguntaba venta por venta, eso
+    # fue medio minuto en la pantalla que el cajero tiene abierta todo el día.
+    comprados = Ingrediente.comprados_por_ingrediente()
+    consumos = Ingrediente.consumos_por_ingrediente()
+    minimos = Ingrediente.minimos_por_ingrediente()
     ingredientes = []
     faltantes = 0
     for ing in Ingrediente.objects.all():
-        ing._merma_precargada = mermas.get(ing.pk, Decimal("0"))
-        falta = ing.hay_faltante
+        stock = (comprados.get(ing.pk, Decimal("0"))
+                 - consumos.get(ing.pk, Decimal("0")))
+        minimo = minimos.get(ing.pk, Decimal("0"))
+        falta = minimo > 0 and stock < minimo
         if falta:
             faltantes += 1
         ingredientes.append({
+            "pk": ing.pk,
             "nombre": ing.nombre,
             "categoria": ing.get_categoria_display(),
             "unidad": ing.unidad_receta,
-            "stock": ing.stock_disponible,
-            "minimo": ing.minimo_para_cinco,
+            "stock": stock,
+            "minimo": minimo,
             "falta": falta,
-            "faltante": ing.faltante if falta else Decimal("0"),
+            "faltante": minimo - stock if falta else Decimal("0"),
         })
 
     # ── Catálogo de recetas ──────────────────────────────────────────────
@@ -134,7 +140,13 @@ def panel_inventario(request):
     total_unidades = 0
     total_regaladas = 0
     total_ingreso = Decimal("0")
-    for r in Receta.objects.all():
+    # El ingreso de cada venta lee sus extras y el costo de la receta sus
+    # líneas; sin precargarlos son consultas por venta y por receta.
+    catalogo = Receta.objects.prefetch_related(
+        Prefetch("ventas",
+                 queryset=Venta.objects.prefetch_related("extras__extra")),
+        "ingredientes__ingrediente")
+    for r in catalogo:
         conteo = unidades_por_receta.get(r.pk, {})
         unidades = conteo.get("total") or 0
         regaladas = conteo.get("regaladas") or 0

@@ -1598,6 +1598,188 @@ class MermaSinConsultaPorIngredienteTests(TestCase):
             Ingrediente.mermas_por_ingrediente()[ing.pk], Decimal("250"))
 
 
+def _consumo_venta_por_venta(ing):
+    """El algoritmo de antes, tal cual: la referencia contra la que se mide.
+
+    Pregunta venta por venta y por eso ya no vive en el modelo, pero su número
+    es el correcto; el agregado tiene que dar exactamente lo mismo.
+    """
+    total = Decimal("0")
+    for item in ing.usos.select_related("receta"):
+        for venta in item.receta.ventas.all():
+            if not venta.sustituciones.filter(ingrediente_original=ing).exists():
+                total += item.cantidad * venta.cantidad
+    for sus in ing.sustituto_en.select_related("venta"):
+        total += sus.cantidad_receta * sus.venta.cantidad
+    for ext in ing.extras.all():
+        for ve in ext.ventaextra_set.all():
+            total += ext.cantidad * ve.cantidad
+    return total + ing.merma_total
+
+
+class ConsumoAgregadoTests(TestCase):
+    """El consumo de todo el catálogo tiene que ser el de siempre, venta por venta."""
+
+    def setUp(self):
+        from inventario.models import AjusteInventario
+        hoy = date(2026, 9, 1)
+
+        def ing(nombre):
+            return Ingrediente.objects.create(
+                nombre=nombre, unidad_compra="kg", cantidad_por_unidad=1000,
+                unidad_receta="g", costo_unidad_compra=Decimal("100"))
+
+        self.leche, self.prote, self.almendra, self.avena, self.fresa = (
+            ing("Leche"), ing("Proteína"), ing("Almendra"), ing("Avena"),
+            ing("Fresa"))
+        Compra.objects.create(fecha=hoy, ingrediente=self.leche,
+                              cantidad=Decimal("2"), monto_total=Decimal("60"))
+        Compra.objects.create(fecha=hoy, ingrediente=self.prote,
+                              cantidad=Decimal("1.5"), monto_total=Decimal("450"))
+
+        shake = Receta.objects.create(nombre="Shake", precio_venta=Decimal("95"))
+        RecetaIngrediente.objects.create(receta=shake, ingrediente=self.leche,
+                                         cantidad=Decimal("200.50"))
+        RecetaIngrediente.objects.create(receta=shake, ingrediente=self.prote,
+                                         cantidad=Decimal("30"))
+        vieja = Receta.objects.create(nombre="Vieja", precio_venta=Decimal("80"),
+                                      activa=False)
+        RecetaIngrediente.objects.create(receta=vieja, ingrediente=self.leche,
+                                         cantidad=Decimal("150"))
+        RecetaIngrediente.objects.create(receta=vieja, ingrediente=self.fresa,
+                                         cantidad=Decimal("20.25"))
+        extra = Extra.objects.create(nombre="Fresa extra", ingrediente=self.fresa,
+                                     cantidad=Decimal("12.5"), cargo=Decimal("10"))
+
+        Venta.objects.create(fecha=hoy, receta=shake, cantidad=3)
+        v = Venta.objects.create(fecha=hoy, receta=shake, cantidad=2)
+        VentaSustitucion.objects.create(venta=v, ingrediente_original=self.leche,
+                                        ingrediente_nuevo=self.almendra)
+        # Dos sustituciones del MISMO ingrediente: deja de usarse una vez.
+        v = Venta.objects.create(fecha=hoy, receta=shake, cantidad=4)
+        VentaSustitucion.objects.create(venta=v, ingrediente_original=self.leche,
+                                        ingrediente_nuevo=self.almendra)
+        VentaSustitucion.objects.create(venta=v, ingrediente_original=self.leche,
+                                        ingrediente_nuevo=self.avena)
+        # Sustituye algo que la receta no lleva: no resta ni suma nada.
+        v = Venta.objects.create(fecha=hoy, receta=shake, cantidad=1)
+        VentaSustitucion.objects.create(venta=v, ingrediente_original=self.fresa,
+                                        ingrediente_nuevo=self.avena)
+        v = Venta.objects.create(fecha=hoy, receta=vieja, cantidad=2,
+                                 es_cortesia=True)
+        VentaExtra.objects.create(venta=v, extra=extra, cantidad=2)
+        v = Venta.objects.create(fecha=hoy, receta=shake, cantidad=1)
+        VentaExtra.objects.create(venta=v, extra=extra, cantidad=1)
+        AjusteInventario.objects.create(
+            fecha=hoy, ingrediente=self.leche, cantidad_calculada=Decimal("900"),
+            cantidad_real=Decimal("850"))
+        self.todos = list(Ingrediente.objects.all())
+
+    def test_el_agregado_da_lo_mismo_que_venta_por_venta(self):
+        mapa = Ingrediente.consumos_por_ingrediente()
+        for ing in self.todos:
+            with self.subTest(ing=ing.nombre):
+                esperado = _consumo_venta_por_venta(ing)
+                self.assertEqual(mapa.get(ing.pk, Decimal("0")), esperado)
+                self.assertEqual(ing.total_consumido, esperado)
+                self.assertEqual(
+                    Ingrediente.consumos_por_ingrediente([ing.pk]).get(
+                        ing.pk, Decimal("0")), esperado)
+
+    def test_el_consumo_inyectado_no_consulta(self):
+        mapa = Ingrediente.consumos_por_ingrediente()
+        self.leche._consumo_precargado = mapa[self.leche.pk]
+        with self.assertNumQueries(0):
+            self.assertEqual(self.leche.total_consumido, mapa[self.leche.pk])
+
+    def test_los_numeros_a_mano(self):
+        """Por si la referencia y el agregado se equivocan juntos."""
+        mapa = Ingrediente.consumos_por_ingrediente()
+        # 200.50 × (3 + 1 + 1) + 150 × 2 + merma 50
+        self.assertEqual(mapa[self.leche.pk], Decimal("1352.50"))
+        self.assertEqual(mapa[self.almendra.pk], Decimal("1203.00"))  # 200.50 × 6
+        self.assertEqual(mapa[self.avena.pk], Decimal("802.00"))      # 200.50 × 4
+        self.assertEqual(mapa[self.fresa.pk], Decimal("78.00"))  # 20.25×2 + 12.5×3
+
+    def test_el_panel_muestra_el_mismo_stock_que_las_propiedades(self):
+        from django.contrib.auth.models import User
+        from django.urls import reverse
+        User.objects.create_superuser("andy", "a@a.com", "x")
+        self.client.login(username="andy", password="x")
+        filas = {f["pk"]: f for f in
+                 self.client.get(reverse("panel_inventario")).context["ingredientes"]}
+        for ing in self.todos:
+            with self.subTest(ing=ing.nombre):
+                fila = filas[ing.pk]
+                self.assertEqual(fila["stock"], ing.stock_disponible)
+                self.assertEqual(fila["minimo"], ing.minimo_para_cinco)
+                self.assertEqual(fila["falta"], ing.hay_faltante)
+                self.assertEqual(
+                    fila["faltante"],
+                    ing.faltante if ing.hay_faltante else Decimal("0"))
+
+
+class PanelSinConsultaPorVentaTests(TestCase):
+    """Las consultas del panel no pueden crecer con el número de ventas.
+
+    Llegó a tardar 36 s en producción con 469 ventas: el stock se recalculaba
+    venta por venta, cuatro veces por ingrediente, y cada consulta es un viaje
+    al pooler. Mismo candado que `MermaSinConsultaPorIngredienteTests`.
+    """
+
+    def setUp(self):
+        from django.contrib.auth.models import User
+        User.objects.create_superuser("andy", "a@a.com", "x")
+        self.client.login(username="andy", password="x")
+        self.hoy = date.today()
+        self.ings = [Ingrediente.objects.create(
+            nombre=f"Ing {n}", unidad_compra="kg", cantidad_por_unidad=1000,
+            unidad_receta="g", costo_unidad_compra=Decimal("100"))
+            for n in range(4)]
+        for ing in self.ings:
+            Compra.objects.create(fecha=self.hoy, ingrediente=ing,
+                                  cantidad=Decimal("50"), monto_total=Decimal("500"))
+        self.recetas = []
+        for n in range(3):
+            r = Receta.objects.create(nombre=f"R {n}", precio_venta=Decimal("95"))
+            for ing in self.ings[n:n + 2]:
+                RecetaIngrediente.objects.create(receta=r, ingrediente=ing,
+                                                 cantidad=Decimal("25"))
+            self.recetas.append(r)
+        self.extra = Extra.objects.create(nombre="Extra", ingrediente=self.ings[3],
+                                          cantidad=Decimal("5"), cargo=Decimal("10"))
+        self.vendidas = 0
+
+    def _vender(self, n):
+        for _ in range(n):
+            k = self.vendidas
+            r = self.recetas[k % 3]
+            v = Venta.objects.create(fecha=self.hoy, receta=r, cantidad=1 + k % 2,
+                                     es_cortesia=k % 7 == 0)
+            if k % 3 == 1:
+                VentaSustitucion.objects.create(
+                    venta=v, ingrediente_original=r.ingredientes.first().ingrediente,
+                    ingrediente_nuevo=self.ings[0])
+            if k % 4 == 0:
+                VentaExtra.objects.create(venta=v, extra=self.extra, cantidad=1)
+            self.vendidas += 1
+
+    def _consultas_del_panel(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        from django.urls import reverse
+        with CaptureQueriesContext(connection) as ctx:
+            resp = self.client.get(reverse("panel_inventario"))
+        self.assertEqual(resp.status_code, 200)
+        return len(ctx.captured_queries)
+
+    def test_cincuenta_ventas_cuestan_lo_mismo_que_cinco(self):
+        self._vender(5)
+        con_cinco = self._consultas_del_panel()
+        self._vender(45)
+        self.assertEqual(self._consultas_del_panel(), con_cinco)
+
+
 class PresentacionEnLaCompraTests(TestCase):
     """El tamaño del paquete se captura en cada compra, no se va a editar aparte.
 
