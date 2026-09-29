@@ -22,6 +22,8 @@ Vive en `inventario` y no en `contabilidad` porque consume inventario físico;
 contabilidad solo lee el resultado. Pero el costeo sí dispara el re-posteo: si
 no, el costo cambia y el asiento se queda con el viejo.
 """
+from contextlib import contextmanager
+from contextvars import ContextVar
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import transaction
@@ -31,6 +33,32 @@ from django.utils import timezone
 from .models import Compra, ConsumoCapa, Venta
 
 CERO = Decimal("0")
+
+_diferido = ContextVar("costeo_diferido", default=False)
+
+
+@contextmanager
+def diferido():
+    """Apaga el costeo automático de las ventas que se guarden aquí dentro.
+
+    Es para la caja, que crea la venta, sus sustituciones y sus extras uno por
+    uno: con las señales prendidas, cada objeto recosteaba la venta y todo lo
+    posterior, y la venta terminaba costeada cinco o seis veces. Quien lo use
+    queda obligado a llamar `costear_nuevas()` con lo que creó; si no, esas
+    ventas se quedan sin costo hasta el siguiente `recostear --solo-pendientes`.
+
+    Solo difiere lo que se GUARDA. Borrar una venta sigue devolviendo sus capas
+    en el acto, porque después ya nadie sabría a qué compras devolvérselas.
+    """
+    token = _diferido.set(True)
+    try:
+        yield
+    finally:
+        _diferido.reset(token)
+
+
+def esta_diferido():
+    return _diferido.get()
 
 
 def _redondea(valor):
@@ -252,26 +280,29 @@ def _resincroniza_ajuste(ajuste):
     posting.sincronizar_ajuste(ajuste)
 
 
-def ventas_a_recostear(ingrediente_id, desde):
-    """Ventas que hay que rehacer cuando entra una capa nueva con fecha `desde`.
+def ventas_a_recostear(ingrediente_ids, periodo, incluir=()):
+    """Ventas del `periodo` que hay que rehacer cuando cambian esos insumos.
 
-    Son las de esa fecha en adelante que involucran ese ingrediente, por
-    cualquiera de las cuatro vías. Incluye las que aún no tienen costo: una
-    venta que nació en el admin, o cuyo costeo falló, tiene que poder
-    recuperarse cuando llegue la compra que le faltaba.
+    Son las que involucran cualquiera de esos ingredientes, por cualquiera de
+    las cuatro vías. Incluye las que aún no tienen costo: una venta que nació
+    en el admin, o cuyo costeo falló, tiene que poder recuperarse cuando llegue
+    la compra que le faltaba.
 
     Las cuatro vías se enumeran a propósito en vez de traer «todas las
     incompletas»: eso arrastraría cada venta sin respaldo de toda la historia
-    en cada compra, tenga o no que ver con este ingrediente.
+    en cada compra, tenga o no que ver con estos ingredientes.
     """
+    ids = list(ingrediente_ids)
     return (Venta.objects
-            .filter(fecha__gte=desde)
-            .filter(Q(consumos__ingrediente_id=ingrediente_id) |
-                    Q(receta__ingredientes__ingrediente_id=ingrediente_id) |
-                    Q(sustituciones__ingrediente_nuevo_id=ingrediente_id) |
-                    Q(extras__extra__ingrediente_id=ingrediente_id))
+            .filter(periodo)
+            .filter(Q(consumos__ingrediente_id__in=ids) |
+                    Q(receta__ingredientes__ingrediente_id__in=ids) |
+                    Q(sustituciones__ingrediente_nuevo_id__in=ids) |
+                    Q(extras__extra__ingrediente_id__in=ids) |
+                    Q(pk__in=list(incluir)))
             .distinct()
-            .order_by("fecha", "id"))
+            .order_by("fecha", "id")
+            .con_costeo())
 
 
 @transaction.atomic
@@ -289,11 +320,11 @@ def _replay(ventas):
     return len(ventas)
 
 
-def mermas_a_recostear(ingrediente_id, desde):
-    """Mermas de ese ingrediente que una capa nueva con fecha `desde` altera."""
+def mermas_a_recostear(ingrediente_ids, desde):
+    """Mermas de esos ingredientes que una capa nueva con fecha `desde` altera."""
     from .models import AjusteInventario
     return (AjusteInventario.objects
-            .filter(ingrediente_id=ingrediente_id, fecha__gte=desde)
+            .filter(ingrediente_id__in=list(ingrediente_ids), fecha__gte=desde)
             .order_by("fecha", "id"))
 
 
@@ -308,7 +339,23 @@ def _replay_mermas(ajustes):
 
 
 def recostear_desde(ingrediente_id, desde):
-    """Rehace el costeo de lo que una capa nueva (o retirada) puede alterar.
+    """Rehace el costeo de lo que una capa nueva (o retirada) puede alterar."""
+    return recostear_ventas_desde([ingrediente_id], desde)
+
+
+@transaction.atomic
+def recostear_ventas_desde(ingrediente_ids, fecha, desde_id=None, incluir=()):
+    """Rehace, en una sola pasada, lo posterior a `fecha` que toque esos insumos.
+
+    Una venta que lleva leche y café se rehace una vez, no una por insumo: el
+    replay por ingrediente repetía las mismas ventas tantas veces como insumos
+    tuviera la receta, y el resultado era el mismo.
+
+    Con `desde_id`, el corte es la posición FIFO `(fecha, id)` y no el día
+    entero. Sirve para ventas recién creadas: una venta nueva no libera capas,
+    así que las del mismo día que la precedieron no pueden cambiar. `incluir`
+    asegura que entren aunque no consuman nada —una receta sin insumos igual
+    tiene que quedar costeada en cero—.
 
     Las mermas van primero y por la misma razón que existen las dos mitades del
     costeo: una merma incompleta —se perdió mercancía que ninguna compra
@@ -316,8 +363,46 @@ def recostear_desde(ingrediente_id, desde):
     faltaba, igual que una venta. Si solo se recostearan las ventas, esa merma
     se quedaría para siempre sin costo y su gasto nunca entraría al libro.
     """
-    _replay_mermas(mermas_a_recostear(ingrediente_id, desde))
-    return _replay(ventas_a_recostear(ingrediente_id, desde))
+    ids = sorted(set(ingrediente_ids))
+    _replay_mermas(mermas_a_recostear(ids, fecha))
+    if desde_id is None:
+        periodo = Q(fecha__gte=fecha)
+    else:
+        periodo = Q(fecha__gt=fecha) | Q(fecha=fecha, pk__gte=desde_id)
+    return _replay(ventas_a_recostear(ids, periodo, incluir))
+
+
+def costear_nuevas(ventas):
+    """Cuesta ventas recién creadas: ellas y lo que venga después, una vez.
+
+    Es la otra mitad de `diferido()`. Las nuevas entran al replay en su lugar
+    FIFO y no se cuestan antes por separado: si una venta posterior ya se había
+    llevado las capas que les tocan, primero se descuesta y la nueva las toma.
+
+    El replay cuesta copias recién leídas de la base, así que al final se le
+    pasa el resultado a las instancias que llegaron: quien acaba de crear la
+    venta —el canje de un premio, por ejemplo— lee su costo de ahí mismo.
+    """
+    ventas = [v for v in ventas if v.pk]
+    if not ventas:
+        return 0
+    primera = min(ventas, key=lambda v: (v.fecha, v.pk))
+    ingredientes = set()
+    for venta in ventas:
+        ingredientes.update(i for i, cantidad
+                            in venta.consumo_ingredientes().items()
+                            if cantidad > 0)
+    n = recostear_ventas_desde(ingredientes, primera.fecha,
+                               desde_id=primera.pk,
+                               incluir=[v.pk for v in ventas])
+
+    campos = ("costo_fifo", "costo_incompleto", "costeada_en")
+    costeadas = {fila["pk"]: fila for fila in Venta.objects
+                 .filter(pk__in=[v.pk for v in ventas]).values("pk", *campos)}
+    for venta in ventas:
+        for campo in campos:
+            setattr(venta, campo, costeadas[venta.pk][campo])
+    return n
 
 
 def abrir_capas_huerfanas():

@@ -338,10 +338,11 @@ def venta_agregar(request):
     pago_con = (_to_decimal(request.POST.get("pago_con"))
                 if metodo == "efectivo" and not es_cortesia else None)
 
+    from inventario import costeo
     creadas, total, cambio, nota = [], Decimal("0"), None, None
     try:
         with transaction.atomic():
-            with reversion.create_revision():
+            with costeo.diferido(), reversion.create_revision():
                 for p in productos:
                     venta = _crear_producto(p, fecha, metodo, es_cortesia,
                                             descuento)
@@ -381,10 +382,8 @@ def venta_agregar(request):
     # Costea la venta contra las capas de compra. Va fuera de la transacción y
     # con red: una venta jamás se cae por el costeo. Si algo falla queda sin
     # costear y `manage.py recostear --solo-pendientes` la recupera.
-    from inventario import costeo
     try:
-        for linea in creadas:
-            costeo.costear_venta(linea)
+        costeo.costear_nuevas(creadas)
     except Exception:                                   # noqa: BLE001
         import logging
         logging.getLogger(__name__).exception(
