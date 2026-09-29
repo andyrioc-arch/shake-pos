@@ -1,5 +1,6 @@
 from decimal import Decimal
 from datetime import date
+from unittest.mock import patch
 from django.test import TestCase
 from inventario.alarmas import alarmas_margen
 from inventario.models import (
@@ -786,7 +787,10 @@ class AlarmaMargenTests(TestCase):
         self.client.login(username="cajero", password="pass")
         self.assertNotContains(self.client.get(url), "Alarma de margen")
 
-    def test_el_panel_publica_los_porcentajes_de_la_alarma(self):
+    # El panel no recibe fecha: la alarma mide contra el día de hoy, y las
+    # ventas de estas pruebas son de julio y agosto de 2026.
+    @patch("inventario.alarmas.localdate", return_value=date(2026, 8, 20))
+    def test_el_panel_publica_los_porcentajes_de_la_alarma(self, _hoy):
         """Lo que se verificó a mano, fijado: el recorrido completo hasta la
         pantalla, en porcentaje y con las unidades de la muestra a la vista."""
         from django.contrib.auth.models import User
@@ -804,7 +808,8 @@ class AlarmaMargenTests(TestCase):
         self.assertIn("1 con caída", html)
         self.assertNotIn("· estimado", html)   # ambas ventas están costeadas
 
-    def test_el_panel_marca_el_aviso_apoyado_en_el_catalogo(self):
+    @patch("inventario.alarmas.localdate", return_value=date(2026, 8, 20))
+    def test_el_panel_marca_el_aviso_apoyado_en_el_catalogo(self, _hoy):
         from django.contrib.auth.models import User
         from django.urls import reverse
         self._capa(date(2026, 7, 1), Decimal("4.00"))
