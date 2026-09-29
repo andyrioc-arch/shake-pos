@@ -395,10 +395,10 @@
           <label>Ingrediente</label>
           <select name="ingrediente" id="merma-ing" required>
             <option value="">— Elige un ingrediente —</option>
-            {% for i in ingredientes_lista %}
+            {% for i in ingredientes %}
               <option value="{{ i.pk }}"
-                      data-ur="{{ i.unidad_receta }}"
-                      data-stock="{{ i.stock_disponible|stringformat:'s' }}">{{ i.nombre }}</option>
+                      data-ur="{{ i.unidad }}"
+                      data-stock="{{ i.stock|stringformat:'s' }}">{{ i.nombre }}</option>
             {% endfor %}
           </select>
         </div>
