@@ -29,8 +29,7 @@ def _ingredientes_y_fecha(venta):
 
 
 def _recostear_posteriores(ingrediente_ids, fecha):
-    for ingrediente_id in sorted(ingrediente_ids):
-        costeo.recostear_desde(ingrediente_id, fecha)
+    costeo.recostear_ventas_desde(ingrediente_ids, fecha)
 
 
 def _es_guardado_del_costeo(update_fields):
@@ -63,7 +62,10 @@ def venta_guardada(sender, instance, created, update_fields=None, **kwargs):
     Cubre el admin, el shell y cualquier importación: la caja ya lo hace por su
     cuenta, pero no puede ser el único camino que deje el costo bien.
     """
-    if _es_guardado_del_costeo(update_fields):
+    if _es_guardado_del_costeo(update_fields) or costeo.esta_diferido():
+        return
+    if created:
+        costeo.costear_nuevas([instance])
         return
     costeo.costear_venta(instance)
     ingredientes, fecha = _ingredientes_y_fecha(instance)
@@ -99,6 +101,8 @@ def _recostear_venta_de(objeto):
 @receiver(post_save, sender=VentaExtra)
 @receiver(post_save, sender=VentaSustitucion)
 def modificacion_guardada(sender, instance, **kwargs):
+    if costeo.esta_diferido():
+        return
     _recostear_venta_de(instance)
 
 
