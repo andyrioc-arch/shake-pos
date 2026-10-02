@@ -1,0 +1,4 @@
+# Solo para el servidor MCP (shake_mcp), que corre en la laptop de Andy.
+# Vercel instala requirements.txt y no lee este archivo.
+-r requirements.txt
+mcp>=2.2,<3

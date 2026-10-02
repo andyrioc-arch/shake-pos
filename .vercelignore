@@ -17,3 +17,7 @@ db.sqlite3
 .env*
 
 .git/
+
+# El servidor MCP corre en la laptop de Andy, no en Vercel.
+shake_mcp/
+requirements-mcp.txt

@@ -101,28 +101,8 @@ def panel_inventario(request):
     # de las propiedades cuesta consultas por ingrediente, y esta fila las
     # leía cuatro veces: cuando el consumo se preguntaba venta por venta, eso
     # fue medio minuto en la pantalla que el cajero tiene abierta todo el día.
-    comprados = Ingrediente.comprados_por_ingrediente()
-    consumos = Ingrediente.consumos_por_ingrediente()
-    minimos = Ingrediente.minimos_por_ingrediente()
-    ingredientes = []
-    faltantes = 0
-    for ing in Ingrediente.objects.all():
-        stock = (comprados.get(ing.pk, Decimal("0"))
-                 - consumos.get(ing.pk, Decimal("0")))
-        minimo = minimos.get(ing.pk, Decimal("0"))
-        falta = minimo > 0 and stock < minimo
-        if falta:
-            faltantes += 1
-        ingredientes.append({
-            "pk": ing.pk,
-            "nombre": ing.nombre,
-            "categoria": ing.get_categoria_display(),
-            "unidad": ing.unidad_receta,
-            "stock": stock,
-            "minimo": minimo,
-            "falta": falta,
-            "faltante": minimo - stock if falta else Decimal("0"),
-        })
+    ingredientes = Ingrediente.stock_del_catalogo()
+    faltantes = sum(1 for i in ingredientes if i["falta"])
 
     # ── Catálogo de recetas ──────────────────────────────────────────────
     # Las unidades salen de una sola consulta para todo el catálogo: pedirlas
@@ -235,7 +215,7 @@ def panel_inventario(request):
         # las 24 compras que hubo que corregir a mano en agosto.
         "referencias_compra": {
             ing_id: float(unitario)
-            for ing_id, unitario in _costos_de_la_ultima_compra().items()
+            for ing_id, unitario in Ingrediente.costos_ultima_compra().items()
         } if es_super else {},
     }
     return render(request, "inventario/panel.html", ctx)
@@ -892,24 +872,6 @@ def merma_registrar(request):
 solo_super = user_passes_test(lambda u: u.is_superuser, login_url='/')
 
 
-def _costos_de_la_ultima_compra():
-    """{ingrediente_id: costo por unidad de receta} según su compra más nueva.
-
-    Una sola consulta para todo el catálogo. Se recorren las compras ordenadas
-    y se toma la primera de cada ingrediente, en vez de preguntar por
-    ingrediente: eso último cuesta una consulta por ingrediente por receta, y
-    el catálogo tiene treinta ingredientes repartidos en diecinueve recetas.
-
-    El precio unitario se deriva de `costo_unitario_capa` y no se recalcula
-    aquí, para que la regla de qué costó una compra siga viviendo en un solo
-    lugar.
-    """
-    ultimas = {}
-    for compra in Compra.objects.order_by("ingrediente_id", "-fecha", "-id"):
-        ultimas.setdefault(compra.ingrediente_id, compra.costo_unitario_capa)
-    return ultimas
-
-
 def _volver_catalogo(producto_pk=None):
     url = reverse("panel_catalogo")
     if producto_pk:
@@ -922,7 +884,7 @@ def _volver_catalogo(producto_pk=None):
 def panel_catalogo(request):
     """Gestión del catálogo: ingredientes, productos y sus recetas."""
     ingredientes = Ingrediente.objects.all()
-    unitarios = _costos_de_la_ultima_compra()
+    unitarios = Ingrediente.costos_ultima_compra()
     productos = []
     for r in Receta.objects.prefetch_related("ingredientes__ingrediente"):
         productos.append({
