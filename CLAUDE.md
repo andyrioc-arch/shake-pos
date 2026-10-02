@@ -247,6 +247,31 @@ capas, que ninguna capa deba más de lo que trajo, y que ninguna venta reconocid
 esté sin costo completo. **Correrlo después de cada despliegue que toque
 costeo.**
 
+## Servidor MCP para el asistente de Andy
+
+`shake_mcp/` expone 12 herramientas de **solo lectura** (ventas, productos,
+insumos por surtir, margen, alertas, compras, estado de resultados, caja,
+presupuesto, lealtad, mejores clientes, salud de los datos). Las arranca por
+stdio Hermes Agent, el asistente de Andy en Telegram, en su laptop con Windows.
+
+- Reutiliza el ORM y las funciones de los paneles; no hay SQL propio. No es app
+ de Django ni toca `settings.py`. Vercel no lo empaca (`.vercelignore`) ni
+ instala `mcp`, que vive en `requirements-mcp.txt`.
+- Lee `SHAKE_MCP_DATABASE_URL`, **no** `DATABASE_URL`: la cadena del rol
+ `shake_lectura` por el pooler transaction (6543). Al arrancar se niega si ese
+ usuario puede escribir en `inventario_venta` o no nace con
+ `default_transaction_read_only`. Cada llamada corre además en una transacción
+ de solo lectura (`PRAGMA query_only` en SQLite, para que los tests lo vean).
+- **`ConfiguracionPrograma.get()` escribe** (`get_or_create`). El MCP lee la
+ configuración sin crearla; cualquier consulta nueva tiene que hacer lo mismo.
+- El rol recibe SELECT sobre las tablas futuras por `ALTER DEFAULT PRIVILEGES`.
+ Una tabla nueva con datos sensibles hay que revocársela a `shake_lectura`.
+- SDK `mcp` 2.x: `FastMCP` se llama `MCPServer`. Corre cada herramienta en un
+ hilo, así que la conexión se cierra por llamada y los tests del protocolo son
+ `TransactionTestCase` (otro hilo no ve datos sin confirmar).
+- Probar: `python manage.py test shake_mcp`. Con MCP Inspector, `--local` va en
+ un `--config` y no en la línea: el Inspector se come la bandera.
+
 ## Alarma de margen
 
 Avisa cuando el margen de un producto **baja**. Solo la caída: mezclar las dos
