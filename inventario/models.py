@@ -268,6 +268,51 @@ class Ingrediente(models.Model):
             total[ing_id] += cantidad * 5
         return dict(total)
 
+    @staticmethod
+    def stock_del_catalogo():
+        """Stock contra mínimo de todo el catálogo, en unas cuantas consultas.
+
+        Lo leen el panel de inventario y el servidor MCP. Las propiedades de
+        arriba cuestan consultas por ingrediente; esto no crece con el
+        catálogo ni con las ventas.
+        """
+        comprados = Ingrediente.comprados_por_ingrediente()
+        consumos = Ingrediente.consumos_por_ingrediente()
+        minimos = Ingrediente.minimos_por_ingrediente()
+        filas = []
+        for ing in Ingrediente.objects.all():
+            stock = (comprados.get(ing.pk, Decimal("0"))
+                     - consumos.get(ing.pk, Decimal("0")))
+            minimo = minimos.get(ing.pk, Decimal("0"))
+            falta = minimo > 0 and stock < minimo
+            filas.append({
+                "pk": ing.pk,
+                "nombre": ing.nombre,
+                "categoria": ing.get_categoria_display(),
+                "unidad": ing.unidad_receta,
+                "stock": stock,
+                "minimo": minimo,
+                "falta": falta,
+                "faltante": minimo - stock if falta else Decimal("0"),
+            })
+        return filas
+
+    @staticmethod
+    def costos_ultima_compra():
+        """{ingrediente_id: costo por unidad de receta} según su compra más nueva.
+
+        Una sola consulta para todo el catálogo. Se recorren las compras
+        ordenadas y se toma la primera de cada ingrediente, en vez de preguntar
+        por ingrediente: eso cuesta una consulta por ingrediente por receta.
+
+        El precio unitario se deriva de `costo_unitario_capa` y no se recalcula
+        aquí, para que la regla de qué costó una compra viva en un solo lugar.
+        """
+        ultimas = {}
+        for compra in Compra.objects.order_by("ingrediente_id", "-fecha", "-id"):
+            ultimas.setdefault(compra.ingrediente_id, compra.costo_unitario_capa)
+        return ultimas
+
     @property
     def faltante(self):
         falta = self.minimo_para_cinco - self.stock_disponible

@@ -24,7 +24,8 @@ def _pct(real, meta):
 
 def ventas_reales_por_periodo():
     reales = defaultdict(Decimal)
-    for v in Venta.objects.select_related("receta"):
+    for v in (Venta.objects.select_related("receta")
+              .prefetch_related("extras__extra")):
         reales[(v.fecha.year, v.fecha.month)] += v.ingreso
     return reales
 
