@@ -8,10 +8,13 @@ su saldo, cada venta guarda el costo de las capas que la surtieron, y
 
 Dos reglas que sostienen el módulo:
 
-1. **No se inventa costo.** Si faltan capas para parte del consumo, esa parte se
-   registra con `compra=None` e importe cero y la venta queda marcada como
-   incompleta. Costearla con el precio del catálogo —lo que se hacía antes—
-   abona inventario que nunca entró y deja el activo en negativo.
+1. **Lo que no tiene capa se valúa al último costo conocido.** Si faltan capas
+   para parte del consumo, esa parte se registra con `compra=None` al costo de
+   la última compra del insumo (o al catálogo si nunca se compró) y la venta
+   queda marcada como incompleta. Esa parte NO sale de Inventario: el asiento
+   la abona a «Compras por capturar», porque abonar inventario que nunca entró
+   deja el activo en negativo. Cuando llega la compra, el recosteo la mueve a
+   una capa real y la provisión se vacía sola.
 
 2. **Una compra retroactiva recuesta lo que le toca.** Vender en la mañana y
    capturar la factura del proveedor en la tarde es lo normal en el mostrador,
@@ -30,7 +33,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import Compra, ConsumoCapa, Venta
+from .models import Compra, ConsumoCapa, Ingrediente, Venta
 
 CERO = Decimal("0")
 
@@ -147,12 +150,13 @@ def costear_venta(venta, sincronizar=True):
             Compra.objects.bulk_update(tocadas, ["saldo_receta"])
 
         if falta > 0:
-            # Sin capa que lo respalde: se deja constancia con importe cero en
-            # vez de costearlo con el catálogo.
             incompleto = True
+            unitario = costo_sin_capa(ingrediente_id, venta.fecha)
+            importe = falta * unitario
             consumos.append(ConsumoCapa(
                 venta=venta, compra=None, ingrediente_id=ingrediente_id,
-                cantidad_receta=falta, costo_unitario=CERO, importe=CERO))
+                cantidad_receta=falta, costo_unitario=unitario, importe=importe))
+            total += importe
 
     ConsumoCapa.objects.bulk_create(consumos)
 
@@ -164,6 +168,30 @@ def costear_venta(venta, sincronizar=True):
     if sincronizar:
         _resincroniza(venta)
     return venta.costo_fifo
+
+
+def costo_sin_capa(ingrediente_id, fecha):
+    """Costo unitario para el consumo que ninguna capa respaldó.
+
+    La última compra del insumo con fecha hasta la de la venta, y no la última
+    de toda la historia: una compra posterior solo recostea las ventas desde su
+    fecha, así que mirarla haría que el costo de una venta vieja dependiera de
+    si se recosteó antes o después de capturarla.
+    """
+    ultima = (Compra.objects
+              .filter(ingrediente_id=ingrediente_id, fecha__lte=fecha)
+              .order_by("-fecha", "-id").first())
+    if ultima:
+        return ultima.costo_unitario_capa
+    return Ingrediente.objects.get(pk=ingrediente_id).costo_unidad_receta
+
+
+def importe_sin_capa(venta):
+    """Cuánto del costo guardado de la venta se valuó sin capa, a centavos."""
+    from django.db.models import Sum
+    suma = (ConsumoCapa.objects.filter(venta=venta, compra__isnull=True)
+            .aggregate(t=Sum("importe"))["t"] or CERO)
+    return _redondea(suma)
 
 
 def _resincroniza(venta):

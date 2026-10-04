@@ -49,10 +49,10 @@ incompletas        8           ← las 8, por los insumos sin capturar
 consumo sin capa   3573
 ```
 
-**Las 8 ventas están incompletas, así que ninguna reconoce ingreso: la cuenta
-401 sigue en cero.** Es el comportamiento correcto, no una falla —el ingreso y
-su costo entran juntos o no entran—, y se destapa capturando las compras que
-faltan, no tocando código.
+**Esa foto es de antes de la rama `costo-sin-compra-y-excel`.** Entonces una
+venta incompleta no reconocía ingreso y la 401 seguía en cero; con esa rama se
+reconoce con el faltante valuado al costo de la última compra (ver «Cómo
+funciona el costeo»).
 
 El plan completo está en [DISENO-COSTEO.md](DISENO-COSTEO.md) y la foto previa
 en [BASELINE-COSTEO.md](BASELINE-COSTEO.md).
@@ -214,13 +214,19 @@ un cálculo que se rehace al vuelo.
 Tres reglas que sostienen el módulo. Romper cualquiera reintroduce un bug que ya
 costó encontrar:
 
-1. **No se inventa costo.** Si faltan capas, esa parte no se cuesta y la venta
-   queda `costo_incompleto=True`. Costearla con el precio del catálogo abona
-   inventario que nunca entró y deja el activo en negativo, con el balance
-   diciendo «cuadra» igual.
-2. **Ingreso y costo entran juntos o no entran.** Una venta sin costo completo
-   no genera asiento de reconocimiento. Reconocer el ingreso con costo parcial
-   infla la utilidad bruta en silencio.
+1. **Lo que no respalda una compra no sale de Inventario.** Si faltan capas,
+   esa parte se valúa al costo de la última compra del insumo con fecha ≤ la
+   venta (o al catálogo si nunca se ha comprado), queda en un `ConsumoCapa`
+   con `compra=None` y la venta se marca `costo_incompleto=True`. Ese importe
+   se abona a **210 «Compras por capturar»** (pasivo), nunca a 115: abonarlo a
+   Inventario deja el activo en negativo con el balance diciendo «cuadra»
+   igual. Cuando se captura la compra, el recosteo pasa el consumo a la capa
+   real y la 210 se vacía sola. Las mermas no siguen esta regla: su faltante
+   sigue valiendo cero.
+2. **Toda venta costeada se reconoce**, completa o no: ingreso, cobro en caja
+   y costo entran juntos. Solo una venta con `costo_fifo` NULL (sin costear)
+   queda fuera del libro. El saldo de 210 en la salud del costeo es lo que
+   dice cuánto del costo es todavía estimado.
 3. **Se redondea UNA sola vez**, al escribir `costo_fifo`. Redondear cada capa
    deja un centavo atorado en Inventario por venta, y se acumula.
 
@@ -229,10 +235,10 @@ ventas posteriores**: con FIFO, liberar una capa vieja cambia el costo de todo
 lo que vino después.
 
 Desde P5 **no hay botón «Facturado»**: compras y gastos se reconocen al
-capturarse, y una venta se reconoce cuando su costo está completo. Los paneles
-comerciales leen `Venta.costo_de_ventas`, que cae al estimado del catálogo si el
-costo falta **o está incompleto**; la contabilidad no la usa nunca, solo
-`costo_fifo`. `Movimiento.facturado` quedó como columna muerta: nadie la lee,
+capturarse, y una venta se reconoce en cuanto se costea. Los paneles
+comerciales leen `Venta.costo_de_ventas`, que es `costo_fifo` y solo cae al
+estimado del catálogo si la venta está sin costear; la contabilidad no la usa
+nunca, solo `costo_fifo`. `Movimiento.facturado` quedó como columna muerta: nadie la lee,
 y se queda congelada hasta que P11 la borre para que revertir el despliegue
 devuelva el reporte que estaba publicado.
 
@@ -243,9 +249,21 @@ python manage.py recostear --solo-pendientes
 ```
 
 `--verificar` comprueba tres igualdades: que cada venta valga lo que suman sus
-capas, que ninguna capa deba más de lo que trajo, y que ninguna venta reconocida
-esté sin costo completo. **Correrlo después de cada despliegue que toque
-costeo.**
+capas, que ninguna capa deba más de lo que trajo, y que toda venta costeada
+tenga su asiento (y ninguna sin costear lo tenga). **Correrlo después de cada
+despliegue que toque costeo.**
+
+## Flujo de efectivo y descarga a Excel
+
+- El flujo de `/finanzas/` resta los gastos capturados (`Movimiento` tipo
+  GASTO) como salida, en su propia columna. La plantilla de `CostoFijo` solo
+  cubre los meses **sin** gastos capturados: sumar las dos contaría la renta
+  dos veces.
+- Toda tabla del sitio tiene un botón «⬇ Excel» y, si la página tiene varias,
+  «⬇ Todas las tablas en Excel». El navegador manda el texto de las celdas y
+  `inventario/excel.py` arma el xlsx, así que se exporta lo que se ve sin un
+  exportador por tabla. No consulta la base. Una tabla se excluye con
+  `data-sin-excel` y se nombra con `data-excel`.
 
 ## Servidor MCP para el asistente de Andy
 
@@ -304,12 +322,10 @@ ventas de verdad.
 
 ## Pendiente
 
-- **Faltan las compras reales de diez insumos, y ya bloquean el reporte.**
-  Medido en producción el 13 de agosto: las 8 ventas están incompletas, así que
-  ninguna reconoce ingreso y la 401 sigue en cero. Es a propósito —el ingreso y
-  su costo entran juntos o no entran— pero significa que el Estado de
-  Resultados lo destapan los tickets, no un despliegue. La lista está en
-  BASELINE-COSTEO.md y lo captura Andy.
+- **Faltan las compras reales de diez insumos.** Ya no bloquean el reporte:
+  las ventas se reconocen con el costo estimado y la diferencia espera en la
+  210. Mientras esa cuenta tenga saldo, parte del costo de ventas es estimado.
+  La lista está en BASELINE-COSTEO.md y lo captura Andy.
 - Sin despliegue automático (punto único de falla): Vercel no pudo conectar el
   repo por ser de otra cuenta.
 - El premio "Latte gratis" no tiene receta ligada. Lo hace Andy.

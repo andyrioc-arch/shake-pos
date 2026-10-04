@@ -329,10 +329,10 @@ class SustitucionExtraTests(TestCase):
 class CicloCompletoCajaTests(TestCase):
     """El recorrido de punta a punta, por HTTP, como lo hace Andy.
 
-    Es el escenario que se verificó a mano en el navegador: una venta sin
-    respaldo queda fuera del Estado de Resultados, y en el instante en que se
+    Una venta sin respaldo entra al Estado de Resultados con su costo
+    estimado y la provisión en «Compras por capturar»; en el instante en que se
     captura la compra que le faltaba —desde la caja, sin apretar nada más— se
-    reconoce sola y el reporte la muestra con su costo.
+    recuesta sola con el costo real y la provisión se vacía.
     """
 
     def setUp(self):
@@ -354,7 +354,7 @@ class CicloCompletoCajaTests(TestCase):
         return self.client.get(
             f"{reverse('reportes_contables')}?anio={anio}&mes={mes}")
 
-    def test_de_venta_diferida_a_reconocida_capturando_la_compra(self):
+    def test_de_costo_estimado_a_real_capturando_la_compra(self):
         from contabilidad import posting
         from contabilidad.models import Movimiento
         from django.urls import reverse
@@ -362,12 +362,15 @@ class CicloCompletoCajaTests(TestCase):
         venta = Venta.objects.create(
             fecha=date(2026, 8, 6), receta=self.rec, cantidad=3)   # 600 ml
 
-        # 1. Sin compras: el dinero entró a caja, pero el reporte no la cuenta.
-        self.assertEqual(
-            posting.estado_resultados(2026, 8)["total_ingresos"], Decimal("0"))
+        # 1. Sin compras: entra con el costo del catálogo (600 × 0.099).
+        er = posting.estado_resultados(2026, 8)
+        self.assertEqual(er["total_ingresos"], Decimal("270"))
+        self.assertEqual(er["total_costo_ventas"], Decimal("59.40"))
+        self.assertEqual(posting.salud_del_costeo(2026, 8)["compras_por_capturar"],
+                         Decimal("59.40"))
         resp = self._reportes()
-        self.assertContains(resp, "Falta costo")
-        self.assertNotContains(resp, "✓ Reconocido")
+        self.assertContains(resp, "✓ Reconocido")
+        self.assertNotContains(resp, "Sin costear")
 
         # 2. Se captura la compra desde la caja, fechada antes de la venta.
         self.client.post(reverse("inventario_compra_agregar"), {
@@ -387,11 +390,13 @@ class CicloCompletoCajaTests(TestCase):
         self.assertEqual(er["total_costo_ventas"], Decimal("18.93"))
         self.assertTrue(posting.balance_general(2026, 8)["cuadra"])
         self.assertTrue(posting.balanza_comprobacion(2026, 8)["cuadra"])
+        self.assertEqual(posting.salud_del_costeo(2026, 8)["compras_por_capturar"],
+                         Decimal("0"))
 
         # 4. Y el libro lo dice en pantalla.
         resp = self._reportes()
         self.assertContains(resp, "✓ Reconocido")
-        self.assertNotContains(resp, "Falta costo")
+        self.assertNotContains(resp, "Sin costear")
 
     def test_una_compra_posterior_a_la_venta_no_la_cuesta(self):
         """FIFO respeta la fecha: no se surte un shake con hielo del año que viene."""
@@ -406,7 +411,8 @@ class CicloCompletoCajaTests(TestCase):
 
         venta.refresh_from_db()
         self.assertTrue(venta.costo_incompleto)
-        self.assertContains(self._reportes(), "Falta costo")
+        # Ni su capa ni su precio: sigue en el catálogo (600 × 0.099).
+        self.assertEqual(venta.costo_fifo, Decimal("59.40"))
 
 
 class CortesiasEnLosAgregadosTests(TestCase):
@@ -760,12 +766,20 @@ class AlarmaMargenTests(TestCase):
         self.assertEqual(len(res["avisos"]), 1)
         self.assertEqual(res["mes_anterior"], date(2025, 12, 1))
 
-    def test_marca_el_aviso_que_se_apoya_en_el_estimado(self):
-        """Sin la compra capturada, el margen sale del catálogo. Hay que decirlo."""
+    def _agosto_a_medias(self):
+        """Agosto con capa para la mitad: la otra mitad va al último costo.
+
+        100 ml de capa a 0.10 y 100 ml sin capa al mismo 0.10 = 20 → margen .80.
+        """
         self._capa(date(2026, 7, 1), Decimal("4.00"))
         Venta.objects.create(fecha=date(2026, 7, 15), receta=self.rec, cantidad=1)
-        # Agosto sin capa: cae al catálogo (200 ml × 0.10 = 20 → margen .80).
+        Compra.objects.create(fecha=date(2026, 8, 1), ingrediente=self.ing,
+                              cantidad=Decimal("0.1"), monto_total=Decimal("10"))
         Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec, cantidad=1)
+
+    def test_marca_el_aviso_que_se_apoya_en_el_estimado(self):
+        """Sin la compra capturada, parte del margen es estimado. Hay que decirlo."""
+        self._agosto_a_medias()
 
         avisos = alarmas_margen(hoy=date(2026, 8, 20))["avisos"]
 
@@ -809,12 +823,10 @@ class AlarmaMargenTests(TestCase):
         self.assertNotIn("· estimado", html)   # ambas ventas están costeadas
 
     @patch("inventario.alarmas.localdate", return_value=date(2026, 8, 20))
-    def test_el_panel_marca_el_aviso_apoyado_en_el_catalogo(self, _hoy):
+    def test_el_panel_marca_el_aviso_apoyado_en_el_estimado(self, _hoy):
         from django.contrib.auth.models import User
         from django.urls import reverse
-        self._capa(date(2026, 7, 1), Decimal("4.00"))
-        Venta.objects.create(fecha=date(2026, 7, 15), receta=self.rec, cantidad=1)
-        Venta.objects.create(fecha=date(2026, 8, 5), receta=self.rec, cantidad=1)
+        self._agosto_a_medias()
         User.objects.create_superuser("andy", "a@a.com", "pass")
         self.client.login(username="andy", password="pass")
 

@@ -15,11 +15,12 @@
   table.t th:first-child, table.t td:first-child { text-align:left; }
   table.t td.l, table.t th.l { text-align:left; }
   .tot td { font-weight:800; background:#f2f2f2; border-top:2px solid #000; }
-  .good { color:#1e9aff; font-weight:700; }
-  .bad  { color:#fa5598; font-weight:700; }
+  /* El color carga el signo del número: tonos oscuros, que pasan 4.5:1. */
+  .good { color:#0d6ecd; font-weight:700; }
+  .bad  { color:#c0186a; font-weight:700; }
   .badge { padding:2px 9px; border-radius:6px; color:#fff; font-size:11px; font-weight:800;
            white-space:nowrap; border:none; cursor:pointer; }
-  .badge.ok { background:#1e9aff; } .badge.no { background:#fa5598; }
+  .badge.ok { background:#0d6ecd; } .badge.no { background:#c0186a; }
   .badge.v { background:#8700ff; } .badge.c { background:#ff7300; }
   .monthnav { display:flex; align-items:center; gap:12px; margin:6px 0 4px; flex-wrap:wrap; }
   .monthnav .cur { font-size:22px; font-weight:800; min-width:190px; text-align:center; }
@@ -28,10 +29,10 @@
          font-size:14px; display:inline-block; box-shadow:2px 2px 0 #000; }
   .btn:hover { background:#ffd900; }
   .blk h2 { display:flex; align-items:center; gap:8px; }
-  .dl { margin-left:auto; font-size:12px; padding:4px 10px; background:#1e9aff;
+  .dl { margin-left:auto; font-size:12px; padding:4px 10px; background:#0d6ecd;
         color:#fff; border:2px solid #000; border-radius:7px; text-decoration:none;
         font-weight:800; box-shadow:2px 2px 0 #000; white-space:nowrap; }
-  .dl:hover { background:#0d80e0; }
+  .dl:hover { background:#0a5aa8; }
   select.msel, input.dt { border:2px solid #000; border-radius:8px; padding:6px 8px; font-size:12px; }
   .msg { padding:10px 14px; border:2px solid #000; border-radius:8px; margin:10px 0; font-size:13px; font-weight:600; }
   .msg.success { background:#e7f3ff; } .msg.error { background:#ffe6f1; }
@@ -91,11 +92,11 @@
         <input type="number" step="0.01" min="0" name="monto" class="dt" placeholder="0.00" style="width:110px;" required></div>
       <div><label style="font-size:12px;font-weight:700;display:block;">Fecha</label>
         <input type="date" name="fecha" class="dt" value="{{ hoy }}"></div>
-      <button class="btn" type="submit" style="background:#fa5598;color:#fff;">Registrar gasto</button>
+      <button class="btn" type="submit" style="background:#c0186a;color:#fff;">Registrar gasto</button>
     </form>
-    <p style="font-size:12px;color:#777;padding:4px 16px 10px;">
-      Sueldos, renta, marketing, servicios… Entran al libro y al Estado de
-      Resultados como gasto operativo del mes en que se registran.
+    <p style="font-size:12px;color:#6b6b6b;padding:4px 16px 10px;">
+      Sueldos, renta, marketing, servicios… Entran al libro, al Estado de
+      Resultados y al flujo de efectivo como salida del mes en que se registran.
     </p>
   </div>
 
@@ -179,7 +180,7 @@
   <div class="blk">
     <h2>
       🩺 Salud del costeo
-      {% if salud.sin_costear or salud.incompletas or salud.saldo_acreedor or salud.capas_sin_abrir or salud.faltante_sin_capa %}
+      {% if salud.sin_costear or salud.incompletas or salud.saldo_acreedor or salud.capas_sin_abrir or salud.faltante_sin_capa or salud.compras_por_capturar %}
         <span class="cuadra no">Revisar</span>
       {% else %}
         <span class="cuadra si">Sano</span>
@@ -198,7 +199,7 @@
         <tr>
           <td class="l">Ventas con costo incompleto</td>
           <td class="{% if salud.incompletas %}mal{% else %}bien{% endif %}">{{ salud.incompletas }}</td>
-          <td class="l">0 — faltan compras que respalden lo que consumieron</td>
+          <td class="l">0 — faltan compras; su costo va al último costo conocido</td>
         </tr>
         <tr>
           <td class="l">Capas de compra sin abrir</td>
@@ -208,7 +209,12 @@
         <tr>
           <td class="l">Consumo sin capa que lo respalde</td>
           <td class="{% if salud.faltante_sin_capa %}mal{% else %}bien{% endif %}">{{ salud.faltante_sin_capa|floatformat:2|intcomma }}</td>
-          <td class="l">0 — es cuánto costo se está dejando de reconocer</td>
+          <td class="l">0 — es cuánto insumo se vendió sin compra capturada</td>
+        </tr>
+        <tr>
+          <td class="l">Saldo en 210 Compras por capturar</td>
+          <td class="{% if salud.compras_por_capturar %}mal{% else %}bien{% endif %}">${{ salud.compras_por_capturar|floatformat:2|intcomma }}</td>
+          <td class="l">0 — es el costo valuado sin compra; se vacía al capturarlas</td>
         </tr>
         <tr>
           <td class="l">Saldo acreedor en 115 Inventario</td>
@@ -218,7 +224,7 @@
       </tbody>
     </table>
     <p style="font-size:12px;color:#6b6b6b;padding:8px 16px;">
-      Los tres valen cero cuando el costeo está sano, y ninguno se nota mirando
+      Todos valen cero cuando el costeo está sano, y ninguno se nota mirando
       los reportes: la balanza cuadra igual con ventas sin costear, y el balance
       se declara correcto con el inventario en negativo, porque solo verifica
       que las sumas coincidan y no que los signos tengan sentido.
@@ -256,7 +262,7 @@
             {% if m.asiento_reconocimiento_id %}
               <span class="badge ok">✓ Reconocido</span>
             {% elif m.tipo == 'venta' %}
-              <span class="badge no" title="Faltan compras que respalden lo que consumió esta venta. En cuanto se capturen, entra sola.">⏳ Falta costo</span>
+              <span class="badge no" title="Esta venta todavía no se costea. Corre «manage.py recostear --solo-pendientes».">⏳ Sin costear</span>
             {% else %}
               <span class="badge no" title="Este movimiento no generó asiento de reconocimiento. Corre «manage.py sincronizar_contabilidad».">⚠ Sin reconocer</span>
             {% endif %}
@@ -275,11 +281,12 @@
       </tbody>
     </table>
     </div>
-    <p style="font-size:12px;color:#777;padding:8px 16px;">
+    <p style="font-size:12px;color:#6b6b6b;padding:8px 16px;">
       Compras y gastos entran al Estado de Resultados y a caja en cuanto se
-      capturan. Una venta entra cuando su costo está completo: el ingreso, su
-      costo y el cobro se reconocen juntos o no se reconoce ninguno. Mientras
-      falte costo, la venta no mueve la caja contable.
+      capturan. Una venta entra en cuanto se costea, con su ingreso, su costo y
+      su cobro juntos. Si le faltó una compra, esa parte del costo se valúa al
+      último costo conocido del insumo y queda en «Compras por capturar» hasta
+      que se capture el ticket.
     </p>
   </div>
 

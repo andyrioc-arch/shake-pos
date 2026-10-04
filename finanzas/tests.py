@@ -195,6 +195,33 @@ class FlujoMultiMesTests(TestCase):
         # flujo = 2000 - 0 compras - 1000 fijos + 1500 = 2500
         self.assertEqual(mayo["flujo_efectivo"], Decimal("2500"))
 
+    def test_gasto_capturado_sale_del_flujo_y_reemplaza_la_plantilla(self):
+        from contabilidad import posting
+        posting.crear_catalogo()
+        Venta.objects.create(fecha=date(2025, 5, 1), receta=self.rec, cantidad=20)
+        posting.registrar_gasto(date(2025, 5, 3), "renta", Decimal("4500"), "Renta")
+        posting.registrar_gasto(date(2025, 5, 15), "sueldos", Decimal("6000"), "Nómina")
+        mayo = calculos.flujo_mensual()["filas"][0]
+        self.assertEqual(mayo["gastos_operativos"], Decimal("10500"))
+        # La renta de 1000 de la plantilla no se suma encima de la real.
+        self.assertEqual(mayo["costos_fijos"], Decimal("0"))
+        # 2000 de ingreso − 10500 de gastos
+        self.assertEqual(mayo["flujo_efectivo"], Decimal("-8500"))
+        # 2000 − 60 de costo variable − 10500
+        self.assertEqual(mayo["ganancia_operativa"], Decimal("-8560"))
+
+    def test_mes_sin_gastos_capturados_usa_la_plantilla(self):
+        from contabilidad import posting
+        posting.crear_catalogo()
+        Venta.objects.create(fecha=date(2025, 4, 1), receta=self.rec, cantidad=10)
+        posting.registrar_gasto(date(2025, 5, 3), "renta", Decimal("4500"), "Renta")
+        abril, mayo = calculos.flujo_mensual()["filas"]
+        self.assertEqual(abril["gastos_operativos"], Decimal("0"))
+        self.assertEqual(abril["costos_fijos"], Decimal("1000"))
+        # Un mes con solo gastos también aparece en el flujo.
+        self.assertEqual((mayo["anio"], mayo["mes"]), (2025, 5))
+        self.assertEqual(mayo["flujo_efectivo"], Decimal("-4500"))
+
     def test_recuperacion_en_mes_correcto(self):
         InversionInicial.objects.create(concepto="Equipo", monto=Decimal("7000"))
         # Mes 1: ganancia_op 3850 (no recupera); Mes 2: acum 7700 (recupera)

@@ -187,8 +187,8 @@ def construir_servidor():
     @herramienta(
         "Estado de resultados CONTABLE de un mes: ingresos reconocidos, costo "
         "de ventas (comercial y cortesías), utilidad bruta, gastos de "
-        "operación por grupo y utilidad neta. Solo incluye ventas con costo "
-        "completo; las demás se reportan en «ventas_sin_reconocer». Úsala "
+        "operación por grupo y utilidad neta. Incluye toda venta costeada; "
+        "las que aún no se costean van en «ventas_sin_reconocer». Úsala "
         "para «¿cuánto gané este mes?» o «¿en qué se me va el dinero?».")
     def estado_de_resultados(
         anio: Annotated[int | None, f["anio"]] = None,

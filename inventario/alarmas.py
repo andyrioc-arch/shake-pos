@@ -47,8 +47,9 @@ def _margenes_por_mes(desde, hasta):
         # que cambie, sin que nada falle.
         fila["ganancia"] += v.ganancia
         fila["unidades"] += v.cantidad
-        # Una venta sin costo completo cae al estimado del catálogo. El número
-        # sirve, pero quien lo lea tiene que saber sobre qué está parado.
+        # Una venta sin costo completo valúa su faltante al último costo
+        # conocido. El número sirve, pero quien lo lea tiene que saber sobre
+        # qué está parado.
         if not v.costo_esta_completo:
             fila["estimado"] = True
         fila["nombre"] = str(v.receta)

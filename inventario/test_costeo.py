@@ -62,35 +62,63 @@ class CapasTests(CosteoBase):
         self.assertEqual(nueva.saldo_receta, Decimal("800"))
 
     def test_no_usa_capas_posteriores_a_la_venta(self):
-        self._compra(10, 1, "20")                  # llega después
+        compra = self._compra(10, 1, "20")         # llega después
         venta = self._venta(5)
         costeo.costear_venta(venta)
         venta.refresh_from_db()
-        self.assertEqual(venta.costo_fifo, Decimal("0.00"))
+        # Ni su capa ni su precio: no había compra hasta el día 5, así que el
+        # faltante va al catálogo (200 × 0.999).
+        self.assertEqual(venta.costo_fifo, Decimal("199.80"))
         self.assertTrue(venta.costo_incompleto)
+        compra.refresh_from_db()
+        self.assertEqual(compra.saldo_receta, Decimal("1000"))
 
 
 class SinCapasTests(CosteoBase):
-    def test_sin_compras_no_se_inventa_costo(self):
+    def test_sin_compras_el_faltante_va_al_catalogo(self):
         venta = self._venta(5)
         costeo.costear_venta(venta)
         venta.refresh_from_db()
-        # El catálogo diría 200 × 0.999 = 199.80; no se usa.
-        self.assertEqual(venta.costo_fifo, Decimal("0.00"))
+        self.assertEqual(venta.costo_fifo, Decimal("199.80"))   # 200 × 0.999
         self.assertTrue(venta.costo_incompleto)
 
-    def test_el_faltante_queda_registrado_sin_capa(self):
-        self._compra(1, Decimal("0.1"), "2")       # solo 100 ml
+    def test_el_faltante_queda_registrado_sin_capa_al_ultimo_costo(self):
+        self._compra(1, Decimal("0.1"), "2")       # solo 100 ml, a 0.02
         venta = self._venta(2)                     # pide 200 ml
         costeo.costear_venta(venta)
 
         sin_capa = ConsumoCapa.objects.filter(venta=venta, compra__isnull=True)
         self.assertEqual(sin_capa.count(), 1)
         self.assertEqual(sin_capa.first().cantidad_receta, Decimal("100"))
-        self.assertEqual(sin_capa.first().importe, Decimal("0"))
+        self.assertEqual(sin_capa.first().costo_unitario, Decimal("0.02"))
+        self.assertEqual(sin_capa.first().importe, Decimal("2"))
         venta.refresh_from_db()
-        self.assertEqual(venta.costo_fifo, Decimal("2.00"))   # solo lo que había
+        self.assertEqual(venta.costo_fifo, Decimal("4.00"))   # 2 de capa + 2 sin ella
         self.assertTrue(venta.costo_incompleto)
+
+    def test_el_ultimo_costo_es_la_compra_mas_reciente_hasta_la_venta(self):
+        self._compra(1, Decimal("0.1"), "2")       # 100 ml a 0.02
+        self._compra(2, Decimal("0.1"), "5")       # 100 ml a 0.05
+        self._compra(9, 1, "90")                   # 0.09, posterior: no cuenta
+        venta = self._venta(3, cantidad=2)         # pide 400 ml
+        costeo.costear_venta(venta)
+        venta.refresh_from_db()
+        # Capas: 100 × 0.02 + 100 × 0.05 = 7. Faltan 200 al precio del día 2.
+        self.assertEqual(venta.costo_fifo, Decimal("17.00"))
+        self.assertTrue(venta.costo_incompleto)
+
+    def test_la_compra_que_llega_reemplaza_el_estimado(self):
+        venta = self._venta(5)
+        self.assertEqual(Venta.objects.get(pk=venta.pk).costo_fifo,
+                         Decimal("199.80"))
+
+        self._compra(5, 1, "20")                   # el ticket que faltaba
+
+        venta.refresh_from_db()
+        self.assertEqual(venta.costo_fifo, Decimal("4.00"))
+        self.assertFalse(venta.costo_incompleto)
+        self.assertFalse(ConsumoCapa.objects.filter(
+            venta=venta, compra__isnull=True).exists())
 
 
 class RecosteoTests(CosteoBase):
@@ -253,7 +281,8 @@ class BorrarYEditarTests(CosteoBase):
         compra.delete()
 
         recargada = Venta.objects.get(pk=venta.pk)
-        self.assertEqual(recargada.costo_fifo, Decimal("0.00"))
+        # Sin ninguna compra, el faltante va al catálogo.
+        self.assertEqual(recargada.costo_fifo, Decimal("199.80"))
         self.assertTrue(recargada.costo_incompleto)
 
 
@@ -270,23 +299,31 @@ class CostoDeVentasTests(CosteoBase):
         # El catálogo dice 999/litro: si se colara, el costo sería 199.80.
         self.assertEqual(recargada.costo_total, Decimal("199.80"))
 
-    def test_sin_capas_cae_al_estimado_del_catalogo(self):
+    def test_sin_capas_el_costo_guardado_ya_trae_el_estimado(self):
         venta = self._venta(2, cantidad=1)     # ninguna compra que la surta
         recargada = Venta.objects.get(pk=venta.pk)
 
         self.assertTrue(recargada.costo_incompleto)
-        self.assertEqual(recargada.costo_fifo, Decimal("0.00"))
-        # Cero es «no se sabe», no «salió gratis»: el panel muestra el estimado.
+        self.assertEqual(recargada.costo_fifo, Decimal("199.80"))
         self.assertEqual(recargada.costo_de_ventas, Decimal("199.80"))
 
-    def test_costo_parcial_tambien_cae_al_estimado(self):
+    def test_costo_parcial_usa_el_ultimo_costo_y_no_el_catalogo(self):
         self._compra(1, Decimal("0.1"), "2")   # 100 ml: alcanza para la mitad
         venta = self._venta(2, cantidad=1)     # necesita 200 ml
         recargada = Venta.objects.get(pk=venta.pk)
 
         self.assertTrue(recargada.costo_incompleto)
-        self.assertEqual(recargada.costo_fifo, Decimal("2.00"))
-        # Publicar 2.00 como costo de la venta la haría ver el doble de rentable.
+        # La mitad que faltó, al 0.02 de la última compra; no al 0.999.
+        self.assertEqual(recargada.costo_fifo, Decimal("4.00"))
+        self.assertEqual(recargada.costo_de_ventas, Decimal("4.00"))
+
+    def test_una_venta_sin_costear_cae_al_catalogo(self):
+        self._compra(1, 1, "20")
+        venta = self._venta(2, cantidad=1)
+        costeo.descostear_venta(venta)
+        recargada = Venta.objects.get(pk=venta.pk)
+
+        self.assertIsNone(recargada.costo_fifo)
         self.assertEqual(recargada.costo_de_ventas, Decimal("199.80"))
 
     def test_la_ganancia_se_calcula_contra_el_costo_real(self):

@@ -859,11 +859,11 @@ class Venta(models.Model):
 
     @property
     def costo_esta_completo(self):
-        """¿El costo guardado cubre todo lo que la venta consumió?
+        """¿Todo el costo guardado salió de compras capturadas?
 
-        Es el invariante I2 en una sola línea: sin esto, ni se reconoce el
-        asiento ni el panel puede confiar en el número. `costo_fifo = 0.00` con
-        `costo_incompleto` no es «salió gratis», es «no se sabe».
+        Si no, una parte se valuó al último costo conocido del insumo: el
+        número sirve y se contabiliza, pero quien lo lea tiene que saber que
+        se apoya en un estimado.
         """
         return self.costo_fifo is not None and not self.costo_incompleto
 
@@ -871,14 +871,13 @@ class Venta(models.Model):
     def costo_de_ventas(self):
         """Costo de esta venta para paneles comerciales.
 
-        El costo real (`costo_fifo`) si está completo; si no, el estimado del
-        catálogo, que sirve para no dejar el panel en blanco. Publicar un costo
-        a medias infla el margen justo donde menos se sabe.
-
-        Los ASIENTOS NO usan esta propiedad: la contabilidad lee `costo_fifo` y
-        nada más, porque un estimado en el libro mayor es un costo inventado.
+        El costo guardado (`costo_fifo`), que ya incluye la parte sin compra
+        valuada al último costo. Solo una venta que nunca se costeó cae al
+        estimado del catálogo, para no dejar el panel en blanco.
         """
-        return self.costo_fifo if self.costo_esta_completo else self.costo_total
+        if self.costo_fifo is not None:
+            return self.costo_fifo
+        return self.costo_total
 
     @property
     def ganancia(self):
@@ -1071,9 +1070,10 @@ class ConsumoCapa(models.Model):
     unidades que esta venta le tomó, y sin este registro no hay forma de saber
     cuáles fueron.
 
-    `compra` en blanco significa que faltaban capas para esa parte del consumo:
-    se deja constancia con importe cero en vez de inventar el costo con el
-    precio del catálogo, que abonaría inventario que nunca entró.
+    `compra` en blanco significa que faltaban capas para esa parte del consumo.
+    En una venta, esa parte se valúa al último costo conocido del insumo y su
+    asiento la abona a «Compras por capturar», no a Inventario, que nunca la
+    recibió. En una merma se deja con importe cero.
 
     Una fila cuelga de una venta O de un ajuste de inventario, nunca de las dos
     ni de ninguna. La merma vive aquí y no en su propia tabla a propósito: el

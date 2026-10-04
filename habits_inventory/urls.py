@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.urls import include, path
 
-from inventario import views as inventario_views
+from inventario import excel, views as inventario_views
 from inventario.views import home, panel_inventario, panel_actividad
 from finanzas import views as finanzas_views
 from finanzas.views import panel_financiero
@@ -30,6 +30,7 @@ urlpatterns = [
     path("pedidos/", inventario_views.panel_pedidos, name="panel_pedidos"),
     path("pedidos/<int:pk>/entregar/", inventario_views.pedido_entregar, name="pedido_entregar"),
     path("actividad/", panel_actividad, name="panel_actividad"),
+    path("exportar/tablas/", excel.exportar_tablas, name="exportar_tablas"),
 
     # Catálogo de productos (solo superusuario)
     path("catalogo/", inventario_views.panel_catalogo, name="panel_catalogo"),

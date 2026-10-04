@@ -22,6 +22,7 @@ from .models import (
 CATALOGO = [
     ("101", "Caja y bancos", Cuenta.Tipo.ACTIVO),
     ("115", "Inventario", Cuenta.Tipo.ACTIVO),
+    ("210", "Compras por capturar", Cuenta.Tipo.PASIVO),
     ("301", "Capital", Cuenta.Tipo.CAPITAL),
     ("401", "Ventas", Cuenta.Tipo.INGRESO),
     ("501", "Costo de ventas", Cuenta.Tipo.GASTO),
@@ -41,6 +42,10 @@ CTA_VENTAS = "401"
 CTA_COSTO_INSUMOS = "501"
 CTA_COSTO_VENTAS = "501"
 CTA_INVENTARIO = "115"
+# Lo que se vendió sin compra capturada que lo respalde. Se vacía sola cuando
+# llega la compra y el recosteo mueve ese consumo a una capa real. No es la 201:
+# esa fue «IVA por pagar» y la 0007 la borró a propósito.
+CTA_COMPRAS_POR_CAPTURAR = "210"
 CTA_MERMA = "507"              # gasto: inventario perdido (caducado, tirado, derramado)
 
 # Cuenta de gasto por categoría (claves base; las nuevas usan CategoriaGasto).
@@ -125,10 +130,12 @@ def sincronizar_movimiento(mov: Movimiento):
     Un solo asiento por movimiento:
       • Compra:  DEBE Inventario · HABER Caja
       • Gasto:   DEBE gasto · HABER Caja
-      • Venta con costo completo: DEBE Caja · HABER Ventas + DEBE COGS · HABER Inventario
-      • Venta incompleta / sin costear: sin asiento — el efectivo real no
-        aparece en caja hasta que el costo esté completo (decisión Andy 27 ago).
-      • Cortesía con costo: DEBE COGS · HABER Inventario (sin caja ni ingreso)
+      • Venta costeada: DEBE Caja · HABER Ventas + DEBE COGS · HABER Inventario
+        por lo que surtieron las capas y HABER Compras por capturar por lo que
+        se valuó sin compra.
+      • Venta sin costear: sin asiento hasta que el costeo corra.
+      • Cortesía con costo: DEBE COGS · HABER Inventario / Compras por
+        capturar (sin caja ni ingreso)
 
     `asiento_flujo` queda siempre vacío (reliquia del modelo de dos asientos);
     el asiento único vive en `asiento_reconocimiento` para que el libro siga
@@ -164,27 +171,45 @@ def sincronizar_movimiento(mov: Movimiento):
              (CTA_CAJA, cero, mov.monto)])
 
     elif mov.tipo == Movimiento.Tipo.VENTA:
-        completo = bool(mov.venta_id) and mov.venta.costo_esta_completo
-        costo = mov.venta.costo_fifo if completo else None
-        if not completo:
-            pass  # sin asiento: ni caja ni ingreso hasta costear
+        costo = mov.venta.costo_fifo if mov.venta_id else None
+        if costo is None:
+            pass  # sin costear: sin asiento hasta que el costeo corra
         elif es_cortesia:
             if costo:
                 asiento = _reemplaza_asiento(
                     ref, mov.fecha, f"Cortesía: {mov.descripcion}",
                     [(CTA_COSTO_VENTAS, costo, cero),
-                     (CTA_INVENTARIO, cero, costo)])
+                     *_abonos_del_costo(mov.venta, costo)])
         else:
             lineas = [(CTA_CAJA, mov.monto, cero),
                       (CTA_VENTAS, cero, mov.monto)]
             if costo:
                 lineas += [(CTA_COSTO_VENTAS, costo, cero),
-                           (CTA_INVENTARIO, cero, costo)]
+                           *_abonos_del_costo(mov.venta, costo)]
             asiento = _reemplaza_asiento(
                 ref, mov.fecha, f"Venta: {mov.descripcion}", lineas)
 
     Movimiento.objects.filter(pk=mov.pk).update(
         asiento_flujo=None, asiento_reconocimiento=asiento)
+
+
+def _abonos_del_costo(venta, costo):
+    """Las líneas HABER del costo de una venta: capas a 115, el resto a 210.
+
+    La parte sin capa se redondea por separado y la de Inventario se lleva lo
+    que sobre del costo guardado, para que el asiento sume exactamente
+    `costo_fifo` sin importar los centavos.
+    """
+    from inventario import costeo
+    cero = Decimal("0")
+    sin_capa = costeo.importe_sin_capa(venta) if venta.costo_incompleto else cero
+    sin_capa = min(sin_capa, costo)
+    lineas = []
+    if costo - sin_capa:
+        lineas.append((CTA_INVENTARIO, cero, costo - sin_capa))
+    if sin_capa:
+        lineas.append((CTA_COMPRAS_POR_CAPTURAR, cero, sin_capa))
+    return lineas
 
 
 @transaction.atomic
@@ -328,6 +353,11 @@ def salud_del_costeo(anio=None, mes=None):
            .filter(cuenta__codigo=CTA_INVENTARIO, asiento__fecha__lte=fin)
            .aggregate(d=Sum("debe"), h=Sum("haber")))
     saldo = (agg["d"] or Decimal("0")) - (agg["h"] or Decimal("0"))
+    provision = (MovimientoContable.objects
+                 .filter(cuenta__codigo=CTA_COMPRAS_POR_CAPTURAR,
+                         asiento__fecha__lte=fin)
+                 .aggregate(d=Sum("debe"), h=Sum("haber")))
+    por_capturar = (provision["h"] or Decimal("0")) - (provision["d"] or Decimal("0"))
 
     return {
         "sin_costear": diag["sin_costear"],
@@ -335,9 +365,10 @@ def salud_del_costeo(anio=None, mes=None):
         # Capas que nacieron sin saldo: el FIFO no las ve y quedarían
         # invisibles para siempre si nadie las reabre.
         "capas_sin_abrir": diag["capas_sin_abrir"],
-        # Consumo que ninguna compra respaldó. Es la medida de cuánto del
-        # costo se está dejando de reconocer.
+        # Consumo que ninguna compra respaldó: se vendió sin compra capturada.
         "faltante_sin_capa": diag["faltante_sin_capa"],
+        # Su costo, valuado al último costo conocido, a la espera del ticket.
+        "compras_por_capturar": por_capturar,
         # Se publica lo que sobra del lado acreedor, no el saldo: un inventario
         # sano da cero aquí, y cualquier otra cosa es el bug.
         "saldo_acreedor": -saldo if saldo < 0 else Decimal("0"),
@@ -378,8 +409,9 @@ def balanza_comprobacion(anio=None, mes=None):
 def estado_resultados(anio=None, mes=None):
     """Ingresos − Costo de Ventas = Utilidad bruta; − Gastos = Utilidad neta.
 
-    Solo considera lo reconocido EN el mes. Una venta cuyo costo aún no está
-    completo no aparece aquí: ni su ingreso ni su costo.
+    Solo considera lo reconocido EN el mes. Una venta entra con su ingreso y
+    su costo en cuanto se costea, aunque parte del costo se haya valuado sin
+    compra capturada.
 
     El costo de ventas se desglosa en comercial y cortesías: ambas postean a
     la 501; la separación sale de las ventas, no de cuentas distintas.
@@ -428,14 +460,13 @@ def estado_resultados(anio=None, mes=None):
 
 
 def _costo_de_cortesias(desde, hasta):
-    """Suma el FIFO reconocido de las cortesías del periodo.
+    """Suma el costo reconocido de las cortesías del periodo.
 
-    Solo las que tienen costo completo: las incompletas no generaron asiento
-    a 501, así que no pueden entrar al desglose.
+    Solo las costeadas: una sin costear no generó asiento a 501, así que no
+    puede entrar al desglose.
     """
     from inventario.models import Venta
-    qs = Venta.objects.filter(es_cortesia=True, costo_incompleto=False,
-                              costo_fifo__isnull=False)
+    qs = Venta.objects.filter(es_cortesia=True, costo_fifo__isnull=False)
     if desde:
         qs = qs.filter(fecha__gte=desde)
     if hasta:

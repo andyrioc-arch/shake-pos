@@ -40,6 +40,8 @@ def _real_por_cuenta(anio, mes):
             .values("cuenta").annotate(t=Sum("monto")))
     for m in movs:
         res[m["cuenta"]] += m["t"] or Decimal("0")
+    if _hay_gastos_capturados(anio, mes):
+        return res
     # Costos fijos mensuales, cargados a su cuenta de gasto.
     codigo_a_id = {c.codigo: c.id for c in Cuenta.objects.all()}
     for cf in CostoFijo.objects.filter(activo=True):
@@ -47,6 +49,17 @@ def _real_por_cuenta(anio, mes):
         if cid:
             res[cid] += cf.monto_mensual
     return res
+
+
+def _hay_gastos_capturados(anio, mes):
+    """¿El mes ya tiene gastos operativos reales en el libro?
+
+    Los costos fijos son la plantilla de lo que se espera pagar cada mes. Un
+    mes con gastos capturados ya trae la renta y los sueldos de verdad, y
+    sumarle además la plantilla los contaría dos veces.
+    """
+    return Movimiento.objects.filter(
+        tipo=Movimiento.Tipo.GASTO, fecha__year=anio, fecha__month=mes).exists()
 
 
 def flujo_desglose(anio, mes):
@@ -165,6 +178,7 @@ def flujo_mensual():
     costo_var = defaultdict(Decimal)
     cortesias = defaultdict(Decimal)
     compras = defaultdict(Decimal)
+    gastos = defaultdict(Decimal)
     extras = defaultdict(Decimal)
 
     for v in Venta.objects.con_costeo():
@@ -181,24 +195,27 @@ def flujo_mensual():
     for c in Compra.objects.all():
         compras[_periodo(c.fecha)] += c.total
 
+    for m in Movimiento.objects.filter(tipo=Movimiento.Tipo.GASTO):
+        gastos[_periodo(m.fecha)] += m.monto
+
     for m in MovimientoEfectivo.objects.all():
         extras[_periodo(m.fecha)] += m.monto_con_signo
 
-    fijos = CostoFijo.total_mensual()
+    plantilla_fijos = CostoFijo.total_mensual()
     inversion = InversionInicial.total()
 
-    periodos = sorted(set(ingresos) | set(compras) | set(extras))
+    periodos = sorted(set(ingresos) | set(compras) | set(gastos) | set(extras))
     filas = []
     acumulado = Decimal("0")
     recuperado_en = None
 
     for p in periodos:
         ing = ingresos[p]
-        # Ganancia operativa del mes = ingresos − costos fijos − movimientos extra netos negativos
-        # Flujo de efectivo real = ingresos − compras − fijos + extras
-        flujo = ing - compras[p] - fijos + extras[p]
-        # Para recuperación usamos la ganancia operativa (ingresos − costo variable − fijos)
-        ganancia_op = ing - costo_var[p] - cortesias[p] - fijos
+        # La plantilla de costos fijos solo cubre los meses sin gastos reales:
+        # en los demás, la renta y los sueldos ya vienen en `gastos`.
+        fijos = Decimal("0") if gastos[p] else plantilla_fijos
+        flujo = ing - compras[p] - gastos[p] - fijos + extras[p]
+        ganancia_op = ing - costo_var[p] - cortesias[p] - gastos[p] - fijos
         acumulado += ganancia_op
         if recuperado_en is None and inversion > 0 and acumulado >= inversion:
             recuperado_en = p
@@ -208,6 +225,7 @@ def flujo_mensual():
             "costo_variable": costo_var[p],
             "cortesias": cortesias[p],
             "compras": compras[p],
+            "gastos_operativos": gastos[p],
             "costos_fijos": fijos,
             "extras": extras[p],
             "flujo_efectivo": flujo,

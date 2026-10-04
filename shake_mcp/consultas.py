@@ -89,16 +89,15 @@ def _ventas(desde, hasta):
 def _sin_reconocer(desde, hasta):
     """Ventas cobradas que la contabilidad todavía no reconoce, y por cuánto."""
     pendientes = list(Venta.objects.filter(
-        fecha__gte=desde, fecha__lte=hasta, es_cortesia=False)
-        .sin_costo_completo().con_costeo().order_by())
+        fecha__gte=desde, fecha__lte=hasta, es_cortesia=False,
+        costo_fifo__isnull=True).con_costeo().order_by())
     return len(pendientes), sum((v.ingreso for v in pendientes), CERO)
 
 
 def _aviso_sin_reconocer(n, monto, donde):
     return (f"{n} ventas del mes por {_mxn(monto):,.2f} MXN no aparecen en "
-            f"{donde}: les falta costo completo porque faltan compras "
-            "capturadas, y el sistema reconoce ingreso y costo juntos o "
-            "ninguno. Lo cobrado está en ventas_del_periodo.")
+            f"{donde}: todavía no se costean, y el sistema reconoce ingreso y "
+            "costo juntos o ninguno. Lo cobrado está en ventas_del_periodo.")
 
 
 # ── Ventas ───────────────────────────────────────────────────────────────────
@@ -152,8 +151,9 @@ def ventas_del_periodo(periodo=None, desde=None, hasta=None):
     if estimadas:
         resultado["avisos"].append(
             f"{estimadas} de {len(comerciales)} ventas no tienen su costo "
-            "completo (faltan compras capturadas): para ellas la ganancia "
-            "bruta usa el costo del catálogo de hoy, así que es estimada.")
+            "completo (faltan compras capturadas): la parte sin compra se "
+            "valúa al costo de la última compra del insumo, así que su "
+            "ganancia bruta es estimada.")
     return resultado
 
 
@@ -310,7 +310,7 @@ def margen_por_receta(ordenar_por="margen", incluir_inactivas=False,
             for f in filas):
         resultado["avisos"].append(
             "Los márgenes reales marcados «estimado» incluyen ventas sin costo "
-            "completo, valuadas con el catálogo de hoy.")
+            "completo, cuya parte sin compra va al costo de la última compra.")
     return resultado
 
 
@@ -340,7 +340,7 @@ def alertas_de_margen():
     if r["hay_estimados"]:
         resultado["avisos"].append(
             "Las alertas «estimado» se apoyan en ventas sin costo completo, "
-            "valuadas con el catálogo de hoy.")
+            "cuya parte sin compra va al costo de la última compra.")
     if any(a["unidades_mes_actual"] < POCAS_UNIDADES for a in alertas):
         resultado["avisos"].append(
             "Algunas alertas comparan pocas unidades del mes en curso contra "

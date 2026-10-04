@@ -53,6 +53,19 @@
       header.topbar { flex-wrap:wrap; height:auto; padding:8px 14px; gap:8px 14px; }
       header.topbar nav { order:3; width:100%; }
     }
+
+    /* Descarga a Excel: va en el <caption> para no volverse un elemento más
+       de los contenedores flex que acomodan tablas lado a lado. A la
+       izquierda porque una tabla más ancha que la pantalla esconde su
+       borde derecho. */
+    caption.xl-cap { caption-side:top; text-align:left; padding:4px 0; }
+    .xl-btn { border:2px solid #000; background:#fff; color:#000; border-radius:7px;
+              padding:3px 9px; font-size:12px; font-weight:800; cursor:pointer;
+              box-shadow:2px 2px 0 #000; white-space:nowrap; }
+    .xl-btn:hover { background:#ffd900; }
+    .xl-btn:disabled { cursor:wait; color:#555; }
+    .xl-todas { margin:0 0 12px; }
+    @media print { .xl-cap, .xl-todas { display:none; } }
   </style>
   {% block extra_head %}{% endblock %}
 </head>
@@ -87,5 +100,121 @@
   <main class="wrap">
     {% block content %}{% endblock %}
   </main>
+  {% if user.is_authenticated %}
+  <script>
+  (function () {
+    var DESTINO = "{% url 'exportar_tablas' %}";
+    var QUITAR = "button, input, select, textarea, script, style, form, .xl-btn";
+    var main = document.querySelector("main.wrap");
+    if (!main) return;
+
+    function texto(el) {
+      var copia = el.cloneNode(true);
+      copia.querySelectorAll(QUITAR).forEach(function (n) { n.remove(); });
+      return copia.textContent.replace(/\s+/g, " ").trim();
+    }
+
+    function titulo(h) {
+      var copia = h.cloneNode(true);
+      copia.querySelectorAll("a, button, select, form").forEach(function (n) { n.remove(); });
+      return copia.textContent.replace(/\s+/g, " ").trim();
+    }
+
+    function nombreDe(tabla, i) {
+      if (tabla.dataset.excel) return tabla.dataset.excel;
+      if (tabla.caption && !tabla.caption.classList.contains("xl-cap")) {
+        return texto(tabla.caption);
+      }
+      for (var el = tabla; el && el !== main; el = el.parentElement) {
+        for (var s = el.previousElementSibling; s; s = s.previousElementSibling) {
+          if (/^H[1-4]$/.test(s.tagName)) return titulo(s);
+          var hs = s.querySelectorAll("h1, h2, h3, h4");
+          if (hs.length) return titulo(hs[hs.length - 1]);
+        }
+      }
+      return "Tabla " + (i + 1);
+    }
+
+    function filas(tabla) {
+      return Array.prototype.map.call(tabla.rows, function (tr) {
+        return Array.prototype.map.call(tr.cells, function (c) {
+          return {t: texto(c), span: c.colSpan || 1, th: c.tagName === "TH"};
+        });
+      });
+    }
+
+    function descargar(tablas, boton) {
+      var token = document.querySelector("[name=csrfmiddlewaretoken]");
+      var antes = boton.textContent;
+      boton.disabled = true;
+      boton.textContent = "Generando…";
+      fetch(DESTINO, {
+        method: "POST", credentials: "same-origin",
+        headers: {"Content-Type": "application/json",
+                  "X-CSRFToken": token ? token.value : ""},
+        body: JSON.stringify({
+          titulo: document.title.replace(/\s*·\s*SHAKE\s*$/, ""),
+          tablas: tablas})
+      }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        var m = (r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/);
+        return r.blob().then(function (b) { return {blob: b, nombre: m ? m[1] : "shake.xlsx"}; });
+      }).then(function (archivo) {
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(archivo.blob);
+        a.download = archivo.nombre;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+      }).catch(function () {
+        alert("No se pudo generar el Excel. Intenta de nuevo.");
+      }).then(function () {
+        boton.disabled = false;
+        boton.textContent = antes;
+      });
+    }
+
+    var tablas = Array.prototype.filter.call(main.querySelectorAll("table"), function (t) {
+      return !t.parentElement.closest("table") && !t.hasAttribute("data-sin-excel")
+        && t.rows.length > 0;
+    });
+    var nombres = tablas.map(nombreDe);
+
+    function boton(etiqueta, alClic) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "xl-btn";
+      b.textContent = etiqueta;
+      b.addEventListener("click", function () { alClic(b); });
+      return b;
+    }
+
+    tablas.forEach(function (tabla, i) {
+      var cap = tabla.caption;
+      if (!cap) {
+        cap = tabla.createCaption();
+        cap.className = "xl-cap";
+      }
+      cap.appendChild(boton("⬇ Excel", function (b) {
+        descargar([{nombre: nombres[i], filas: filas(tabla)}], b);
+      }));
+    });
+
+    if (tablas.length > 1) {
+      var caja = document.createElement("div");
+      caja.className = "xl-todas";
+      caja.appendChild(boton("⬇ Todas las tablas en Excel", function (b) {
+        descargar(tablas.map(function (t, i) {
+          return {nombre: nombres[i], filas: filas(t)};
+        }), b);
+      }));
+      var h1 = main.querySelector("h1");
+      if (h1) h1.insertAdjacentElement("afterend", caja);
+      else main.insertBefore(caja, main.firstChild);
+    }
+  })();
+  </script>
+  {% endif %}
 </body>
 </html>

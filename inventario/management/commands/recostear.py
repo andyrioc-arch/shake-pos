@@ -70,10 +70,13 @@ class Command(BaseCommand):
         if d["capas_sin_abrir"]:
             self.stdout.write(self.style.WARNING(
                 "\n  Hay compras que el FIFO no ve. Corre --todo para abrirlas."))
-        if d["sin_costear"] or d["incompletas"]:
+        if d["sin_costear"]:
             self.stdout.write(self.style.WARNING(
-                "\n  Hay ventas sin respaldo de compras. Captura las compras "
-                "que faltan y vuelve a correr el comando."))
+                "\n  Hay ventas sin costear. Corre --solo-pendientes."))
+        if d["incompletas"]:
+            self.stdout.write(self.style.WARNING(
+                "\n  Hay ventas sin respaldo de compras: su faltante se valuó "
+                "al último costo conocido. Captura las compras que faltan."))
 
     def _verificar(self):
         """Comprueba que lo guardado sea internamente consistente.
@@ -120,15 +123,24 @@ class Command(BaseCommand):
                     f"compra {compra.id}: trajo {traido}, consumido "
                     f"{consumido} + saldo {compra.saldo_receta}")
 
-        # 3. Una venta sin costo completo no puede tener asiento reconocido.
+        # 3. Una venta costeada tiene su asiento, y una sin costear no. La
+        #    única excepción es la cortesía de costo cero: no mueve nada.
+        sin_asiento = Movimiento.objects.filter(
+            tipo=Movimiento.Tipo.VENTA,
+            asiento_reconocimiento__isnull=True,
+            venta__costo_fifo__isnull=False,
+        ).exclude(venta__es_cortesia=True, venta__costo_fifo=0).count()
+        if sin_asiento:
+            problemas.append(
+                f"{sin_asiento} venta(s) costeadas sin asiento reconocido")
         colgadas = Movimiento.objects.filter(
             tipo=Movimiento.Tipo.VENTA,
             asiento_reconocimiento__isnull=False,
-            venta__in=Venta.objects.sin_costo_completo(),
+            venta__costo_fifo__isnull=True,
         ).count()
         if colgadas:
             problemas.append(
-                f"{colgadas} venta(s) reconocidas sin tener el costo completo")
+                f"{colgadas} venta(s) reconocidas sin estar costeadas")
 
         for p in problemas:
             self.stdout.write(self.style.ERROR(f"  {p}"))

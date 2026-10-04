@@ -101,7 +101,7 @@ class VentaSinComprasTests(TestCase):
         RecetaIngrediente.objects.create(
             receta=self.receta, ingrediente=self.ing, cantidad=Decimal("50"))
 
-    def test_no_se_inventa_costo_ni_se_hunde_el_inventario(self):
+    def test_sin_compras_el_costo_va_a_compras_por_capturar_y_no_hunde_inventario(self):
         from inventario.models import Venta
         from inventario import costeo
         v = Venta.objects.create(fecha=date(2026, 8, 5), receta=self.receta,
@@ -109,14 +109,17 @@ class VentaSinComprasTests(TestCase):
         costeo.costear_venta(v)
 
         v.refresh_from_db()
-        self.assertEqual(v.costo_fifo, Decimal("0.00"))
+        self.assertEqual(v.costo_fifo, Decimal("40.00"))   # 100 g × 0.40 del catálogo
         self.assertTrue(v.costo_incompleto)
 
         bg = posting.balance_general(2026, 8)
-        # Sin costo no hay movimiento de inventario: la cuenta ni aparece, en
-        # vez de aparecer en negativo como antes.
+        # El inventario nunca recibió esos 100 g: no se le abonan. La cuenta ni
+        # aparece, y el costo queda como compra pendiente de capturar.
         self.assertEqual(
             [a for a in bg["activos"] if a["nombre"] == "Inventario"], [])
+        self.assertEqual(
+            {p["nombre"]: p["monto"] for p in bg["pasivos"]},
+            {"Compras por capturar": Decimal("40.00")})
         self.assertTrue(bg["cuadra"])
         self.assertTrue(posting.balanza_comprobacion(2026, 8)["cuadra"])
 
@@ -517,38 +520,55 @@ class _ReconocimientoBase(TestCase):
             fecha=date(2026, 8, dia), receta=self.receta, cantidad=cantidad)
 
 
-class ReconocimientoDiferidoTests(_ReconocimientoBase):
-    """Una venta sin costo completo no entra al Estado de Resultados.
+class ReconocimientoSinCompraTests(_ReconocimientoBase):
+    """Una venta sin compra que la respalde entra igual, con su costo estimado.
 
-    Reconocer el ingreso con un costo parcial infla la utilidad bruta sin que
-    nada se queje: es peor que no reportar la venta todavía. Se difieren los
-    dos lados hasta que se capture la compra que falta.
+    Lo que ninguna capa surtió se valúa al último costo conocido del insumo y
+    se abona a «Compras por capturar», no a Inventario. Así el ingreso no se
+    queda fuera del reporte ni el activo se hunde, y la provisión desaparece
+    sola cuando se captura el ticket.
     """
 
+    def _pasivos(self):
+        bg = posting.balance_general(2026, 8)
+        self.assertTrue(bg["cuadra"])
+        return {p["nombre"]: p["monto"] for p in bg["pasivos"]}
 
-    def test_sin_compras_no_se_reconoce_el_ingreso(self):
-        v = self._vender()
+    def test_sin_compras_se_reconoce_con_el_costo_del_catalogo(self):
+        v = self._vender()          # 1000 ml a 0.099 del catálogo
         er = posting.estado_resultados(2026, 8)
-        self.assertEqual(er["total_ingresos"], Decimal("0"))
-        self.assertEqual(er["total_costo_ventas"], Decimal("0"))
-        self.assertIsNone(
+        self.assertEqual(er["total_ingresos"], Decimal("500"))
+        self.assertEqual(er["total_costo_ventas"], Decimal("99.00"))
+        self.assertIsNotNone(
             self.Movimiento.objects.get(venta=v).asiento_reconocimiento)
+        self.assertEqual(self._pasivos(),
+                         {"Compras por capturar": Decimal("99.00")})
 
-    def test_con_costo_parcial_tampoco(self):
+    def test_con_costo_parcial_lo_que_falta_va_a_compras_por_capturar(self):
         from inventario.models import Compra
         Compra.objects.create(fecha=date(2026, 8, 1), ingrediente=self.ing,
                               cantidad=Decimal("0.1"), monto_total=Decimal("2"))
         v = self._vender()          # pide 1000 ml, solo hay 100
         v.refresh_from_db()
         self.assertTrue(v.costo_incompleto)
-        self.assertEqual(posting.estado_resultados(2026, 8)["total_ingresos"],
-                         Decimal("0"))
+        # 100 ml de la capa a 0.02 y 900 ml al mismo 0.02 de esa última compra.
+        self.assertEqual(v.costo_fifo, Decimal("20.00"))
 
-    def test_al_completar_la_compra_la_venta_entra_al_reporte(self):
+        asiento = self.Movimiento.objects.get(venta=v).asiento_reconocimiento
+        haber = {l.cuenta.codigo: l.haber for l in asiento.movimientos.all()
+                 if l.haber}
+        self.assertEqual(haber["115"], Decimal("2.00"))
+        self.assertEqual(haber["210"], Decimal("18.00"))
+        self.assertEqual(posting.estado_resultados(2026, 8)["total_ingresos"],
+                         Decimal("500"))
+        self.assertEqual(self._pasivos(),
+                         {"Compras por capturar": Decimal("18.00")})
+
+    def test_al_capturar_la_compra_la_provision_se_vacia(self):
         from inventario.models import Compra
         v = self._vender()
-        self.assertEqual(posting.estado_resultados(2026, 8)["total_ingresos"],
-                         Decimal("0"))
+        self.assertEqual(self._pasivos(),
+                         {"Compras por capturar": Decimal("99.00")})
 
         Compra.objects.create(fecha=date(2026, 8, 1), ingrediente=self.ing,
                               cantidad=Decimal("1"), monto_total=Decimal("20"))
@@ -559,13 +579,25 @@ class ReconocimientoDiferidoTests(_ReconocimientoBase):
         er = posting.estado_resultados(2026, 8)
         self.assertEqual(er["total_ingresos"], Decimal("500"))
         self.assertEqual(er["total_costo_ventas"], Decimal("20.00"))
+        self.assertEqual(self._pasivos(), {})
+
+    def test_una_venta_sin_costear_no_tiene_asiento(self):
+        from inventario import costeo
+        self._comprar(1)
+        v = self._vender(2, cantidad=1)
+        costeo.descostear_venta(v)
+        posting.sincronizar_venta(v)
+        self.assertIsNone(
+            self.Movimiento.objects.get(venta=v).asiento_reconocimiento)
+        self.assertEqual(
+            posting.flujo_efectivo(2026, 8)["entradas"], Decimal("0"))
 
 
 class ReconocimientoAutomaticoTests(_ReconocimientoBase):
     """P5: sin botón «Facturado». Lo capturado se reconoce solo.
 
-    El caso contrario —lo que NO se reconoce— vive en
-    `ReconocimientoDiferidoTests`, que comparte este mismo fixture.
+    Las ventas sin compra que las respalde viven en
+    `ReconocimientoSinCompraTests`, que comparte este mismo fixture.
     """
 
     def test_la_compra_entra_a_inventario_sin_que_nadie_la_facture(self):
@@ -605,27 +637,26 @@ class ReconocimientoAutomaticoTests(_ReconocimientoBase):
         self.assertEqual(
             posting.estado_resultados(2026, 8)["total_ingresos"], Decimal("200"))
 
-    def test_la_venta_sin_costo_no_mueve_caja(self):
-        """Sin costo completo no hay asiento: ni ingreso ni cobro contable."""
+    def test_la_venta_sin_compras_tambien_mueve_caja(self):
+        """Lo cobrado entra a caja aunque falte el ticket del insumo."""
         v = self._vender(2)                    # sin compras que la surtan
         mov = self.Movimiento.objects.get(venta=v)
         self.assertIsNone(mov.asiento_flujo)
-        self.assertIsNone(mov.asiento_reconocimiento)
+        self.assertIsNotNone(mov.asiento_reconocimiento)
         self.assertEqual(
-            posting.flujo_efectivo(2026, 8)["entradas"], Decimal("0"))
+            posting.flujo_efectivo(2026, 8)["entradas"], Decimal("500"))
         self.assertTrue(posting.balanza_comprobacion(2026, 8)["cuadra"])
 
 
 class ReconocimientoSeRetiraTests(_ReconocimientoBase):
-    """La dirección peligrosa: lo reconocido tiene que poder DES-reconocerse.
+    """La dirección peligrosa: lo reconocido tiene que poder rehacerse.
 
-    Si se borra la compra que respaldaba una venta, su costo deja de estar
-    completo. Si el asiento se quedara, el Estado de Resultados mostraría el
-    ingreso sin su costo —justo lo que el invariante I2 prohíbe— y encima con
-    un abono a Inventario que ya no respalda nada.
+    Si se borra la compra que respaldaba una venta, su costo deja de salir de
+    una capa. Si el asiento se quedara igual, seguiría abonando a Inventario
+    algo que ya no respalda nada y el activo se hundiría.
     """
 
-    def test_borrar_la_compra_retira_el_asiento_de_la_venta(self):
+    def test_borrar_la_compra_pasa_el_costo_a_compras_por_capturar(self):
         compra = self._comprar(1)
         v = self._vender(2, cantidad=2)
         mov = self.Movimiento.objects.get(venta=v)
@@ -636,10 +667,16 @@ class ReconocimientoSeRetiraTests(_ReconocimientoBase):
         compra.delete()
 
         mov.refresh_from_db()
-        self.assertIsNone(mov.asiento_reconocimiento)
+        self.assertIsNotNone(mov.asiento_reconocimiento)
         er = posting.estado_resultados(2026, 8)
-        self.assertEqual(er["total_ingresos"], Decimal("0"))
-        self.assertEqual(er["total_costo_ventas"], Decimal("0"))
+        self.assertEqual(er["total_ingresos"], Decimal("200"))
+        # Sin ninguna compra, los 400 ml van al catálogo: 0.099 × 400.
+        self.assertEqual(er["total_costo_ventas"], Decimal("39.60"))
+        bg = posting.balance_general(2026, 8)
+        self.assertEqual(
+            [a for a in bg["activos"] if a["nombre"] == "Inventario"], [])
+        self.assertEqual({p["nombre"]: p["monto"] for p in bg["pasivos"]},
+                         {"Compras por capturar": Decimal("39.60")})
         self.assertTrue(posting.balanza_comprobacion(2026, 8)["cuadra"])
 
     def test_el_predicado_y_su_queryset_dicen_lo_mismo(self):

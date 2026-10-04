@@ -307,13 +307,20 @@ class ConsultasTests(TestCase):
         r = self.consulta(consultas.compras_recientes, insumo="mango")
         self.assertIn("mango", r["avisos"][0])
 
+    def _sin_costear_la_de_fresa(self):
+        from inventario import costeo
+        venta = Venta.objects.get(receta__nombre="Fresa")
+        costeo.descostear_venta(venta)
+        posting.sincronizar_venta(venta)
+
     def test_estado_de_resultados(self):
         r = self.consulta(consultas.estado_de_resultados, anio=2026, mes=8)
-        # Reconocidas: las dos ventas de chocolate con costo completo.
-        self.assertEqual(r["ingresos_mxn"], 180.0)
+        # Las tres cobradas, incluida la de fresa: su fresa sin compra entra
+        # al costo del catálogo.
+        self.assertEqual(r["ingresos_mxn"], 280.0)
         self.assertEqual(r["ventas_sin_reconocer"],
-                         {"ventas": 1, "cobrado_mxn": 100.0})
-        self.assertTrue(any("no aparecen" in a for a in r["avisos"]))
+                         {"ventas": 0, "cobrado_mxn": 0.0})
+        self.assertFalse(any("no aparecen" in a for a in r["avisos"]))
         self.assertIn("El mes todavía no termina.", r["avisos"])
         self.assertIn("Servicios", [g["grupo"] for g in r["gastos"]])
         self.assertEqual(r["utilidad_neta_mxn"],
@@ -329,6 +336,18 @@ class ConsultasTests(TestCase):
                          round(r["entradas_mxn"] - r["salidas_mxn"], 2))
         self.assertEqual(r["saldo_final_mxn"],
                          round(r["saldo_inicial_mxn"] + r["neto_mxn"], 2))
+        self.assertFalse(any("caja contable" in a for a in r["avisos"]))
+
+    def test_una_venta_sin_costear_se_avisa_en_resultados_y_caja(self):
+        self._sin_costear_la_de_fresa()
+
+        r = self.consulta(consultas.estado_de_resultados, anio=2026, mes=8)
+        self.assertEqual(r["ingresos_mxn"], 180.0)
+        self.assertEqual(r["ventas_sin_reconocer"],
+                         {"ventas": 1, "cobrado_mxn": 100.0})
+        self.assertTrue(any("no aparecen" in a for a in r["avisos"]))
+
+        r = self.consulta(consultas.flujo_de_caja, anio=2026, mes=8)
         self.assertTrue(any("caja contable" in a for a in r["avisos"]))
 
     def test_presupuesto_contra_real(self):

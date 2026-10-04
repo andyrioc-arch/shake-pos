@@ -170,33 +170,36 @@ class DiaDeUsoTests(TestCase):
         self.assertEqual(n1.folio, n1.token.hex[:8].upper())
 
         v1 = Venta.objects.get()
-        # 0.00 con `costo_incompleto` NO es «salió gratis»: es «no se sabe».
-        # Las tres se afirman juntas porque el número solo por su cuenta miente.
-        self.assertEqual(v1.costo_fifo, Decimal("0.00"))
+        # Sin ninguna compra, el faltante va al catálogo: 200×0.03 + 100×0.08.
+        # Se marca incompleta para que nadie lo confunda con un costo real.
+        self.assertEqual(v1.costo_fifo, Decimal("14.00"))
         self.assertTrue(v1.costo_incompleto)
         self.assertFalse(v1.costo_esta_completo)
         self.assertTrue(v1.consumos.filter(compra__isnull=True).exists())
 
-        # El invariante: sin costo completo no hay ingreso NI cobro en caja.
+        # Entra igual: ingreso, cobro en caja y su costo, que no sale de
+        # Inventario sino de «Compras por capturar».
         mov1 = Movimiento.objects.get(venta=v1)
         self.assertIsNone(mov1.asiento_flujo_id)
-        self.assertIsNone(mov1.asiento_reconocimiento_id)
-        self.assertEqual(self._reportes()["total_ingresos"], Decimal("0"))
+        self.assertIsNotNone(mov1.asiento_reconocimiento_id)
+        self.assertEqual(self._reportes()["total_ingresos"], Decimal("130"))
         self.assertEqual(
             posting.flujo_efectivo(self.hoy.year, self.hoy.month)["entradas"],
-            Decimal("0"))
+            Decimal("130"))
 
         salud = posting.salud_del_costeo(self.hoy.year, self.hoy.month)
         self.assertEqual(salud["incompletas"], 1)
         self.assertEqual(salud["sin_costear"], 0)
         # 200 ml de leche + 100 g de fresa que ninguna compra respalda.
         self.assertEqual(salud["faltante_sin_capa"], Decimal("300"))
+        self.assertEqual(salud["compras_por_capturar"], Decimal("14.00"))
         self.assertEqual(salud["saldo_acreedor"], Decimal("0"))
 
         libro = self.c_andy.get(
             f"{reverse('reportes_contables')}?anio={self.hoy.year}"
             f"&mes={self.hoy.month}")
-        self.assertContains(libro, "⏳ Falta costo")
+        self.assertContains(libro, "✓ Reconocido")
+        self.assertContains(libro, "Revisar")
 
         # ── 3 · El cliente se lleva su comprobante ──────────────────────────
         # La nota y su PDF son públicos a propósito: quien tiene el token ya
@@ -247,6 +250,9 @@ class DiaDeUsoTests(TestCase):
         self.assertIsNotNone(mov1.asiento_reconocimiento_id)
         self.assertEqual(self._reportes()["total_ingresos"], Decimal("130"))
         self.assertEqual(self._reportes()["total_costo_ventas"], Decimal("14"))
+        self.assertEqual(
+            posting.salud_del_costeo(self.hoy.year, self.hoy.month)
+            ["compras_por_capturar"], Decimal("0"))
 
         # ── 5 · Carrito de dos productos, con sustitución y add-on ──────────
         # `subs` y `addons` son listas de PARES, no diccionarios.
@@ -510,7 +516,7 @@ class DiaDeUsoTests(TestCase):
             f"&mes={self.hoy.month}")
         self.assertContains(libro, "Sano")
         self.assertContains(libro, "✓ Reconocido")
-        self.assertNotContains(libro, "⏳ Falta costo")
+        self.assertNotContains(libro, "⏳ Sin costear")
         self.assertContains(libro, 'class="ver-nota"')
 
         # Los cuatro botones de descarga, que nunca se habían pedido por HTTP.
@@ -555,8 +561,9 @@ class DiaDeUsoTests(TestCase):
         self.assertEqual(
             Movimiento.objects.filter(
                 tipo=Movimiento.Tipo.VENTA,
-                asiento_reconocimiento__isnull=False,
-                venta__in=Venta.objects.sin_costo_completo()).count(), 0)
+                asiento_reconocimiento__isnull=True,
+                venta__costo_fifo__isnull=False)
+            .exclude(venta__es_cortesia=True, venta__costo_fifo=0).count(), 0)
 
         # ── 14 · El runbook de después de desplegar no cambia nada ──────────
         # Es la prueba de que `sincronizar_contabilidad` y `recostear --todo`

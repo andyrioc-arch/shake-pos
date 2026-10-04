@@ -91,6 +91,8 @@ def panel_financiero(request):
                                  Decimal("0")),
             "cortesias": sum((f["cortesias"] for f in filas), Decimal("0")),
             "compras": sum((f["compras"] for f in filas), Decimal("0")),
+            "gastos_operativos": sum((f["gastos_operativos"] for f in filas),
+                                    Decimal("0")),
             "costos_fijos": sum((f["costos_fijos"] for f in filas),
                                Decimal("0")),
             "flujo_efectivo": sum((f["flujo_efectivo"] for f in filas),

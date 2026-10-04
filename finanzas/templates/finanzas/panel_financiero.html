@@ -6,14 +6,16 @@
   .kpis { display:flex; gap:16px; flex-wrap:wrap; margin:20px 0; }
   .card { flex:1; min-width:200px; background:#000000; color:#fff;
           border-radius:10px; padding:18px 20px; }
-  .card.green { background:#1e9aff; }
-  .card.gold  { background:#ff7300; }
+  /* Fondos oscuros: el texto blanco necesita 4.5:1 y los tonos de marca no
+     llegan (azul 2.9:1, naranja 2.7:1, rosa 3.1:1). */
+  .card.green { background:#0d6ecd; }
+  .card.gold  { background:#b35000; }
   .card.red   { background:#b01060; }
   .card .lbl  { font-size:12px; opacity:.85; text-transform:uppercase;
                 letter-spacing:.5px; }
   .card .val  { font-size:26px; font-weight:700; margin-top:6px; }
   .card .sub  { font-size:12px; opacity:.8; margin-top:4px; }
-  /* La tabla del flujo tiene nueve columnas y no cabe en un teléfono, que es
+  /* La tabla del flujo tiene diez columnas y no cabe en un teléfono, que es
      donde se usa el punto de venta. Sin esto se corta y NO hay forma de
      alcanzar las últimas: el ancho sobrante queda recortado, no desplazable. */
   .scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -29,11 +31,11 @@
   table.fin th { background:#000000; color:#fff; text-align:right; }
   table.fin th:first-child, table.fin td:first-child { text-align:left; }
   table.fin tr:last-child td { font-weight:700; background:#f2f2f2; }
-  .pos { color:#1e9aff; font-weight:600; }
-  .neg { color:#fa5598; font-weight:600; }
+  .pos { color:#0d6ecd; font-weight:600; }
+  .neg { color:#c0186a; font-weight:600; }
   .banner { padding:16px 20px; border-radius:10px; margin:18px 0;
             font-size:15px; font-weight:600; }
-  .banner.ok   { background:#e7f3ff; color:#1e9aff; border:1px solid #bfe2ff; }
+  .banner.ok   { background:#e7f3ff; color:#0a5aa8; border:1px solid #bfe2ff; }
   .banner.warn { background:#fff7cc; color:#a85f00; border:1px solid #ffd900; }
   .note { color:#666; font-size:12px; margin-top:6px; }
   h2 { margin-top:34px; }
@@ -44,9 +46,9 @@
   .frm label { font-size:12px; font-weight:700; display:block; margin-bottom:3px; }
   .frm input, .frm select { border:2px solid #000; border-radius:8px; padding:7px 9px; font-size:13px; }
   .btn { border:2px solid #000; border-radius:8px; padding:8px 14px; font-weight:800;
-         cursor:pointer; box-shadow:3px 3px 0 #000; background:#1e9aff; color:#fff; font-size:13px; }
-  .btn:hover { background:#0d80e0; }
-  .btn.del { background:#fa5598; padding:4px 9px; box-shadow:none; font-size:12px; }
+         cursor:pointer; box-shadow:3px 3px 0 #000; background:#0d6ecd; color:#fff; font-size:13px; }
+  .btn:hover { background:#0a5aa8; }
+  .btn.del { background:#c0186a; padding:4px 9px; box-shadow:none; font-size:12px; }
   table.fin th.c, table.fin td.c { text-align:right; }
   .grp td { background:#f5f5f5; font-weight:700; }
 </style>
@@ -111,6 +113,7 @@
         <th>Costo variable</th>
         <th>Cortesías</th>
         <th>Compras</th>
+        <th>Gastos operativos</th>
         <th>Costos fijos</th>
         <th>Flujo de efectivo</th>
         <th>Ganancia operativa</th>
@@ -125,6 +128,7 @@
         <td>${{ f.costo_variable|floatformat:2|intcomma }}</td>
         <td>${{ f.cortesias|floatformat:2|intcomma }}</td>
         <td>${{ f.compras|floatformat:2|intcomma }}</td>
+        <td>${{ f.gastos_operativos|floatformat:2|intcomma }}</td>
         <td>${{ f.costos_fijos|floatformat:2|intcomma }}</td>
         <td class="{% if f.flujo_efectivo >= 0 %}pos{% else %}neg{% endif %}">
           ${{ f.flujo_efectivo|floatformat:2|intcomma }}</td>
@@ -133,7 +137,7 @@
         <td>${{ f.ganancia_acumulada|floatformat:2|intcomma }}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="9" style="text-align:center;color:#888;">
+      <tr><td colspan="10" style="text-align:center;color:#888;">
         Aún no hay ventas ni compras registradas.</td></tr>
       {% endfor %}
       {% if flujo_totales %}
@@ -143,6 +147,7 @@
         <td>${{ flujo_totales.costo_variable|floatformat:2|intcomma }}</td>
         <td>${{ flujo_totales.cortesias|floatformat:2|intcomma }}</td>
         <td>${{ flujo_totales.compras|floatformat:2|intcomma }}</td>
+        <td>${{ flujo_totales.gastos_operativos|floatformat:2|intcomma }}</td>
         <td>${{ flujo_totales.costos_fijos|floatformat:2|intcomma }}</td>
         <td class="{% if flujo_totales.flujo_efectivo >= 0 %}pos{% else %}neg{% endif %}">
           ${{ flujo_totales.flujo_efectivo|floatformat:2|intcomma }}</td>
@@ -155,8 +160,9 @@
   </table>
   </div>
   <p class="note">
-    Flujo de efectivo = ingresos − compras − costos fijos + movimientos extra (dinero real que entra/sale).<br>
-    Ganancia operativa = ingresos − costo variable de lo vendido − cortesías − costos fijos (sirve para medir recuperación).
+    Flujo de efectivo = ingresos − compras − gastos operativos − costos fijos + movimientos extra (dinero real que entra/sale).<br>
+    Ganancia operativa = ingresos − costo variable de lo vendido − cortesías − gastos operativos − costos fijos (sirve para medir recuperación).<br>
+    Los costos fijos son la plantilla mensual del admin y solo cuentan en los meses sin gastos operativos capturados, para no pagar dos veces la misma renta.
     El costo variable es el costo real de las compras que surtieron cada venta; las cortesías van aparte porque son regalos, no venta cobrada.
   </p>
 
@@ -203,7 +209,7 @@
     </tbody>
   </table>
   <p class="note">
-    <b>Real</b> = ventas (cobros) y compras (pagos) del libro de movimientos + costos fijos mensuales, cada uno en su cuenta.
+    <b>Real</b> = ventas (cobros), compras y gastos operativos (pagos) del libro de movimientos, cada uno en su cuenta; los costos fijos mensuales solo entran si el mes no tiene gastos capturados.
     Las entradas suman ingresos/capital; las salidas suman gastos.
   </p>
 
