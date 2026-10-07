@@ -2,7 +2,7 @@ import json
 from datetime import date
 from django.utils import timezone
 from django.utils.timezone import localdate
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 import reversion
 from django.contrib import messages
@@ -671,10 +671,14 @@ def compra_agregar(request):
         # Si cambió, el catálogo se pone al día para que la próxima captura ya
         # lo proponga bien.
         #
-        # Se toca el TAMAÑO del paquete y nada más. El costo del catálogo sigue
-        # sin tocarse: es un aproximado para márgenes, y el costo real de cada
-        # venta sale de las compras por FIFO. Ésa es la regla de Andy.
+        # El costo por unidad de receta del catálogo NO se mueve con la compra:
+        # es un aproximado para márgenes, y el costo real de cada venta sale de
+        # las compras por FIFO. Ésa es la regla de Andy. Por eso el precio del
+        # paquete se escala junto con su tamaño: pasar de paquetes de 6 L a
+        # cartones de 1 L sin tocar el precio valúa cada ml seis veces más
+        # caro en todas las recetas.
         anterior = ingrediente.cantidad_por_unidad
+        precio_anterior = ingrediente.costo_unidad_compra
         # Un empaque cambia de 790 g a 1 kg, no de 1,360 g a 3. Un salto así no
         # es un cambio de presentación: son los dos campos invertidos, y ése es
         # el único error que la previsualización NO puede ver, porque mide
@@ -698,8 +702,14 @@ def compra_agregar(request):
         contenido_efectivo = contenido if contenido is not None else anterior
         with transaction.atomic():
             if presentacion_cambio:
+                campos = ["cantidad_por_unidad"]
+                if anterior and anterior > 0:
+                    ingrediente.costo_unidad_compra = (
+                        precio_anterior * contenido / anterior
+                    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    campos.append("costo_unidad_compra")
                 ingrediente.cantidad_por_unidad = contenido
-                ingrediente.save(update_fields=["cantidad_por_unidad"])
+                ingrediente.save(update_fields=campos)
 
             compra = Compra.objects.create(
                 fecha=fecha, ingrediente=ingrediente, cantidad=cantidad,
@@ -717,16 +727,22 @@ def compra_agregar(request):
             f"${compra.costo_unitario_capa:,.4f} por "
             f"{ingrediente.unidad_receta} (${costo_total:,.2f} en total).")
         if presentacion_cambio:
-            # Se dice, no se hace callado: cambiar la presentación mueve el
-            # costo estimado del catálogo, que es lo que leen el panel y la
-            # alarma de margen. Las compras de antes no se mueven: cada una
+            # Se dice, no se hace callado: el precio del catálogo cambió aunque
+            # nadie lo tecleó. Las compras de antes no se mueven: cada una
             # congeló lo suyo.
+            precio = ""
+            if ingrediente.costo_unidad_compra != precio_anterior:
+                precio = (
+                    f" Su precio de catálogo pasó de "
+                    f"${precio_anterior:,.2f} a "
+                    f"${ingrediente.costo_unidad_compra:,.2f}, para que el "
+                    f"costo por {ingrediente.unidad_receta} siga igual.")
             messages.info(
                 request,
                 f"{ingrediente} pasó de {_cantidad(anterior)} a "
                 f"{_cantidad(contenido)} {ingrediente.unidad_receta} por "
-                f"{ingrediente.unidad_compra}. La próxima compra ya lo "
-                f"propone así.")
+                f"{ingrediente.unidad_compra}.{precio} La próxima compra ya "
+                f"lo propone así.")
         elif presentacion_rara:
             messages.warning(
                 request,

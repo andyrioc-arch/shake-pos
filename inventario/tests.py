@@ -1821,13 +1821,47 @@ class PresentacionEnLaCompraTests(TestCase):
         self.ing.refresh_from_db()
         self.assertEqual(self.ing.cantidad_por_unidad, Decimal("1000"))
 
-    def test_el_costo_del_catalogo_sigue_sin_tocarse(self):
+    def test_el_costo_por_gramo_del_catalogo_sigue_sin_tocarse(self):
         """La regla de Andy: el catálogo es un aproximado y no entra a contabilidad.
 
-        Se mueve el tamaño del paquete, que es un hecho de la compra. El costo
-        no, aunque el costo por unidad de receta cambie como consecuencia.
+        Se mueve el tamaño del paquete, que es un hecho de la compra, y el
+        precio del paquete lo acompaña para que el costo por gramo no cambie.
+        Lo que se pagó en ESTA compra ($250) no llega al catálogo.
         """
+        por_gramo = self.ing.costo_unidad_receta
         self._comprar("1", "250", contenido_paquete="1000")
+        self.ing.refresh_from_db()
+        self.assertEqual(self.ing.costo_unidad_compra, Decimal("126.58"))
+        self.assertAlmostEqual(self.ing.costo_unidad_receta, por_gramo,
+                               places=4)
+
+    def test_pasar_a_un_empaque_chico_no_encarece_las_recetas(self):
+        """Leche de avena: de paquetes de 6 L a cartones de 1 L.
+
+        Con el precio del paquete intacto, cada ml quedaba seis veces más caro
+        en el catálogo y en el costo estimado de todas sus recetas.
+        """
+        avena = Ingrediente.objects.create(
+            nombre="Leche de avena", unidad_compra="paquete",
+            cantidad_por_unidad=Decimal("6000"), unidad_receta="ml",
+            costo_unidad_compra=Decimal("305.39"))
+        from django.urls import reverse
+        self.client.post(reverse("inventario_compra_agregar"), {
+            "ingrediente": avena.pk, "cantidad": "6", "costo_total": "334.38",
+            "contenido_paquete": "1000",
+            "fecha": date(2026, 10, 2).isoformat()})
+        avena.refresh_from_db()
+        self.assertEqual(avena.cantidad_por_unidad, Decimal("1000"))
+        self.assertEqual(avena.costo_unidad_compra, Decimal("50.90"))
+
+    def test_el_cambio_de_precio_se_avisa(self):
+        resp = self._comprar("1", "250", contenido_paquete="1000")
+        avisos = [str(m) for m in resp.context["messages"]]
+        self.assertTrue(any("$100.00" in a and "$126.58" in a for a in avisos),
+                        avisos)
+
+    def test_una_presentacion_rechazada_no_mueve_el_precio(self):
+        self._comprar("790", "300", contenido_paquete="3")
         self.ing.refresh_from_db()
         self.assertEqual(self.ing.costo_unidad_compra, Decimal("100.00"))
 
